@@ -15,6 +15,8 @@
 namespace eacopy
 {
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // Constants. Tweaked to give best performance in tested scenarios
 enum { UseOwnCopyFunction = true };
 enum { UseOverlappedCopy = false };
@@ -312,8 +314,12 @@ bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExist
 {
 	// This is an optimization to reduce kernel calls
 	if (expectCreationAndParentExists)
+	{
 		if (CreateDirectoryW(directory, NULL) != 0)
 			return true;
+		if (GetLastError() == ERROR_ALREADY_EXISTS) 
+			return true;
+	}
 
 	WString temp;
 	size_t pathLen = wcslen(directory);
@@ -368,7 +374,7 @@ bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExist
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
 	DWORD error = GetLastError();
-	if (error == ERROR_ALREADY_EXISTS) // Created by other thread
+	if (error == ERROR_ALREADY_EXISTS) 
 		return true;
 
 	logErrorf(L"Error creating directory %s: %s", directory, getErrorText(error).c_str());

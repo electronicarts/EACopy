@@ -81,32 +81,30 @@ Client::process(Log& log, ClientStats& outStats)
 		if (!excludeFilesFromFile(m_settings.sourceDirectory, file, destDir))
 			break;
 
-	// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
-	if (!m_settings.filesOrWildcardsFiles.empty())
 	{
-		for (auto& file : m_settings.filesOrWildcardsFiles)
-			if (!gatherFilesOrWildcardsFromFile(logContext, outStats, m_settings.sourceDirectory, file, destDir))
-				break;
-	}
-	else
-	{
-		bool firstFound = m_settings.flattenDestination;
+		// Lazily create destination root folder based on if it is needed
+		bool destDirCreated = false;
 		auto createDirectoryFunc = [&]()
 		{
-			if (firstFound)
+			if (destDirCreated)
 				return true;
-			firstFound = true;
+			destDirCreated = true;
 			return ensureDirectory(m_settings.destDirectory.c_str());
 		};
 
-		// Create directories regardless if there are files or not in there
-		if (m_settings.copyEmptySubdirectories)
-			if (!createDirectoryFunc())
-				return false;
-
-		for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-			if (!findFilesInDirectory(m_settings.sourceDirectory, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc))
-				break;
+		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
+		if (!m_settings.filesOrWildcardsFiles.empty())
+		{
+			for (auto& file : m_settings.filesOrWildcardsFiles)
+				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, m_settings.sourceDirectory, file, destDir, createDirectoryFunc))
+					break;
+		}
+		else
+		{
+			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
+				if (!findFilesInDirectory(m_settings.sourceDirectory, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc))
+					break;
+		}
 	}
 
 	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs;
@@ -761,12 +759,11 @@ Client::excludeFilesFromFile(const WString& sourcePath, const WString& fileName,
 }
 
 bool
-Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath)
+Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath, const HandleFileFunc& handleFileFunc)
 {
 	auto executeFunc = [&](char* str) -> bool
 	{
 		bool handled = false;
-		HandleFileFunc handleFileFunc;
 		// Handle initial path that might exist inside input file
 
 		// Parse line to figure out the parts. source [dest [file [file]...]] [options]
@@ -833,24 +830,29 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			}
 		}
 
+		HandleFileFunc tempHandleFileFunc;
+		const HandleFileFunc* overriddenHandleFileFunc = &handleFileFunc;
 		if (!m_settings.flattenDestination)
 		{
 			if (const wchar_t* lastSlash = wcsrchr(wpath.c_str(), L'\\'))
 			{
-				handleFileFunc = [&]()
+				tempHandleFileFunc = [&]()
 				{
 					if (handled)
 						return true;
 					handled = true;
+					if (!handleFileFunc())
+						return false;
 					WString relativePath(wpath.c_str(), lastSlash);
 					if (!m_handledFiles.insert(relativePath + L'\\').second)
 						return true;
 					return ensureDirectory((destPath + L'\\' + relativePath).c_str());
 				};
+				overriddenHandleFileFunc = &tempHandleFileFunc;
 			}
 		}
 
-		return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), handleFileFunc);
+		return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), *overriddenHandleFileFunc);
 	};
 
 	return handleFilesOrWildcardsFromFile(rootSourcePath, fileName, rootDestPath, executeFunc);
