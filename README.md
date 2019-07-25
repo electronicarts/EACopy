@@ -13,6 +13,21 @@ If the server doesn't have the key it asks the EACopy client to send the new fil
 
 Note that the copy-reduction feature is on a per-file basis so if your files are zipped up to some big archives with one changed file in it, it will still copy these files even though only 1 byte diffed from previous copy. This might be a feature added in the future.
 
+Here's an example on how the summary of a copy could look like when using the EACopyservice (this is a real example from frostbite's farm deploy).
+```
+----------------------------------------------------------------------------------
+                 Total    Copied    Linked   Skipped  Mismatch    FAILED    Extras
+   Files:         2259         7      2252         0         0         0         0
+   Bytes:         5.1g    658.0k      5.1g      0.0b         0         0         0
+   Times:        0.56s      10ms     0.19s       0ms
+
+   FindFile:        0.20s      SendFile:              0ms
+   ReadFile:          1ms      SendBytes:           72.1k
+   CompressFile:      1ms      CompressLevel:         1.0
+   ConnectTime:      89ms
+
+   Server found and used!
+```  
 
 ## Documentation  
 [EACopy usage](doc/Usage.md)  

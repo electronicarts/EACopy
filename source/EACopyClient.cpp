@@ -277,7 +277,7 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 				if (written)
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"New File    %s %s", getRelativeSourceFile(entry.src), linked ? L"(linked)" : L"");
+						logInfoLinef(L"%s   %s", linked ? L"Link File" : L"New File ", getRelativeSourceFile(entry.src));
 					(linked ? stats.linkTimeMs : stats.copyTimeMs) += getTimeMs() - startTimeMs;
 					++(linked ? stats.linkCount : stats.copyCount);
 					(linked ? stats.linkSize : stats.copySize) += written;
