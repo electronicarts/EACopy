@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 4 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 5 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 
 
@@ -72,6 +72,7 @@ struct WriteFileCommand : Command
 enum WriteResponse : u8
 {
 	WriteResponse_Copy,
+	WriteResponse_CopyDelta,
 	WriteResponse_Link,
 	WriteResponse_Skip,
 	WriteResponse_BadDestination

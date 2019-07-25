@@ -304,7 +304,7 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
 			{
-				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyBuffer, stats.copyStats))
+				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyBuffer, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %s", getRelativeSourceFile(entry.src));
@@ -351,7 +351,7 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 					if (m_settings.logProgress)
 						logErrorf(L"Can't copy to file that is read-only (%s)", fullDst.c_str());
 				}
-				else if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyBuffer, stats.copyStats))
+				else if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyBuffer, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %s", entry.src.c_str());
@@ -928,7 +928,7 @@ Client::ensureDirectory(const wchar_t* directory)
 	else
 	{
 		// Create directory through windows api
-		if (!eacopy::ensureDirectory(directory))
+		if (!eacopy::ensureDirectory(directory, true, m_settings.replaceSymLinksAtDestination))
 			return false;
 	}
 
@@ -1206,163 +1206,174 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		return false;
 	}
 
-	if (writeResponse != WriteResponse_Copy)
-		return true;
-
-	BOOL success = TRUE;
-	u64 startCreateReadTimeMs = getTimeMs();
-	HANDLE sourceFile = CreateFileW(src, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (sourceFile == INVALID_HANDLE_VALUE)
+	if (writeResponse == WriteResponse_Copy)
 	{
-		logErrorf(L"Failed to open file %s: %s", src, getLastErrorText().c_str());
-		return false;
-	}
+		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
+		BOOL success = TRUE;
+		u64 startCreateReadTimeMs = getTimeMs();
+		HANDLE sourceFile;
+		if (!openFileRead(src, sourceFile, useBufferedIO))
+			return false;
 
-	ScopeGuard closeFile([&]() { CloseHandle(sourceFile); });
-	m_stats.copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
+		ScopeGuard closeFile([&]() { CloseHandle(sourceFile); });
+		m_stats.copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
 
 
-	if (writeType == WriteFileType_TransmitFile)
-	{
-		_OVERLAPPED overlapped;
-		ZeroMemory(&overlapped, sizeof(overlapped));
-		overlapped.hEvent = WSACreateEvent();
-		ScopeGuard closeEvent([&]() { WSACloseEvent(overlapped.hEvent); });
-
-		u64 pos = 0;
-		while (pos != cmd.info.fileSize)
+		if (writeType == WriteFileType_TransmitFile)
 		{
-			u64 left = cmd.info.fileSize - pos;
-			uint toWrite = (uint)min(left, u64(INT_MAX-1));
+			_OVERLAPPED overlapped;
+			ZeroMemory(&overlapped, sizeof(overlapped));
+			overlapped.hEvent = WSACreateEvent();
+			ScopeGuard closeEvent([&]() { WSACloseEvent(overlapped.hEvent); });
 
-			u64 startSendMs = getTimeMs();
-			if (!TransmitFile(m_socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
+			u64 pos = 0;
+			while (pos != cmd.info.fileSize)
 			{
-				int error = WSAGetLastError();
-				if (error == ERROR_IO_PENDING)// or WSA_IO_PENDING
+				u64 left = cmd.info.fileSize - pos;
+				uint toWrite = (uint)min(left, u64(INT_MAX-1));
+
+				u64 startSendMs = getTimeMs();
+				if (!TransmitFile(m_socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
 				{
-					if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
+					int error = WSAGetLastError();
+					if (error == ERROR_IO_PENDING)// or WSA_IO_PENDING
 					{
-						int error = WSAGetLastError();
-						logErrorf(L"Error while waiting on transmit of %s: %s", src, getErrorText(error).c_str());
+						if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
+						{
+							int error = WSAGetLastError();
+							logErrorf(L"Error while waiting on transmit of %s: %s", src, getErrorText(error).c_str());
+							return false;
+						}
+					}
+					else
+					{
+						logErrorf(L"Error while transmitting %s: %s", src, getErrorText(error).c_str());
 						return false;
 					}
 				}
-				else
-				{
-					logErrorf(L"Error while transmitting %s: %s", src, getErrorText(error).c_str());
-					return false;
-				}
-			}
-			m_stats.sendTimeMs += getTimeMs() - startSendMs;
-			m_stats.sendSize += toWrite;
+				m_stats.sendTimeMs += getTimeMs() - startSendMs;
+				m_stats.sendSize += toWrite;
 
-			pos += toWrite;
-			overlapped.Offset = static_cast<DWORD>(pos);
-			overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
+				pos += toWrite;
+				overlapped.Offset = static_cast<DWORD>(pos);
+				overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
+			}
 		}
-	}
-	else if (writeType == WriteFileType_Send)
-	{
-		u64 left = cmd.info.fileSize;
-		while (left)
+		else if (writeType == WriteFileType_Send)
 		{
-			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyBufferSize);
-			if (!ReadFile(sourceFile, copyBuffer.buffers[0], toRead, NULL, NULL))
+			u64 left = cmd.info.fileSize;
+			while (left)
 			{
-				if (GetLastError() != ERROR_IO_PENDING)
+				u64 startReadMs = getTimeMs();
+				DWORD toRead = (DWORD)min(left, CopyBufferSize);
+				uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
+
+				if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
 				{
-					logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
-					return false;
+					if (GetLastError() != ERROR_IO_PENDING)
+					{
+						logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
+						return false;
+					}
 				}
+				m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
+
+				u64 startSendMs = getTimeMs();
+				if (!sendData(m_socket, copyBuffer.buffers[0], toRead))
+					return false;
+				m_stats.sendTimeMs += getTimeMs() - startSendMs;
+				m_stats.sendSize += toRead;
+
+				left -= toRead;
 			}
-			m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
-
-			u64 startSendMs = getTimeMs();
-			if (!sendData(m_socket, copyBuffer.buffers[0], toRead))
-				return false;
-			m_stats.sendTimeMs += getTimeMs() - startSendMs;
-			m_stats.sendSize += toRead;
-
-			left -= toRead;
 		}
-	}
-	else if (writeType == WriteFileType_Compressed)
-	{
-		u64 left = cmd.info.fileSize;
-		while (left)
+		else if (writeType == WriteFileType_Compressed)
 		{
-			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyBufferSize);
-			if (!ReadFile(sourceFile, copyBuffer.buffers[0], toRead, NULL, NULL))
+			u64 left = cmd.info.fileSize;
+			while (left)
 			{
-				if (GetLastError() != ERROR_IO_PENDING)
+				u64 startReadMs = getTimeMs();
+				DWORD toRead = (DWORD)min(left, CopyBufferSize);
+				uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
+
+				if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
 				{
-					logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
-					return false;
+					if (GetLastError() != ERROR_IO_PENDING)
+					{
+						logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
+						return false;
+					}
 				}
+				m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
+
+				if (!m_compressionContext)
+					m_compressionContext = ZSTD_createCCtx();
+
+				// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
+				char* destBuf = copyBuffer.buffers[1];
+				u64 startCompressMs = getTimeMs();
+				uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)m_compressionContext, destBuf + 4, CopyBufferSize - 4, copyBuffer.buffers[0], toRead, m_compressionLevel);
+				u64 compressTimeMs = getTimeMs() - startCompressMs;
+
+				*(uint*)destBuf =  compressedSize;
+
+				u64 startSendMs = getTimeMs();
+				if (!sendData(m_socket, destBuf, compressedSize + 4))
+					return false;
+				u64 sendTimeMs = getTimeMs() - startSendMs;
+
+				m_stats.compressionLevelSum += toRead * m_compressionLevel;
+
+				if (!m_fixedCompressionLevel)
+				{
+					// This is a bit fuzzy logic. Essentially we compared how much time per byte we spent last loop (compress + send)
+					// We then look at if we compressed more or less last time and if time went up or down.
+					// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
+
+					u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / toRead;
+
+					u64 lastCompressWeight = m_lastCompressWeight;
+					m_lastCompressWeight = compressWeight;
+
+					int lastCompressionLevel = m_lastCompressionLevel;
+					m_lastCompressionLevel = m_compressionLevel;
+
+					bool increaseCompression = compressWeight < lastCompressWeight && lastCompressionLevel <= m_compressionLevel || 
+											   compressWeight >= lastCompressWeight && lastCompressionLevel > m_compressionLevel;
+
+					if (increaseCompression)
+						m_compressionLevel = min(22, m_compressionLevel + 1);
+					else
+						m_compressionLevel = max(1, m_compressionLevel - 1);
+				}
+
+				m_stats.compressTimeMs += compressTimeMs;
+				m_stats.sendTimeMs += sendTimeMs;
+				m_stats.sendSize += compressedSize + 4;
+
+				left -= toRead;
 			}
-			m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
-
-			if (!m_compressionContext)
-				m_compressionContext = ZSTD_createCCtx();
-
-			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
-			char* destBuf = copyBuffer.buffers[1];
-			u64 startCompressMs = getTimeMs();
-			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)m_compressionContext, destBuf + 4, CopyBufferSize - 4, copyBuffer.buffers[0], toRead, m_compressionLevel);
-			u64 compressTimeMs = getTimeMs() - startCompressMs;
-
-			*(uint*)destBuf =  compressedSize;
-
-			u64 startSendMs = getTimeMs();
-			if (!sendData(m_socket, destBuf, compressedSize + 4))
-				return false;
-			u64 sendTimeMs = getTimeMs() - startSendMs;
-
-			m_stats.compressionLevelSum += toRead * m_compressionLevel;
-
-			if (!m_fixedCompressionLevel)
-			{
-				// This is a bit fuzzy logic. Essentially we compared how much time per byte we spent last loop (compress + send)
-				// We then look at if we compressed more or less last time and if time went up or down.
-				// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
-
-				u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / toRead;
-
-				u64 lastCompressWeight = m_lastCompressWeight;
-				m_lastCompressWeight = compressWeight;
-
-				int lastCompressionLevel = m_lastCompressionLevel;
-				m_lastCompressionLevel = m_compressionLevel;
-
-				bool increaseCompression = compressWeight < lastCompressWeight && lastCompressionLevel <= m_compressionLevel || 
-										   compressWeight >= lastCompressWeight && lastCompressionLevel > m_compressionLevel;
-
-				if (increaseCompression)
-					m_compressionLevel = min(22, m_compressionLevel + 1);
-				else
-					m_compressionLevel = max(1, m_compressionLevel - 1);
-			}
-
-			m_stats.compressTimeMs += compressTimeMs;
-			m_stats.sendTimeMs += sendTimeMs;
-			m_stats.sendSize += compressedSize + 4;
-
-			left -= toRead;
 		}
+
+		u8 writeSuccess;
+		if (!receiveData(m_socket, &writeSuccess, sizeof(writeSuccess)))
+			return false;
+
+		if (!writeSuccess)
+			return false;
+
+		outWritten = cmd.info.fileSize;
+		return true;
 	}
-
-	u8 writeSuccess;
-	if (!receiveData(m_socket, &writeSuccess, sizeof(writeSuccess)))
+	else if (writeResponse == WriteResponse_CopyDelta)
+	{
+		logErrorf(L"CopyDelta not implemented!");
 		return false;
-
-	if (!writeSuccess)
-		return false;
-
-	outWritten = cmd.info.fileSize;
-	return true;
+	}
+	else
+	{
+		return true;
+	}
 }
 
 bool

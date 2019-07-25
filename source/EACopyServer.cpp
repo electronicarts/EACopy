@@ -17,7 +17,12 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus)
+enum { AllowCopyDelta = false };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void
+Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus)
 {
 	m_startTime = getTimeMs();
 	m_isConsole = isConsole;
@@ -152,6 +157,7 @@ void Server::start(const ServerSettings& settings, Log& log, bool isConsole, Rep
 				--m_activeConnectionCount;
 			}
 
+			// When there are no connections active we take the opportunity to shrink history if overflowed
 			if (connections.empty())
 			{
 				m_localFilesCs.enter();
@@ -187,7 +193,7 @@ void Server::start(const ServerSettings& settings, Log& log, bool isConsole, Rep
 			++m_handledConnectionCount;
 
 			logDebugLinef(L"Connection accepted");
-			connections.emplace_back(log, clientSocket);
+			connections.emplace_back(log, settings, clientSocket);
 			ConnectionInfo& info = connections.back();
 
 			info.thread = new Thread([this, &info]() { return connectionThread(info); });
@@ -197,7 +203,8 @@ void Server::start(const ServerSettings& settings, Log& log, bool isConsole, Rep
 	}
 }
 
-void Server::stop()
+void
+Server::stop()
 {
 	m_loopServer = false;
 	SOCKET listenSocket = m_listenSocket;
@@ -205,7 +212,8 @@ void Server::stop()
 	closesocket(listenSocket);
 }
 
-DWORD Server::connectionThread(ConnectionInfo& info)
+DWORD
+Server::connectionThread(ConnectionInfo& info)
 {
 	LogContext logContext(info.log);
 	uint bufferSize = 512*1024;
@@ -236,13 +244,14 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 	uint recvPos = 0;
 	WString destDirectory;
 
-	int entryCount[] = { 0, 0, 0 };
+	// This is using writeReport
+	int entryCount[] = { 0, 0, 0, 0 };
 	ScopeGuard logDebugReport([&]()
 	{ 
 		logScopeEnter();
 		logDebugLinef(L"--------- Socket report ---------");
-		logDebugLinef(L"          Copy   Link   Skip");
-		logDebugLinef(L"Files   %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2]);
+		logDebugLinef(L"          Copy   CopyDelta Link   Skip");
+		logDebugLinef(L"Files   %6i %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[2]);
 		logDebugLinef(L"---------------------------------");
 		logScopeLeave();
 	});
@@ -348,7 +357,7 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 						fileName = lastSlash + 1;
 
 					// Robocopy style key for uniqueness of file
-					FileKey key { cmd.info.lastWriteTime, cmd.info.fileSize, fileName };
+					FileKey key { fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 
 					// Check if a file with the same key has already been copied at some point
 					m_localFilesCs.enter();
@@ -381,6 +390,20 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 							writeResponse = WriteResponse_Skip;
 					}
 
+					// If CopyDelta is enabled we should look for a file that we believe is a very similar file and use that to send delta
+					WString fileForCopyDelta;
+					if (AllowCopyDelta && writeResponse == WriteResponse_Copy)
+						if (findFileForDeltaCopy(fileForCopyDelta, key))
+						{
+							// TODO: Right now we don't support copy delta to same destination as the file we use for delta
+							if (fileForCopyDelta != fullPath)
+							{
+								FileInfo fi;
+								if (getFileInfo(fi, fileForCopyDelta.c_str()))
+									writeResponse = WriteResponse_CopyDelta;
+							}
+						}
+
 					++entryCount[writeResponse];
 
 					// Send response of action
@@ -388,7 +411,7 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 						return -1;
 
 					// Skip or Link means that we are done, just add to history and move on (history will kick out oldest entry if full)
-					if (writeResponse != WriteResponse_Copy)
+					if (writeResponse == WriteResponse_Link || writeResponse == WriteResponse_Skip)
 					{
 						InterlockedAdd64((LONG64*)(writeResponse != WriteResponse_Skip ? &m_bytesLinked : &m_bytesSkipped), cmd.info.fileSize);
 						addToLocalFilesHistory(key, fullPath);
@@ -396,20 +419,15 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 					}
 
 					bool success = false;
-
-					// Code is commented out now when there is a createdir command.
-					/*
-					// TODO: This should not be needed?!?... creating dirs from client seems to race with creating the file
-					WString fullDir(fullPath);
-					const wchar_t* lastFullDirSlash = wcsrchr(fullDir.c_str(), L'\\');
-					fullDir.resize(lastFullDirSlash - fullDir.c_str());
-					if (!ensureDirectory(fullDir.c_str()))
-						return -1;
-					*/
-
 					u64 totalReceivedSize = 0;
 
-					if (cmd.writeType == WriteFileType_TransmitFile || cmd.writeType == WriteFileType_Send)
+					if (writeResponse == WriteResponse_CopyDelta)
+					{
+						// TODO: Implement this!
+						logErrorf(L"CopyDelta not implemented!");
+						return -1;
+					}
+					else if (cmd.writeType == WriteFileType_TransmitFile || cmd.writeType == WriteFileType_Send)
 					{
 						HANDLE file;
 						OVERLAPPED osWrite      = { 0, 0 };
@@ -417,7 +435,7 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 						osWrite.OffsetHigh = 0xFFFFFFFF;
 
 						osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
-						success = openFileWrite(fullPath.c_str(), file);
+						success = openFileWrite(fullPath.c_str(), file, getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize));
 						ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), file); CloseHandle(osWrite.hEvent); });
 
 						u64 read = 0;
@@ -476,7 +494,7 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 						osWrite.OffsetHigh = 0xFFFFFFFF;
 
 						osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
-						success = openFileWrite(fullPath.c_str(), file);
+						success = openFileWrite(fullPath.c_str(), file, getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize));
 						ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), file); CloseHandle(osWrite.hEvent); });
 
 						u64 read = 0;
@@ -635,7 +653,8 @@ DWORD Server::connectionThread(ConnectionInfo& info)
 	return 0;
 }
 
-void Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
+void
+Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
 {
 	m_localFilesCs.enter();
 	auto insres = m_localFiles.insert({key, FileRec()});
@@ -645,6 +664,21 @@ void Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileN
 	insres.first->second.name = fullFileName;
 	insres.first->second.historyIt = --m_localFilesHistory.end();
 	m_localFilesCs.leave();
+}
+
+bool
+Server::findFileForDeltaCopy(WString& outFile, const FileKey& key)
+{
+	FileKey searchKey { key.name, 0, 0 };
+	auto searchIt = m_localFiles.lower_bound(searchKey);
+	while (searchIt != m_localFiles.end())
+	{
+		if (searchIt->first.name != key.name)
+			return false;
+		outFile = searchIt->second.name;
+		return true;
+	}
+	return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

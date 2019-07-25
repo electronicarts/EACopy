@@ -20,8 +20,10 @@ namespace eacopy
 // Constants. Tweaked to give best performance in tested scenarios
 enum { UseOwnCopyFunction = true };
 enum { UseOverlappedCopy = false };
-enum { CopyFileNoBuffering = false };
-enum { CopyFileWriteThrough = false };
+enum { CopyFileWriteThrough = false }; // Enabling this makes all tests slower in our test environment
+
+enum { NoBufferingIOUseTreshold = false }; // Enabling this makes all tests slower in our test environment
+enum { NoBufferingIOTreshold = 16 * 1024 * 1024 }; // Treshold for when unbuffered io is enabled if UseBufferedIO_Auto is used
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -310,7 +312,34 @@ bool equals(const FileInfo& a, const FileInfo& b)
 	return memcmp(&a, &b, sizeof(FileInfo)) == 0;
 }
 
-bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExists)
+bool replaceIfSymLink(const wchar_t* directory, DWORD attributes)
+{
+	bool isDir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+	if (!isDir)
+	{
+		logErrorf(L"Trying to treat file as directory %s: %s", directory, getLastErrorText().c_str());
+		return false;
+	}
+
+	bool isSymlink = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+	if (!isSymlink)
+		return true;
+
+	// Delete reparsepoint and treat path as not existing
+	if (!RemoveDirectoryW(directory))
+	{
+		logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getLastErrorText().c_str());
+		return false;
+	}
+
+	if (CreateDirectoryW(directory, NULL) != 0)
+		return true;
+
+	logErrorf(L"Error creating directory %s: %s", directory, getLastErrorText().c_str());
+	return false;
+}
+
+bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expectCreationAndParentExists)
 {
 	// This is an optimization to reduce kernel calls
 	if (expectCreationAndParentExists)
@@ -318,7 +347,20 @@ bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExist
 		if (CreateDirectoryW(directory, NULL) != 0)
 			return true;
 		if (GetLastError() == ERROR_ALREADY_EXISTS) 
+		{
+			FileInfo dirInfo;
+			DWORD destDirAttributes = getFileInfo(dirInfo, directory);
+			if (!(destDirAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				logErrorf(L"Trying to treat file as directory %s", directory);
+				return false;
+			}
+
+			if (replaceIfSymlink)
+				if (!replaceIfSymLink(directory, destDirAttributes))
+					return false;
 			return true;
+		}
 	}
 
 	WString temp;
@@ -340,22 +382,18 @@ bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExist
 	DWORD destDirAttributes = getFileInfo(dirInfo, directory);
 	if (destDirAttributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
-		bool isSymlink = (destDirAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-		if (!isSymlink)
-			return true;
-
-		// Delete reparsepoint and treat path as not existing
-		if (!RemoveDirectoryW(directory))
-		{
-			logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getLastErrorText().c_str());
-			return false;
-		}
-		return ensureDirectory(directory, false);
+		if (replaceIfSymlink)
+			if (!replaceIfSymLink(directory, destDirAttributes))
+				return false;
+		return true;
 	}
 	else
 	{
 		if (destDirAttributes != 0)
+		{
+			logErrorf(L"Trying to treat file as directory %s", directory);
 			return false;
+		}
 		DWORD error = GetLastError();
 		if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
 		{
@@ -367,17 +405,14 @@ bool ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExist
 	if (lastBackslash)
 	{
 		WString shorterDirectory(directory, 0, lastBackslash - directory);
-		if (!ensureDirectory(shorterDirectory.c_str(), false))
+		if (!ensureDirectory(shorterDirectory.c_str(), false, false))
 			return false;
 	}
 
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
-	DWORD error = GetLastError();
-	if (error == ERROR_ALREADY_EXISTS) 
-		return true;
 
-	logErrorf(L"Error creating directory %s: %s", directory, getErrorText(error).c_str());
+	logErrorf(L"Error creating directory %s: %s", directory, getLastErrorText().c_str());
 	return false;
 }
 
@@ -403,16 +438,28 @@ bool deleteDirectory(const wchar_t* directory)
 	{ 
         if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 		{
+			WString fullName(dir + fd.cFileName);
 			if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-				if (!SetFileAttributesW((dir + fd.cFileName).c_str(), FILE_ATTRIBUTE_NORMAL))
+				if (!SetFileAttributesW(fullName.c_str(), FILE_ATTRIBUTE_NORMAL))
 					return false;
 
-			if (!deleteFile((dir + fd.cFileName).c_str()))
+			if (!deleteFile(fullName.c_str()))
 				return false;
 		}
 		else if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
 		{
-			if (!deleteDirectory((dir + fd.cFileName).c_str()))
+			WString fullName(dir + fd.cFileName);
+			bool isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+			if (isSymlink)
+			{
+				// Delete reparsepoint and treat path as not existing
+				if (!RemoveDirectoryW(fullName.c_str()))
+				{
+					logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getLastErrorText().c_str());
+					return false;
+				}
+			}
+			else if (!deleteDirectory(fullName.c_str()))
 				return false;
 		}
 
@@ -437,9 +484,38 @@ bool isAbsolutePath(const wchar_t* path)
 	return path[1] == ':' || (path[0] == '\\' && path[1] == '\\');
 }
 
-bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, OVERLAPPED* overlapped)
+bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 {
-	DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL;
+	switch (use)
+	{
+	case UseBufferedIO_Enabled:
+		return true;
+	case UseBufferedIO_Disabled:
+		return false;
+	default: // UseBufferedIO_Auto:
+		return NoBufferingIOUseTreshold ? fileSize < NoBufferingIOTreshold : true;
+	}
+}
+
+bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped)
+{
+	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
+
+	outFile = CreateFileW(fullPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | nobufferingFlag, overlapped);
+	if (outFile != INVALID_HANDLE_VALUE)
+		return true;
+
+	logErrorf(L"Failed to open file %s: %s", fullPath, getLastErrorText().c_str());
+	return false;
+
+}
+
+bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped)
+{
+	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
+	DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
+
+	DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | nobufferingFlag | writeThroughFlag;
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
 
@@ -506,10 +582,10 @@ bool closeFile(const wchar_t* fullPath, HANDLE& file)
 	return success;
 }
 
-bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data)
+bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO)
 {
 	HANDLE file;
-	if (!openFileWrite(fullPath, file))
+	if (!openFileWrite(fullPath, file, useBufferedIO))
 		return false;
 
 	if (!writeFile(fullPath, file, data, info.fileSize))
@@ -560,14 +636,14 @@ CopyBuffer::~CopyBuffer()
 		delete[] buffers[i];
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied)
+bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO)
 {
 	CopyBuffer copyBuffer;
 	CopyStats copyStats;
-	return copyFile(source, dest, failIfExists, outExisted, outBytesCopied, copyBuffer, copyStats);
+	return copyFile(source, dest, failIfExists, outExisted, outBytesCopied, copyBuffer, copyStats, useBufferedIO);
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats)
+bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
 
@@ -580,9 +656,9 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		if ((sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
 			return false;
 
-		constexpr DWORD overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
-		constexpr DWORD nobufferingFlag = CopyFileNoBuffering ? FILE_FLAG_NO_BUFFERING : 0;
-		constexpr DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
+		DWORD overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
+		DWORD nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
+		DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
 		OVERLAPPED osWrite = {0,0,0};
 		osWrite.Offset = 0xFFFFFFFF;
@@ -643,7 +719,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 				}
 
 				DWORD written = 0;
-				DWORD toWrite = CopyFileNoBuffering ? (((sizeFilled + 4095) / 4096) * 4096) : sizeFilled;
+				DWORD toWrite = nobufferingFlag ? (((sizeFilled + 4095) / 4096) * 4096) : sizeFilled;
 				if (!WriteFile(destFile, bufferFilled, toWrite, &written, &osWrite))
 				{
 					if (GetLastError() != ERROR_IO_PENDING)
@@ -675,7 +751,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 				uint toRead = (uint)min(left, CopyBufferSize);
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
 
-				uint toReadAligned = CopyFileNoBuffering ? (((toRead + 4095) / 4096) * 4096) : toRead;
+				uint toReadAligned = nobufferingFlag ? (((toRead + 4095) / 4096) * 4096) : toRead;
 
 				osRead.Offset = (LONG)read;
 				osRead.OffsetHigh = (LONG)(read >> 32);
@@ -714,7 +790,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			return false;
 		copyStats.setLastWriteTimeTimeMs += getTimeMs() - startSetLastWriteTimeTimeMs;
 
-		if (CopyFileNoBuffering)
+		if (nobufferingFlag)
 		{
 			LONG lowSize = (LONG)sourceInfo.fileSize;
 			LONG highSize = sourceInfo.fileSize >> 32;

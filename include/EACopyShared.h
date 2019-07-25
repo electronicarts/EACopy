@@ -135,19 +135,23 @@ struct CopyStats
 };
 
 
+enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedIO_Disabled };
+bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
+
 DWORD					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
 bool					equals(const FileInfo& a, const FileInfo& b);
-bool					ensureDirectory(const wchar_t* directory, bool expectCreationAndParentExists = true);
+bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true);
 bool					deleteDirectory(const wchar_t* directory);
 bool					isAbsolutePath(const wchar_t* path);
-bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, OVERLAPPED* overlapped = nullptr);
+bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
+bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
 bool					writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 dataSize, OVERLAPPED* overlapped = nullptr);
 bool					setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWriteTime);
 bool					closeFile(const wchar_t* fullPath, HANDLE& file);
-bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data);
+bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats);
+bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);

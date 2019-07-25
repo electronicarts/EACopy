@@ -26,7 +26,7 @@ bool					g_serviceCrashed;		// This is set when we're exiting 'uncleanly'. I.e e
 												// to the service being compromised due to SEH
 int						g_argc;
 wchar_t**				g_argv;
-Server			g_server;
+Server					g_server;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -40,6 +40,9 @@ void printHelp()
 	logInfoLinef();
 	logInfoLinef(L"              /P:n :: Port that server will listen on (defaults to %i).", DefaultPort);
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
+	logInfoLinef();
+	logInfoLinef(L"                /J :: Enable unbuffered I/O for all files.");
+	logInfoLinef(L"               /NJ :: Disable unbuffered I/O for all files.");
 	logInfoLinef();
 	logInfoLinef(L"         /LOG:file :: output status to LOG file (overwrite existing log).");
 	logInfoLinef(L"         /VERBOSE  :: output debug logging.");
@@ -65,6 +68,14 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		else if (startsWithIgnoreCase(arg, L"/HISTORY:"))
 		{
 			outSettings.maxHistory = _wtoi(arg + 9);
+		}
+		else if (equalsIgnoreCase(arg, L"/J"))
+		{
+			outSettings.useBufferedIO = UseBufferedIO_Enabled;
+		}
+		else if (equalsIgnoreCase(arg, L"/NJ"))
+		{
+			outSettings.useBufferedIO = UseBufferedIO_Disabled;
 		}
 		else if(startsWithIgnoreCase(arg, L"/LOG:"))
 		{

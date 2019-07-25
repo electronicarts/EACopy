@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.99"; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.991"; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -44,6 +44,8 @@ struct ClientSettings
 	int					compressionLevel			= 0;
 	bool				logProgress					= true;
 	bool				logDebug					= false;
+	UseBufferedIO		useBufferedIO				= UseBufferedIO_Auto;
+	bool				replaceSymLinksAtDestination= true; // When writing to destination and a folder is a symlink we remove symlink and create real directory
 };
 
 

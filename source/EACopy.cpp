@@ -11,7 +11,7 @@ void printHelp()
 {
 	logInfoLinef();
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopy v%S - File Copy for Win.   (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
+	logInfoLinef(L"  EACopy v%S - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopy source destination [file [file]...] [options]");
@@ -26,9 +26,12 @@ void printHelp()
 	logInfoLinef(L"                /S :: copy Subdirectories, but not empty ones.");
 	logInfoLinef(L"                /E :: copy subdirectories, including Empty ones.");
 	logInfoLinef(L"            /LEV:n :: only copy the top n LEVels of the source directory tree.");
+	logInfoLinef(L"                /J :: Enable unbuffered I/O for all files.");
+	logInfoLinef(L"               /NJ :: Disable unbuffered I/O for all files.");
 	logInfoLinef();
 	logInfoLinef(L"            /PURGE :: delete dest files/dirs that no longer exist in source.");
     logInfoLinef(L"              /MIR :: MIRror a directory tree (equivalent to /E plus /PURGE).");
+	logInfoLinef(L"              /KSY :: Keep SYmlinked subdirectories at destination.");
 	logInfoLinef();
 	logInfoLinef(L"                /F :: all files copied are Flattened in to destination folder.");
 	logInfoLinef(L"/I file [file]...  :: use text file containing files/directories/wildcards.");
@@ -116,6 +119,14 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			outSettings.copySubdirDepth = _wtoi(arg + 5);
 		}
+		else if (equalsIgnoreCase(arg, L"/J"))
+		{
+			outSettings.useBufferedIO = UseBufferedIO_Enabled;
+		}
+		else if (equalsIgnoreCase(arg, L"/NJ"))
+		{
+			outSettings.useBufferedIO = UseBufferedIO_Disabled;
+		}
 		else if (equalsIgnoreCase(arg, L"/PURGE"))
 		{
 			outSettings.purgeDestination = true;
@@ -127,6 +138,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			outSettings.copySubdirDepth = 1000000;
 			outSettings.copyEmptySubdirectories = true;
 			copySubdirectories = true;
+		}
+		else if (equalsIgnoreCase(arg, L"/KSY"))
+		{
+			outSettings.replaceSymLinksAtDestination = false;
 		}
 		else if (equalsIgnoreCase(arg, L"/F"))
 		{

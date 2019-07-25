@@ -9,8 +9,8 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { DefaultHistorySize = 50000 }; // Number of files 
-constexpr char ServerVersion[] = "0.85"; // Version of server
+enum : uint { DefaultHistorySize = 500000 }; // Number of files 
+constexpr char ServerVersion[] = "0.86"; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -20,9 +20,10 @@ using ReportServerStatus = Function<BOOL(DWORD dwCurrentState, DWORD dwWin32Exit
 
 struct ServerSettings
 {
-	uint	listenPort		= DefaultPort;
-	uint	maxHistory		= DefaultHistorySize;
-	bool	logDebug		= false;
+	uint			listenPort		= DefaultPort;
+	uint			maxHistory		= DefaultHistorySize;
+	bool			logDebug		= false;
+	UseBufferedIO	useBufferedIO	= UseBufferedIO_Auto;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -42,6 +43,7 @@ private:
 
 	DWORD			connectionThread(ConnectionInfo& info);
 	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
+	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 
 	using			FilesHistory = List<FileKey>;
 	struct			FileRec { WString name; FilesHistory::iterator historyIt; };
@@ -72,26 +74,33 @@ private:
 
 struct Server::ConnectionInfo
 {
-	ConnectionInfo(Log& l, SOCKET s) : log(l), socket(s) {}
+	ConnectionInfo(Log& l, const ServerSettings& s, SOCKET so) : log(l), settings(s), socket(so) {}
 
 	Log& log;
+	const ServerSettings& settings;
 	Thread* thread = nullptr;
 	SOCKET socket;
 };
 
 struct Server::FileKey
 {
+	WString name;
 	FILETIME lastWriteTime;
 	u64 fileSize;
-	WString name;
 
 	bool operator<(const FileKey& o) const
 	{
-		if (fileSize != o.fileSize)
-			return fileSize < o.fileSize;
-		if (LONG timeDiff = CompareFileTime(&lastWriteTime, &o.lastWriteTime))
+		// Sort by name first (we need this for delta-copy)
+		int cmp = wcscmp(name.c_str(), o.name.c_str());
+		if (cmp != 0)
+			return cmp < 0;
+
+		// Sort by write time first (we need this for delta-copy)
+		LONG timeDiff = CompareFileTime(&lastWriteTime, &o.lastWriteTime);
+		if (timeDiff != 0)
 			return timeDiff < 0;
-		return name < o.name;
+
+		return fileSize < o.fileSize;
 	}
 };
 

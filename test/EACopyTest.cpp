@@ -198,7 +198,7 @@ struct TestBase
 		HANDLE fileHandle;
 		(void)fileHandle; // suppress unused variable warning
 
-		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle));
+		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, false));
 		EACOPY_ASSERT(writeFile(fileName.c_str(), fileHandle, fileOrWildcard, strlen(fileOrWildcard)));
 		EACOPY_ASSERT(closeFile(fileName.c_str(), fileHandle));
 	}
@@ -281,7 +281,7 @@ EACOPY_TEST(SkipFile)
 	(void)existed; // suppress unused variable warning
 	(void)bytesCopied; // suppress unused variable warning
 
-	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), true, existed, bytesCopied));
+	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), true, existed, bytesCopied, UseBufferedIO_Enabled));
 	EACOPY_ASSERT(!existed);
 	EACOPY_ASSERT(bytesCopied == 100);
 
@@ -790,25 +790,43 @@ EACOPY_TEST(CopyFileMirror)
 	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2\\Boo.txt") == false);
 }
 
+EACOPY_TEST(CopyFileTargetDirectoryIsfile)
+{
+	ensureDirectory((testSourceDir + L"SourceFolder").c_str());
+	createTestFile(L"SourceFolder/Foo", 10, true);
+	createTestFile(L"SourceFolder", 10, false);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.copySubdirDepth = 1;
+	clientSettings.copyEmptySubdirectories = true;
+	clientSettings.purgeDestination = true;
+	Client client(clientSettings);
+
+	EACOPY_ASSERT(client.process(clientLog) != 0);
+}
+
 EACOPY_TEST(CopyFileTargetHasSymlink)
 {
 	ensureDirectory((testSourceDir + L"Source\\RealDir").c_str());
-	ensureDirectory((testSourceDir + L"Dest").c_str());
+	ensureDirectory((testDestDir + L"Dest").c_str());
 	createTestFile(L"Source\\RealDir\\Boo.txt", 10, true);
 
 	// Probably don't have privilege.. skip this test
-	if (!CreateSymbolicLinkW((testSourceDir + L"Dest\\RealDir").c_str(), (testSourceDir + L"Source\\RealDir").c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY))
+	if (!CreateSymbolicLinkW((testDestDir + L"Dest\\RealDir").c_str(), (testSourceDir + L"Source\\RealDir").c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY))
 		return;
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.sourceDirectory = testSourceDir + L"Source\\";
-	clientSettings.destDirectory = testSourceDir + L"Dest\\";
+	clientSettings.destDirectory = testDestDir + L"Dest\\";
 	clientSettings.copySubdirDepth = 3;
 	Client client(clientSettings);
 
+	FileInfo fi;
+	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) != 0);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(getTestFileExists(L"Source\\RealDir\\Boo.txt", true) == true);
-	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir\\Boo.txt", true) == true);
+	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir\\Boo.txt", false) == true);
+	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
 }
 
 EACOPY_TEST(ServerCopyAttemptFallback)
@@ -1006,6 +1024,53 @@ EACOPY_TEST(ServerCopyLink)
 	EACOPY_ASSERT(clientStats2.linkCount == 1);
 }
 
+EACOPY_TEST(ServerCopySameDest)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.skipCount == 1);
+}
+
+EACOPY_TEST(ServerCopyExistingDestAndFoundLinkSomewhereElse)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.destDirectory = testDestDir + L"\\1";
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+
+	ClientSettings clientSettings2(getDefaultClientSettings());
+	clientSettings2.useServer = UseServer_Required;
+	clientSettings2.destDirectory = testDestDir + L"\\2";
+	Client client2(clientSettings2);
+	EACOPY_ASSERT(client2.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.linkCount == 1);
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.skipCount == 1);
+}
+
 EACOPY_TEST(ServerCopyBadDest)
 {
 	createTestFile(L"Foo.txt", 10);
@@ -1184,6 +1249,41 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath2)
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Test2\\Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
+/*
+EACOPY_TEST(ServerCopyDelta)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+
+	{
+		clientSettings.destDirectory = testDestDir+ L"\\1";
+		Client client(clientSettings);
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(clientStats.copyCount == 1);
+	}
+
+	createTestFile(L"Foo.txt", 13);
+
+	{
+		clientSettings.destDirectory = testDestDir+ L"\\2";
+		Client client(clientSettings);
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(clientStats.copyCount == 1);
+	}
+
+	//FileInfo destFile;
+	//EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
+	//EACOPY_ASSERT(destFile.fileSize == 10);
+}
+*/
 
 EACOPY_TEST(CopyLargeFile)
 {
@@ -1341,6 +1441,8 @@ int wmain(int argc, wchar_t* argv[])
 		g_testSourceDir = argv[1];
 		g_testDestDir = argv[2];
 	}
+
+	testServerCopyExistingDestAndFoundLinkSomewhereElse();
 
 	// Run all the tests
 	TestBase::runAll();
