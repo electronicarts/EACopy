@@ -14,9 +14,10 @@ If the server doesn't have the key it asks the EACopy client to send the new fil
 Note that the copy-reduction feature is on a per-file basis so if your files are zipped up to some big archives with one changed file in it, it will still copy these files even though only 1 byte diffed from previous copy. This might be a feature added in the future.
 
 
-## Documentation
-TODO: Add link to library documentation.
-Please see [EACopy Introduction](doc/introduction.md).
+## Documentation  
+[EACopy usage](doc/Usage.md)  
+[Technical documentation](doc/TechDoc.md)  
+[Todos](doc/Todo.md)  
 
 ## Credits
 EACopy was implemented by Henrik Karlsson. Thanks to Roberto Parolin for setting up cmake and github.
