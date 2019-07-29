@@ -150,24 +150,18 @@ struct SendFileStats
 	u64			compressionLevelSum = 0;
 };
 
-bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyBuffer& copyBuffer, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats);
+bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-struct FileReceiveBuffers
+struct NetworkCopyContext : CopyContext
 {
-	uint capacity = 8*1024*1024;
-	char* data[2];
-
-	uint compCapacity = 8*1024*1024;
-	char* compData = nullptr;
 	void* compContext = nullptr;
 
-	FileReceiveBuffers();
-	~FileReceiveBuffers();
+	~NetworkCopyContext();
 };
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, FileReceiveBuffers& fileBuf, char* recvBuffer, uint recvPos, uint& commandSize);
+bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

@@ -207,7 +207,7 @@ CompressionData::~CompressionData()
 		ZSTD_freeCCtx((ZSTD_CCtx*)context);
 }
 
-bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyBuffer& copyBuffer, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
+bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
 {
 	BOOL success = TRUE;
 	u64 startCreateReadTimeMs = getTimeMs();
@@ -265,10 +265,10 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 		while (left)
 		{
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyBufferSize);
+			DWORD toRead = (DWORD)min(left, CopyContextBufferSize);
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
-			if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
+			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
@@ -279,7 +279,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 			copyStats.readTimeMs += getTimeMs() - startReadMs;
 
 			u64 startSendMs = getTimeMs();
-			if (!sendData(socket, copyBuffer.buffers[0], toRead))
+			if (!sendData(socket, copyContext.buffers[0], toRead))
 				return false;
 			sendStats.sendTimeMs += getTimeMs() - startSendMs;
 			sendStats.sendSize += toRead;
@@ -293,10 +293,10 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 		while (left)
 		{
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyBufferSize);
+			DWORD toRead = (DWORD)min(left, CopyContextBufferSize);
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
-			if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
+			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
@@ -310,9 +310,9 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 				compressionData.context = ZSTD_createCCtx();
 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
-			u8* destBuf = copyBuffer.buffers[1];
+			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressMs = getTimeMs();
-			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CopyBufferSize - 4, copyBuffer.buffers[0], toRead, compressionData.level);
+			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CopyContextBufferSize - 4, copyContext.buffers[0], toRead, compressionData.level);
 			u64 compressTimeMs = getTimeMs() - startCompressMs;
 
 			*(uint*)destBuf =  compressedSize;
@@ -358,22 +358,12 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 	return true;
 }
 
-FileReceiveBuffers::FileReceiveBuffers()
-{
-	data[0] = new char[capacity];
-	data[1] = new char[capacity];
-	compData = new char[compCapacity];
-}
-
-FileReceiveBuffers::~FileReceiveBuffers()
+NetworkCopyContext::~NetworkCopyContext()
 {
 	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
-	delete[] compData;
-	delete[] data[0];
-	delete[] data[1];
 }
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, FileReceiveBuffers& fileBuf, char* recvBuffer, uint recvPos, uint& commandSize)
+bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize)
 {
 	u64 totalReceivedSize = 0;
 
@@ -404,10 +394,10 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 		while (read != fileSize)
 		{
 			u64 left = fileSize - read;
-			uint toRead = (uint)min(left, fileBuf.capacity);
+			uint toRead = (uint)min(left, CopyContextBufferSize);
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
-			wsabuf.buf = fileBuf.data[fileBufIndex];
+			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
 			DWORD recvBytes = 0;
 			DWORD flags = MSG_WAITALL;
 			int fileRes = WSARecv(socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
@@ -424,7 +414,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 
-			outSuccess = outSuccess && writeFile(fullPath, file, fileBuf.data[fileBufIndex], recvBytes, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], recvBytes, &osWrite);
 
 			read += recvBytes;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -468,7 +458,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 			totalReceivedSize += compressedSize + sizeof(uint);
 
-			if (compressedSize > fileBuf.compCapacity)
+			if (compressedSize > CopyContextBufferSize)
 			{
 				logErrorf(L"Compressed size is bigger than compression buffer capacity");
 				return false;
@@ -478,7 +468,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
-			wsabuf.buf = fileBuf.compData;
+			wsabuf.buf = (char*)copyContext.buffers[2];
 			DWORD recvBytes = 0;
 			DWORD flags = MSG_WAITALL;
 			int fileRes = WSARecv(socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
@@ -493,16 +483,16 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 				return false;
 			}
 
-			if (!fileBuf.compContext)
-				fileBuf.compContext = ZSTD_createDCtx();
+			if (!copyContext.compContext)
+				copyContext.compContext = ZSTD_createDCtx();
 
 
-			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)fileBuf.compContext, fileBuf.data[fileBufIndex], fileBuf.capacity, fileBuf.compData, recvBytes);
+			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], CopyContextBufferSize, copyContext.buffers[2], recvBytes);
 			outSuccess = outSuccess && !ZSTD_isError(decompressedSize);
 
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-			outSuccess = outSuccess && writeFile(fullPath, file, fileBuf.data[fileBufIndex], decompressedSize, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, &osWrite);
 
 			read += decompressedSize;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;

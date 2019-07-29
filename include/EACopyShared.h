@@ -19,7 +19,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Global Constants
 
-enum { CopyBufferSize = 2*1024*1024 }; // This is the chunk size used when reading/writing/copying files
+enum { CopyContextBufferSize = 8*1024*1024 }; // This is the chunk size used when reading/writing/copying files
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -118,10 +118,10 @@ struct FileInfo
 	u64					fileSize = 0;
 };
 
-struct CopyBuffer
+struct CopyContext
 {
-						CopyBuffer();
-						~CopyBuffer();
+						CopyContext();
+						~CopyContext();
 	u8*					buffers[3];
 };
 
@@ -152,7 +152,7 @@ bool					closeFile(const wchar_t* fullPath, HANDLE& file);
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);

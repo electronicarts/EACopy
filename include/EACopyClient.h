@@ -110,7 +110,7 @@ private:
 
 	// Methods
 	void				resetWorkState(Log& log);
-	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, CopyBuffer& copyBuffer, ClientStats& stats);
+	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
 	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, bool isMainThread);
 	bool				connectToServer(const wchar_t* networkPath, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(ClientStats& stats);
@@ -163,8 +163,8 @@ public:
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
-	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyBuffer& copyBuffer);
-	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, CopyBuffer& copyBuffer);
+	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
+	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
 	bool				destroy();
 

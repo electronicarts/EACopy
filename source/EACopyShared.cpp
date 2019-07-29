@@ -637,13 +637,13 @@ DWORD internalCopyProgressRoutine(LARGE_INTEGER TotalFileSize, LARGE_INTEGER Tot
 	return PROGRESS_CONTINUE;
 }
 
-CopyBuffer::CopyBuffer()
+CopyContext::CopyContext()
 {
 	for (uint i=0; i!=3; ++i)
-		buffers[i] = new u8[CopyBufferSize];
+		buffers[i] = new u8[CopyContextBufferSize];
 }
 
-CopyBuffer::~CopyBuffer()
+CopyContext::~CopyContext()
 {
 	for (uint i=0; i!=3; ++i)
 		delete[] buffers[i];
@@ -651,12 +651,12 @@ CopyBuffer::~CopyBuffer()
 
 bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO)
 {
-	CopyBuffer copyBuffer;
+	CopyContext copyContext;
 	CopyStats copyStats;
-	return copyFile(source, dest, failIfExists, outExisted, outBytesCopied, copyBuffer, copyStats, useBufferedIO);
+	return copyFile(source, dest, failIfExists, outExisted, outBytesCopied, copyContext, copyStats, useBufferedIO);
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyBuffer& copyBuffer, CopyStats& copyStats, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
 
@@ -746,7 +746,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			}
 
 			sizeFilled = (uint)osRead.InternalHigh;
-			bufferFilled = copyBuffer.buffers[activeBufferIndex];
+			bufferFilled = copyContext.buffers[activeBufferIndex];
 
 			if (osRead.InternalHigh)
 			{
@@ -761,7 +761,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			{
 				u64 startReadMs = getTimeMs();
 
-				uint toRead = (uint)min(left, CopyBufferSize);
+				uint toRead = (uint)min(left, CopyContextBufferSize);
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
 
 				uint toReadAligned = nobufferingFlag ? (((toRead + 4095) / 4096) * 4096) : toRead;
@@ -769,7 +769,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 				osRead.Offset = (LONG)read;
 				osRead.OffsetHigh = (LONG)(read >> 32);
 
-				if (!ReadFile(sourceFile, copyBuffer.buffers[activeBufferIndex], toReadAligned, NULL, &osRead))
+				if (!ReadFile(sourceFile, copyContext.buffers[activeBufferIndex], toReadAligned, NULL, &osRead))
 				{
 					if (GetLastError() != ERROR_IO_PENDING)
 					{

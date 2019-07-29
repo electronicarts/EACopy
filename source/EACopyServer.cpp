@@ -306,11 +306,8 @@ Server::connectionThread(ConnectionInfo& info)
 		logScopeLeave();
 	});
 
-	CopyBuffer copyBuffer;
+	NetworkCopyContext copyContext;
 	CompressionData	compressionData;
-
-
-	FileReceiveBuffers fileBufs;
 
 	bool isValidEnvironment = false;
 	bool isDone = false;
@@ -460,7 +457,7 @@ Server::connectionThread(ConnectionInfo& info)
 					else
 					{
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize);
-						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, fileBufs, recvBuffer, recvPos, header.commandSize))
+						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, copyContext, recvBuffer, recvPos, header.commandSize))
 							return -1;
 					}
 
@@ -537,7 +534,7 @@ Server::connectionThread(ConnectionInfo& info)
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, fi.fileSize);
 						CopyStats copyStats;
 						SendFileStats sendStats;
-						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyBuffer, compressionData, useBufferedIO, copyStats, sendStats))
+						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, copyStats, sendStats))
 							return -1;
 					}
 					else // ReadResponse_CopyDelta

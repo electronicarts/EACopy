@@ -256,7 +256,7 @@ Client::resetWorkState(Log& log)
 }
 
 bool
-Client::processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, CopyBuffer& copyBuffer, ClientStats& stats)
+Client::processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats)
 {
 	// Pop first entry off the queue
 	CopyEntry entry;
@@ -291,7 +291,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			bool linked;
 
 			// Send file to server (might be skipped if server already has it).. returns false if it fails
-			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), size, written, linked, copyBuffer))
+			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), size, written, linked, copyContext))
 			{
 				if (written)
 				{
@@ -317,7 +317,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			u64 startTimeMs = getTimeMs();
 			u64 size;
 			u64 read;
-			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), size, read, copyBuffer))
+			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), size, read, copyContext))
 			{
 				if (read)
 				{
@@ -350,7 +350,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
 			{
-				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyBuffer, stats.copyStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %s", getRelativeSourceFile(entry.src));
@@ -397,7 +397,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					if (m_settings.logProgress)
 						logErrorf(L"Can't copy to file that is read-only (%s)", fullDst.c_str());
 				}
-				else if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyBuffer, stats.copyStats, m_settings.useBufferedIO))
+				else if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %s", entry.src.c_str());
@@ -457,14 +457,14 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 {
 	logDebugLinef(L"Worker started");
 
-	CopyBuffer copyBuffer;
+	NetworkCopyContext copyContext;
 	CopyStats copyStats;
 	uint filesProcessedCount = 0;
 
 	// Process file queue
 	while (m_workersActive)
 	{
-		if (processFile(logContext, sourceConnection, destConnection, copyBuffer, stats))
+		if (processFile(logContext, sourceConnection, destConnection, copyContext, stats))
 			++filesProcessedCount;
 		else if (isMainThread)
 			break;
@@ -1218,7 +1218,7 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 }
 
 bool
-Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyBuffer& copyBuffer)
+Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext)
 {
 	outSize = 0;
 	outWritten = 0;
@@ -1264,7 +1264,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
 
 		SendFileStats sendStats;
-		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyBuffer, m_compressionData, useBufferedIO, m_stats.copyStats, sendStats))
+		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionData, useBufferedIO, m_stats.copyStats, sendStats))
 			return false;
 		m_stats.sendTimeMs += sendStats.sendTimeMs;
 		m_stats.sendSize += sendStats.sendSize;
@@ -1317,7 +1317,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 }
 
 bool
-Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, CopyBuffer& copyBuffer)
+Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext)
 {
 	outSize = 0;
 	outRead = 0;
@@ -1374,11 +1374,10 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		bool success = true;
 		WriteFileType writeType = m_compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
-		FileReceiveBuffers fileBuf;
 		uint commandSize = 0;
 
 		// Read actual file from server
-		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, fileBuf, nullptr, 0, commandSize))
+		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize))
 			return false;
 
 		outRead = newFileSize;
@@ -1388,7 +1387,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	else // ReadResponse_CopyDelta
 	{
 		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-		if (!receiveZdelta(m_socket, fullDest.c_str(), fullDest.c_str(), newFileLastWriteTime, copyBuffer))
+		if (!receiveZdelta(m_socket, fullDest.c_str(), fullDest.c_str(), newFileLastWriteTime, copyContext))
 			return false;
 		return true;
 		#endif
