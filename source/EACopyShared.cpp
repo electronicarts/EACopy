@@ -5,9 +5,7 @@
 #include <codecvt>
 #include <shlwapi.h>
 #include <strsafe.h>
-
 #pragma comment(lib, "Shlwapi.lib")
-
 
 //#define EACOPY_USE_OUTPUTDEBUGSTRING
 #define EACOPY_IS_DEBUGGER_PRESENT false//::IsDebuggerPresent()
@@ -299,9 +297,12 @@ DWORD getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
 	WIN32_FILE_ATTRIBUTE_DATA fd;
 	BOOL ret = GetFileAttributesExW(fullFileName, GetFileExInfoStandard, &fd); 
 	if (ret == 0)
+	{
+		outInfo = FileInfo();
 		return 0;
+	}
 
-	outInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
+	outInfo.creationTime = { 0, 0 }; //fd.ftCreationTime;
 	outInfo.lastWriteTime = fd.ftLastWriteTime;
 	outInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
 	return fd.dwFileAttributes;
@@ -497,11 +498,12 @@ bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 	}
 }
 
-bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped)
+bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped, bool isSequentialScan)
 {
 	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
+	DWORD sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
 
-	outFile = CreateFileW(fullPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | nobufferingFlag, overlapped);
+	outFile = CreateFileW(fullPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, sequentialScanFlag | nobufferingFlag, overlapped);
 	if (outFile != INVALID_HANDLE_VALUE)
 		return true;
 
@@ -519,7 +521,7 @@ bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO,
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
 
-	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != INVALID_HANDLE_VALUE)
 		return true;
 	logErrorf(L"Trying to create file %s: %s", fullPath, getLastErrorText().c_str());
@@ -565,6 +567,17 @@ bool setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWr
 
 	logErrorf(L"Failed to set file time on %s", fullPath);
 	CloseHandle(file);
+	return false;
+}
+
+bool setFilePosition(const wchar_t* fullPath, HANDLE& file, u64 position)
+{
+	LARGE_INTEGER li;
+	li.QuadPart = position;
+
+	if (SetFilePointer(file, li.LowPart, &li.HighPart, FILE_BEGIN) != INVALID_SET_FILE_POINTER)
+		return true;
+	logErrorf(L"Fail setting file position on file %s: %s", fullPath, getLastErrorText().c_str());
 	return false;
 }
 
@@ -627,7 +640,7 @@ DWORD internalCopyProgressRoutine(LARGE_INTEGER TotalFileSize, LARGE_INTEGER Tot
 CopyBuffer::CopyBuffer()
 {
 	for (uint i=0; i!=3; ++i)
-		buffers[i] = new char[CopyBufferSize];
+		buffers[i] = new u8[CopyBufferSize];
 }
 
 CopyBuffer::~CopyBuffer()
@@ -700,9 +713,9 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); CloseHandle(sourceFile); });
 
-		int activeBufferIndex = 0;
+		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
-		char* bufferFilled = nullptr;
+		u8* bufferFilled = nullptr;
 
 		u64 left = sourceInfo.fileSize;
 		u64 read = 0;

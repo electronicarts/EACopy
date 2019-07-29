@@ -113,8 +113,8 @@ String					toString(const wchar_t* str);
 
 struct FileInfo
 {
-	FILETIME			creationTime;
-	FILETIME			lastWriteTime;
+	FILETIME			creationTime = { 0, 0 };
+	FILETIME			lastWriteTime = { 0, 0 };
 	u64					fileSize = 0;
 };
 
@@ -122,7 +122,7 @@ struct CopyBuffer
 {
 						CopyBuffer();
 						~CopyBuffer();
-	char*				buffers[3];
+	u8*					buffers[3];
 };
 
 struct CopyStats
@@ -143,10 +143,11 @@ bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true);
 bool					deleteDirectory(const wchar_t* directory);
 bool					isAbsolutePath(const wchar_t* path);
-bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
+bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true);
 bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
 bool					writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 dataSize, OVERLAPPED* overlapped = nullptr);
 bool					setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWriteTime);
+bool					setFilePosition(const wchar_t* fullPath, HANDLE& file, u64 position);
 bool					closeFile(const wchar_t* fullPath, HANDLE& file);
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);

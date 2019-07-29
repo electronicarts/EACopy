@@ -8,16 +8,19 @@
 #include <conio.h>
 #include <strsafe.h>
 #include <psapi.h>
-#include "zstd/zstd.h"
+
+#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#include "EACopyZdelta.h"
+#endif
+
+#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+#include <EACopyRsync.h>
+#endif
 
 #pragma comment (lib, "Netapi32.lib")
 
 namespace eacopy
 {
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-enum { AllowCopyDelta = false };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -185,9 +188,11 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 
 			if (clientSocket == INVALID_SOCKET)
 			{
-				logErrorf(L"accept failed with WSA error: %s", getErrorText(WSAGetLastError()).c_str());
+				if (m_loopServer)
+					logErrorf(L"accept failed with WSA error: %s", getErrorText(WSAGetLastError()).c_str());
 				reportStatus(SERVICE_RUNNING, -1, 3000);
 				m_loopServer = false;
+				break;
 			}
 
 			++m_handledConnectionCount;
@@ -210,6 +215,51 @@ Server::stop()
 	SOCKET listenSocket = m_listenSocket;
 	m_listenSocket = INVALID_SOCKET;
 	closesocket(listenSocket);
+}
+
+bool
+Server::primeDirectory(const wchar_t* directory)
+{
+	WString localDir;
+	if (directory[1] == ':')
+		localDir = directory;
+	else if (!getLocalFromNet(localDir, directory))
+		return false;
+	if (*localDir.rbegin() != '\\')
+		localDir += '\\';
+	return primeDirectoryRecursive(localDir);
+}
+
+
+bool
+Server::primeDirectoryRecursive(const WString& directory)
+{
+    WIN32_FIND_DATAW fd; 
+    WString searchStr = directory + L"*.*";
+    HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
+    if(hFind == INVALID_HANDLE_VALUE)
+	{
+		logErrorf(L"FindFirstFile failed with search string %s", searchStr.c_str());
+		return false;
+	}
+	ScopeGuard _([&]() { FindClose(hFind); });
+    do
+	{
+		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+		{
+			if ((wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
+				continue;
+			if (!primeDirectoryRecursive(directory + fd.cFileName + L'\\'))
+				return false;
+		}
+		else
+		{
+			addToLocalFilesHistory({ fd.cFileName, fd.ftLastWriteTime, ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow }, directory + fd.cFileName);
+		}
+	} 
+	while(FindNextFileW(hFind, &fd)); 
+
+	return true;
 }
 
 DWORD
@@ -256,21 +306,15 @@ Server::connectionThread(ConnectionInfo& info)
 		logScopeLeave();
 	});
 
-	uint fileBufCapacity = 8*1024*1024;
-	char* fileBuf[2];
-	fileBuf[0] = new char[fileBufCapacity];
-	fileBuf[1] = new char[fileBufCapacity];
-	ScopeGuard fileBufGuard([&]() { delete[] fileBuf[0]; delete[] fileBuf[1]; });
+	CopyBuffer copyBuffer;
+	CompressionData	compressionData;
 
-	uint compBufCapacity = 8*1024*1024;
-	char* compBuf = new char[compBufCapacity];
-	ScopeGuard compBufGuard([&]() { delete[] compBuf; });
 
-	ZSTD_DCtx* dctx = nullptr;
-	ScopeGuard dctxGuard([&dctx]() { if (dctx) ZSTD_freeDCtx(dctx); });
+	FileReceiveBuffers fileBufs;
 
 	bool isValidEnvironment = false;
 	bool isDone = false;
+	u64 deltaCompressionThreshold = ~0u;
 
 	// Receive until the peer shuts down the connection
 	while (!isDone && m_loopServer)
@@ -304,30 +348,11 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_Environment:
 				{
 					auto& cmd = *(const EnvironmentCommand*)recvBuffer;
-					destDirectory = cmd.netDirectory;
-					const wchar_t* localPath = wcschr(cmd.netDirectory, '\\');
-					if (!localPath)
-						localPath = cmd.netDirectory + wcslen(cmd.netDirectory);
 
-					WString netname(cmd.netDirectory, localPath);
+					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
 
-					PSHARE_INFO_502 shareInfo;
-
-					NET_API_STATUS res = NetShareGetInfo(NULL, const_cast<LPWSTR>(netname.c_str()), 502, (LPBYTE*) &shareInfo);
-					if (res != NERR_Success)
-					{
-						logErrorf(L"Failed to find netshare '%s'", netname.c_str());
+					if (!getLocalFromNet(destDirectory, cmd.netDirectory))
 						break;
-					}
-
-					WString wpath(shareInfo->shi502_path);
-					destDirectory = WString(wpath.begin(), wpath.end());
-					if (*localPath)
-						destDirectory += localPath;
-					destDirectory += '\\';
-
-					NetApiBufferFree(shareInfo);
-
 					isValidEnvironment  = true;
 				}
 				break;
@@ -391,8 +416,9 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					// If CopyDelta is enabled we should look for a file that we believe is a very similar file and use that to send delta
+					#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 					WString fileForCopyDelta;
-					if (AllowCopyDelta && writeResponse == WriteResponse_Copy)
+					if (cmd.info.fileSize >= deltaCompressionThreshold && writeResponse == WriteResponse_Copy)
 						if (findFileForDeltaCopy(fileForCopyDelta, key))
 						{
 							// TODO: Right now we don't support copy delta to same destination as the file we use for delta
@@ -403,6 +429,7 @@ Server::connectionThread(ConnectionInfo& info)
 									writeResponse = WriteResponse_CopyDelta;
 							}
 						}
+					#endif
 
 					++entryCount[writeResponse];
 
@@ -423,139 +450,18 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (writeResponse == WriteResponse_CopyDelta)
 					{
-						// TODO: Implement this!
-						logErrorf(L"CopyDelta not implemented!");
-						return -1;
+						#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+						RsyncStats stats;
+						if (!serverHandleRsync(info.socket, fileForCopyDelta.c_str(), fullPath.c_str(), cmd.info.lastWriteTime, stats))
+							return -1;
+						success = true;
+						#endif
 					}
-					else if (cmd.writeType == WriteFileType_TransmitFile || cmd.writeType == WriteFileType_Send)
+					else
 					{
-						HANDLE file;
-						OVERLAPPED osWrite      = { 0, 0 };
-						osWrite.Offset = 0xFFFFFFFF;
-						osWrite.OffsetHigh = 0xFFFFFFFF;
-
-						osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
-						success = openFileWrite(fullPath.c_str(), file, getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize));
-						ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), file); CloseHandle(osWrite.hEvent); });
-
-						u64 read = 0;
-
-						// Copy the stuff already in the buffer
-						if (recvPos > header.commandSize)
-						{
-							u64 toCopy = min(u64(recvPos - header.commandSize), cmd.info.fileSize);
-							success = success & writeFile(fullPath.c_str(), file, recvBuffer + header.commandSize, toCopy, &osWrite);
-							read = toCopy;
-							header.commandSize += (uint)toCopy;
-						}
-
-						int fileBufIndex = 0;
-
-						while (read != cmd.info.fileSize)
-						{
-							u64 left = cmd.info.fileSize - read;
-							uint toRead = (uint)min(left, fileBufCapacity);
-							WSABUF wsabuf;
-							wsabuf.len = toRead;
-							wsabuf.buf = fileBuf[fileBufIndex];
-							DWORD recvBytes = 0;
-							DWORD flags = MSG_WAITALL;
-							int fileRes = WSARecv(info.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
-							if (fileRes != 0)
-							{
-								logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
-								return -1;
-							}
-							if (recvBytes == 0)
-							{
-								logErrorf(L"Socket closed before full file has been received (%s)", fullPath.c_str());
-								return -1;
-							}
-
-							success = success && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-
-							success = success && writeFile(fullPath.c_str(), file, fileBuf[fileBufIndex], recvBytes, &osWrite);
-
-							read += recvBytes;
-							fileBufIndex = fileBufIndex == 0 ? 1 : 0;
-						}
-
-						totalReceivedSize += read;
-
-						success = success && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-						success = success && setFileLastWriteTime(fullPath.c_str(), file, cmd.info.lastWriteTime);
-						success = success && closeFile(fullPath.c_str(), file);
-					}
-					else if (cmd.writeType == WriteFileType_Compressed)
-					{
-						HANDLE file;
-						OVERLAPPED osWrite      = { 0, 0 };
-						osWrite.Offset = 0xFFFFFFFF;
-						osWrite.OffsetHigh = 0xFFFFFFFF;
-
-						osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
-						success = openFileWrite(fullPath.c_str(), file, getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize));
-						ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), file); CloseHandle(osWrite.hEvent); });
-
-						u64 read = 0;
-
-						// Copy the stuff already in the buffer
-						if (recvPos > header.commandSize)
-						{
-							u64 toCopy = min(u64(recvPos - header.commandSize), cmd.info.fileSize);
-							success = success & writeFile(fullPath.c_str(), file, recvBuffer + header.commandSize, toCopy, &osWrite);
-							read = toCopy;
-							header.commandSize += (uint)toCopy;
-						}
-
-						int fileBufIndex = 0;
-
-						while (read != cmd.info.fileSize)
-						{
-							uint compressedSize;
-							if (!receiveData(info.socket, &compressedSize, sizeof(uint)))
-								return -1;
-
-							totalReceivedSize += compressedSize + sizeof(uint);
-
-							assert(compressedSize < compBufCapacity);
-							uint toRead = compressedSize;
-
-							WSABUF wsabuf;
-							wsabuf.len = toRead;
-							wsabuf.buf = compBuf;
-							DWORD recvBytes = 0;
-							DWORD flags = MSG_WAITALL;
-							int fileRes = WSARecv(info.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
-							if (fileRes != 0)
-							{
-								logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
-								return -1;
-							}
-							if (recvBytes == 0)
-							{
-								logErrorf(L"Socket closed before full file has been received (%s)", fullPath.c_str());
-								return -1;
-							}
-
-							if (!dctx)
-								dctx = ZSTD_createDCtx();
-
-
-							size_t decompressedSize = ZSTD_decompressDCtx(dctx, fileBuf[fileBufIndex], fileBufCapacity, compBuf, recvBytes);
-							success = success && !ZSTD_isError(decompressedSize);
-
-
-							success = success && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-							success = success && writeFile(fullPath.c_str(), file, fileBuf[fileBufIndex], decompressedSize, &osWrite);
-
-							read += decompressedSize;
-							fileBufIndex = fileBufIndex == 0 ? 1 : 0;
-						}
-
-						success = success && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-						success = success && setFileLastWriteTime(fullPath.c_str(), file, cmd.info.lastWriteTime);
-						success = success && closeFile(fullPath.c_str(), file);
+						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize);
+						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, fileBufs, recvBuffer, recvPos, header.commandSize))
+							return -1;
 					}
 
 					if (success)
@@ -569,6 +475,83 @@ Server::connectionThread(ConnectionInfo& info)
 						return -1;
 				}
 				break;
+
+			case CommandType_ReadFile:
+				{
+					if (!isValidEnvironment)
+					{
+						ReadResponse readResponse = ReadResponse_BadSource;
+						if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
+							return -1;
+						break;
+					}
+
+					auto& cmd = *(const ReadFileCommand*)recvBuffer;
+					WString fullPath = destDirectory + cmd.path;
+
+					FileInfo fi;
+					DWORD attributes = getFileInfo(fi, fullPath.c_str());
+					if (!attributes || attributes & FILE_ATTRIBUTE_DIRECTORY)
+					{
+						ReadResponse readResponse = ReadResponse_BadSource;
+						if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
+							return -1;
+						break;
+					}
+
+					ReadResponse readResponse = ReadResponse_Copy;
+					if (equals(fi, cmd.info))
+						readResponse = ReadResponse_Skip;
+
+					// Check if the version that the client has exist and in that case send as delta
+					#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+					const wchar_t* referenceFileName = nullptr;
+					FileKey key { cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
+					m_localFilesCs.enter();
+					auto findIt = m_localFiles.find(key);
+					if (findIt != m_localFiles.end())
+						referenceFileName = findIt->second.name.c_str();
+					m_localFilesCs.leave();
+
+					if (referenceFileName != nullptr)
+						readResponse = ReadResponse_CopyDelta;
+					#endif
+
+					if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
+						return -1;
+
+					if (readResponse == ReadResponse_Skip)
+						break;
+
+					if (!sendData(info.socket, &fi.lastWriteTime, sizeof(fi.lastWriteTime)))
+						return -1;
+
+					if (readResponse == ReadResponse_Copy)
+					{
+						if (!sendData(info.socket, &fi.fileSize, sizeof(fi.fileSize)))
+							return -1;
+
+
+						WriteFileType writeType = cmd.compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
+
+						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, fi.fileSize);
+						CopyStats copyStats;
+						SendFileStats sendStats;
+						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyBuffer, compressionData, useBufferedIO, copyStats, sendStats))
+							return -1;
+					}
+					else // ReadResponse_CopyDelta
+					{
+						#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+						if (!sendZdelta(info.socket, referenceFileName, fullPath.c_str()))
+							return -1;
+						#endif
+						return -1;
+					}
+
+				}
+				break;
+			
 			case CommandType_CreateDir:
 				{
 					CreateDirResponse createDirResponse = CreateDirResponse_Success;
@@ -664,6 +647,35 @@ Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
 	insres.first->second.name = fullFileName;
 	insres.first->second.historyIt = --m_localFilesHistory.end();
 	m_localFilesCs.leave();
+}
+
+bool
+Server::getLocalFromNet(WString& localDirectory, const wchar_t* netDirectory)
+{
+	localDirectory = netDirectory;
+	const wchar_t* localPath = wcschr(netDirectory, '\\');
+	if (!localPath)
+		localPath = netDirectory + wcslen(netDirectory);
+
+	WString netname(netDirectory, localPath);
+
+	PSHARE_INFO_502 shareInfo;
+
+	NET_API_STATUS res = NetShareGetInfo(NULL, const_cast<LPWSTR>(netname.c_str()), 502, (LPBYTE*) &shareInfo);
+	if (res != NERR_Success)
+	{
+		logErrorf(L"Failed to find netshare '%s'", netname.c_str());
+		return false;
+	}
+
+	WString wpath(shareInfo->shi502_path);
+	localDirectory = WString(wpath.begin(), wpath.end());
+	if (*localPath)
+		localDirectory += localPath;
+	localDirectory += '\\';
+
+	NetApiBufferFree(shareInfo);
+	return true;
 }
 
 bool

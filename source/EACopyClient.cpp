@@ -2,14 +2,19 @@
 
 #include "EACopyClient.h"
 #include <ws2tcpip.h>
-#include <Mswsock.h>
 #include <assert.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <strsafe.h>
-#include "zstd/zstd.h"
 
-#pragma comment (lib, "Mswsock.lib") // TransmitFile
+#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+#include <EACopyRsync.h>
+#endif
+
+#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#include "EACopyZdelta.h"
+#endif
+
 #pragma comment (lib, "Shlwapi.lib") // PathMatchSpecW
 
 namespace eacopy
@@ -42,14 +47,18 @@ Client::process(Log& log, ClientStats& outStats)
 
 	LogContext logContext(log);
 
-	const WString& destDir = m_settings.destDirectory;
+	const WString& sourceDir = m_settings.sourceDirectory;
+	if (sourceDir.size() < 5 || sourceDir[0] != '\\' || sourceDir[1] != '\\')
+		m_useSourceServerFailed = true;
 
+	const WString& destDir = m_settings.destDirectory;
 	if (destDir.size() < 5 || destDir[0] != '\\' || destDir[1] != '\\')
-		m_useServerFailed = true;
+		m_useDestServerFailed = true;
 
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
-	if (!connectToServer(m_connection, outStats))
+	if (!connectToServer(destDir.c_str(), m_destConnection, m_useDestServerFailed, outStats))
 		return -1;
+
 
 	// Spawn worker threads that will copy the files
 	Vector<HANDLE> workerThreadList(m_settings.threadCount);
@@ -78,7 +87,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 	// Collect exclusions provided through file
 	for (auto& file : m_settings.filesExcludeFiles)
-		if (!excludeFilesFromFile(m_settings.sourceDirectory, file, destDir))
+		if (!excludeFilesFromFile(sourceDir, file, destDir))
 			break;
 
 	{
@@ -89,29 +98,37 @@ Client::process(Log& log, ClientStats& outStats)
 			if (destDirCreated)
 				return true;
 			destDirCreated = true;
-			return ensureDirectory(m_settings.destDirectory.c_str());
+			return ensureDirectory(destDir.c_str());
 		};
 
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
 		if (!m_settings.filesOrWildcardsFiles.empty())
 		{
 			for (auto& file : m_settings.filesOrWildcardsFiles)
-				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, m_settings.sourceDirectory, file, destDir, createDirectoryFunc))
+				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, sourceDir, file, destDir, createDirectoryFunc))
 					break;
 		}
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-				if (!findFilesInDirectory(m_settings.sourceDirectory, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc))
+				if (!findFilesInDirectory(sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc))
 					break;
 		}
 	}
 
 	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs;
 
+
+	// Connect to source if no destination is set
+	Connection* sourceConnection = nullptr;
+	if (!m_destConnection)
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, outStats))
+			return false;
+
 	// Process files (worker threads are doing the same right now)
-	if (!processFiles(logContext, m_connection, outStats, true))
+	if (!processFiles(logContext, sourceConnection, m_destConnection, outStats, true))
 		return -1;
+	
 
 	// Wait for all worker threads to finish
 	waitThreadsGuard.execute();
@@ -159,6 +176,7 @@ Client::process(Log& log, ClientStats& outStats)
 		//outStats.linkTimeMs += threadStats.linkTimeMs; // Only use main thread for time
 
 		outStats.compressTimeMs += threadStats.compressTimeMs;
+		outStats.deltaCompressionTimeMs += threadStats.deltaCompressionTimeMs;
 		outStats.sendTimeMs += threadStats.sendTimeMs;
 		outStats.sendSize += threadStats.sendSize;
 		outStats.compressionLevelSum += threadStats.compressionLevelSum;
@@ -174,7 +192,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 	outStats.compressionAverageLevel = outStats.copySize ? (float)((double)outStats.compressionLevelSum / outStats.copySize) : 0;
 
-	outStats.serverUsed =  m_settings.useServer != UseServer_Disabled && !m_useServerFailed;
+	outStats.serverUsed =  m_settings.useServer != UseServer_Disabled && !m_useDestServerFailed;
 
 	// Success!
 	return 0;
@@ -191,7 +209,7 @@ Client::reportServerStatus(Log& log)
 	ClientStats stats;
 
 	// Create connection
-	Connection* connection = createConnection(stats, useServerFailed);
+	Connection* connection = createConnection(m_settings.destDirectory.c_str(), stats, useServerFailed);
 	if (!connection)
 	{
 		logErrorf(L"Failed to connect to server. Is path '%s' a proper smb path?", m_settings.destDirectory.c_str());
@@ -227,7 +245,8 @@ void
 Client::resetWorkState(Log& log)
 {
 	m_log = &log;
-	m_useServerFailed = false;
+	m_useSourceServerFailed = false;
+	m_useDestServerFailed = false;
 	m_workersActive = true;
 	m_tryCopyFirst = true;
 	m_networkInitDone = false;
@@ -237,7 +256,7 @@ Client::resetWorkState(Log& log)
 }
 
 bool
-Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& copyBuffer, ClientStats& stats)
+Client::processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, CopyBuffer& copyBuffer, ClientStats& stats)
 {
 	// Pop first entry off the queue
 	CopyEntry entry;
@@ -264,7 +283,7 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 	while (m_workersActive)
 	{
 		// Use connection to server if available
-		if (connection)
+		if (destConnection)
 		{
 			u64 startTimeMs = getTimeMs();
 			u64 size;
@@ -272,7 +291,7 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 			bool linked;
 
 			// Send file to server (might be skipped if server already has it).. returns false if it fails
-			if (connection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), size, written, linked, copyBuffer))
+			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), size, written, linked, copyBuffer))
 			{
 				if (written)
 				{
@@ -292,6 +311,33 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 				}
 				return true;
 			}
+		}
+		else if (sourceConnection)
+		{
+			u64 startTimeMs = getTimeMs();
+			u64 size;
+			u64 read;
+			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), size, read, copyBuffer))
+			{
+				if (read)
+				{
+					if (m_settings.logProgress)
+						logInfoLinef(L"%s   %s", L"New File ", getRelativeSourceFile(entry.src));
+					stats.copyTimeMs += getTimeMs() - startTimeMs;
+					++stats.copyCount;
+					stats.copySize += size;
+				}
+				else
+				{
+					if (m_settings.logProgress)
+						logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
+					stats.skipTimeMs += getTimeMs() - startTimeMs;
+					++stats.skipCount;
+					stats.skipSize += size;
+				}
+				return true;
+			}
+			return false;
 		}
 		else
 		{
@@ -384,10 +430,10 @@ Client::processFile(LogContext& logContext, Connection* connection, CopyBuffer& 
 }
 
 bool
-Client::connectToServer(Connection*& outConnection, ClientStats& stats)
+Client::connectToServer(const wchar_t* networkPath, Connection*& outConnection, bool& failedToConnect, ClientStats& stats)
 {
 	outConnection = nullptr;
-	if (m_settings.useServer == UseServer_Disabled || m_useServerFailed)
+	if (m_settings.useServer == UseServer_Disabled || failedToConnect)
 		return true;
 
 	// Set temporary log context to swallow potential errors when trying to connect
@@ -395,19 +441,19 @@ Client::connectToServer(Connection*& outConnection, ClientStats& stats)
 
 	u64 startConnect = getTimeMs();
 	stats.serverAttempt = true;
-	outConnection = createConnection(stats, m_useServerFailed);
+	outConnection = createConnection(networkPath, stats, failedToConnect);
 	stats.connectTimeMs += getTimeMs() - startConnect;
 
-	if (m_useServerFailed && m_settings.useServer == UseServer_Required)
+	if (failedToConnect && m_settings.useServer == UseServer_Required)
 	{
-		logErrorf(L"Failed to connect to server hosting %s at port %u", m_settings.destDirectory.c_str(), m_settings.serverPort);
+		logErrorf(L"Failed to connect to server hosting %s at port %u", networkPath, m_settings.serverPort);
 		return false;
 	}
 	return true;
 }
 
 bool
-Client::processFiles(LogContext& logContext, Connection* connection, ClientStats& stats, bool isMainThread)
+Client::processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, bool isMainThread)
 {
 	logDebugLinef(L"Worker started");
 
@@ -418,14 +464,14 @@ Client::processFiles(LogContext& logContext, Connection* connection, ClientStats
 	// Process file queue
 	while (m_workersActive)
 	{
-		if (processFile(logContext, connection, copyBuffer, stats))
+		if (processFile(logContext, sourceConnection, destConnection, copyBuffer, stats))
 			++filesProcessedCount;
 		else if (isMainThread)
 			break;
 	}
 
 	// Delete connection, worker is done
-	delete connection;
+	delete destConnection;
 
 	logDebugLinef(L"Worker done - %u file(s) processed", filesProcessedCount);
 
@@ -436,13 +482,21 @@ int
 Client::workerThread(ClientStats& stats)
 {
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
-	Connection* connection;
-	if (!connectToServer(connection, stats))
+	Connection* destConnection;
+	if (!connectToServer(m_settings.destDirectory.c_str(), destConnection, m_useDestServerFailed, stats))
 		return false;
+
+	Connection* sourceConnection = nullptr;
+	if (!destConnection)
+	{
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, stats))
+			return false;
+	}
+
 
 	// Help process the files
 	LogContext logContext(*m_log);
-	processFiles(logContext, connection, stats, false);
+	processFiles(logContext, sourceConnection, destConnection, stats, false);
 
 	return logContext.getLastError();
 }
@@ -917,12 +971,12 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 bool
 Client::ensureDirectory(const wchar_t* directory)
 {
-	if (m_connection)
+	if (m_destConnection)
 	{
 		const wchar_t* relDir = directory + m_settings.destDirectory.size();
 
 		// Ask connection to create new directory.
-		if (!m_connection->sendCreateDirectoryCommand(relDir))
+		if (!m_destConnection->sendCreateDirectoryCommand(relDir))
 			return false;
 	}
 	else
@@ -947,7 +1001,7 @@ Client::getRelativeSourceFile(const WString& sourcePath) const
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 Client::Connection*
-Client::createConnection(ClientStats& stats, bool& failedToConnect)
+Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& failedToConnect)
 {
 	u64 startTime = getTimeMs();
 
@@ -957,7 +1011,7 @@ Client::createConnection(ClientStats& stats, bool& failedToConnect)
 	{
 		m_networkInitDone = true;
 
-		const wchar_t* serverNameStart = m_settings.destDirectory.c_str() + 2;
+		const wchar_t* serverNameStart = networkPath + 2;
 		const wchar_t* serverNameEnd = wcschr(serverNameStart, L'\\');
 		if (!serverNameEnd)
 			return nullptr;
@@ -1099,6 +1153,7 @@ Client::createConnection(ClientStats& stats, bool& failedToConnect)
 		char cmdBuf[MAX_PATH*2 + sizeof(EnvironmentCommand)+1];
 		auto& cmd = *(EnvironmentCommand*)cmdBuf;
 		cmd.commandType = CommandType_Environment;
+		cmd.deltaCompressionThreshold = m_settings.deltaCompressionThreshold;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);
 		
 		if (wcscpy_s(cmd.netDirectory, MAX_PATH, m_networkServerNetDirectory.data()))
@@ -1123,8 +1178,8 @@ Client::Connection::Connection(const ClientSettings& settings, ClientStats& stat
 ,	m_socket(s)
 {
 	m_compressionEnabled = settings.compressionEnabled;
-	m_fixedCompressionLevel = settings.compressionLevel != 0;
-	m_compressionLevel = min(max(settings.compressionLevel, 1), 22);
+	m_compressionData.fixedLevel = settings.compressionLevel != 0;
+	m_compressionData.level = min(max(settings.compressionLevel, 1), 22);
 }
 
 Client::Connection::~Connection()
@@ -1178,7 +1233,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
 	if (wcscpy_s(cmd.path, MAX_PATH, dst))
 	{
-		logErrorf(L"Failed to write file %s: wcscpy_s in sendWriteFieldCommand failed", src);
+		logErrorf(L"Failed to write file %s: wcscpy_s in sendWriteFileCommand failed", dst);
 		return false;
 	}
 	
@@ -1194,166 +1249,27 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
 		return false;
 
+	if (writeResponse == WriteResponse_Skip)
+		return true;
+
 	if (writeResponse == WriteResponse_Link)
 	{
 		outWritten = cmd.info.fileSize;
 		outLinked = true;
-	}
-
-	if (writeResponse == WriteResponse_BadDestination)
-	{
-		logErrorf(L"Failed to write file %s: Server reported Bad destination (check your destination path)", src);
-		return false;
+		return true;
 	}
 
 	if (writeResponse == WriteResponse_Copy)
 	{
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
-		BOOL success = TRUE;
-		u64 startCreateReadTimeMs = getTimeMs();
-		HANDLE sourceFile;
-		if (!openFileRead(src, sourceFile, useBufferedIO))
+
+		SendFileStats sendStats;
+		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyBuffer, m_compressionData, useBufferedIO, m_stats.copyStats, sendStats))
 			return false;
-
-		ScopeGuard closeFile([&]() { CloseHandle(sourceFile); });
-		m_stats.copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
-
-
-		if (writeType == WriteFileType_TransmitFile)
-		{
-			_OVERLAPPED overlapped;
-			ZeroMemory(&overlapped, sizeof(overlapped));
-			overlapped.hEvent = WSACreateEvent();
-			ScopeGuard closeEvent([&]() { WSACloseEvent(overlapped.hEvent); });
-
-			u64 pos = 0;
-			while (pos != cmd.info.fileSize)
-			{
-				u64 left = cmd.info.fileSize - pos;
-				uint toWrite = (uint)min(left, u64(INT_MAX-1));
-
-				u64 startSendMs = getTimeMs();
-				if (!TransmitFile(m_socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
-				{
-					int error = WSAGetLastError();
-					if (error == ERROR_IO_PENDING)// or WSA_IO_PENDING
-					{
-						if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
-						{
-							int error = WSAGetLastError();
-							logErrorf(L"Error while waiting on transmit of %s: %s", src, getErrorText(error).c_str());
-							return false;
-						}
-					}
-					else
-					{
-						logErrorf(L"Error while transmitting %s: %s", src, getErrorText(error).c_str());
-						return false;
-					}
-				}
-				m_stats.sendTimeMs += getTimeMs() - startSendMs;
-				m_stats.sendSize += toWrite;
-
-				pos += toWrite;
-				overlapped.Offset = static_cast<DWORD>(pos);
-				overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
-			}
-		}
-		else if (writeType == WriteFileType_Send)
-		{
-			u64 left = cmd.info.fileSize;
-			while (left)
-			{
-				u64 startReadMs = getTimeMs();
-				DWORD toRead = (DWORD)min(left, CopyBufferSize);
-				uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
-
-				if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
-				{
-					if (GetLastError() != ERROR_IO_PENDING)
-					{
-						logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
-						return false;
-					}
-				}
-				m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
-
-				u64 startSendMs = getTimeMs();
-				if (!sendData(m_socket, copyBuffer.buffers[0], toRead))
-					return false;
-				m_stats.sendTimeMs += getTimeMs() - startSendMs;
-				m_stats.sendSize += toRead;
-
-				left -= toRead;
-			}
-		}
-		else if (writeType == WriteFileType_Compressed)
-		{
-			u64 left = cmd.info.fileSize;
-			while (left)
-			{
-				u64 startReadMs = getTimeMs();
-				DWORD toRead = (DWORD)min(left, CopyBufferSize);
-				uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
-
-				if (!ReadFile(sourceFile, copyBuffer.buffers[0], toReadAligned, NULL, NULL))
-				{
-					if (GetLastError() != ERROR_IO_PENDING)
-					{
-						logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
-						return false;
-					}
-				}
-				m_stats.copyStats.readTimeMs += getTimeMs() - startReadMs;
-
-				if (!m_compressionContext)
-					m_compressionContext = ZSTD_createCCtx();
-
-				// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
-				char* destBuf = copyBuffer.buffers[1];
-				u64 startCompressMs = getTimeMs();
-				uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)m_compressionContext, destBuf + 4, CopyBufferSize - 4, copyBuffer.buffers[0], toRead, m_compressionLevel);
-				u64 compressTimeMs = getTimeMs() - startCompressMs;
-
-				*(uint*)destBuf =  compressedSize;
-
-				u64 startSendMs = getTimeMs();
-				if (!sendData(m_socket, destBuf, compressedSize + 4))
-					return false;
-				u64 sendTimeMs = getTimeMs() - startSendMs;
-
-				m_stats.compressionLevelSum += toRead * m_compressionLevel;
-
-				if (!m_fixedCompressionLevel)
-				{
-					// This is a bit fuzzy logic. Essentially we compared how much time per byte we spent last loop (compress + send)
-					// We then look at if we compressed more or less last time and if time went up or down.
-					// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
-
-					u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / toRead;
-
-					u64 lastCompressWeight = m_lastCompressWeight;
-					m_lastCompressWeight = compressWeight;
-
-					int lastCompressionLevel = m_lastCompressionLevel;
-					m_lastCompressionLevel = m_compressionLevel;
-
-					bool increaseCompression = compressWeight < lastCompressWeight && lastCompressionLevel <= m_compressionLevel || 
-											   compressWeight >= lastCompressWeight && lastCompressionLevel > m_compressionLevel;
-
-					if (increaseCompression)
-						m_compressionLevel = min(22, m_compressionLevel + 1);
-					else
-						m_compressionLevel = max(1, m_compressionLevel - 1);
-				}
-
-				m_stats.compressTimeMs += compressTimeMs;
-				m_stats.sendTimeMs += sendTimeMs;
-				m_stats.sendSize += compressedSize + 4;
-
-				left -= toRead;
-			}
-		}
+		m_stats.sendTimeMs += sendStats.sendTimeMs;
+		m_stats.sendSize += sendStats.sendSize;
+		m_stats.compressTimeMs += sendStats.compressTimeMs;
+		m_stats.compressionLevelSum += sendStats.compressionLevelSum;
 
 		u8 writeSuccess;
 		if (!receiveData(m_socket, &writeSuccess, sizeof(writeSuccess)))
@@ -1365,15 +1281,119 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		outWritten = cmd.info.fileSize;
 		return true;
 	}
-	else if (writeResponse == WriteResponse_CopyDelta)
+	
+	if (writeResponse == WriteResponse_CopyDelta)
 	{
-		logErrorf(L"CopyDelta not implemented!");
+		#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+		RsyncStats rsyncStats;
+		if (!clientHandleRsync(m_socket, src, rsyncStats))
+			return false;
+		m_stats.sendTimeMs += rsyncStats.sendTimeMs;
+		m_stats.sendSize += rsyncStats.sendSize;
+		m_stats.copyStats.readTimeMs += rsyncStats.readTimeMs;
+		//m_stats.copyStats.readSize += rsyncStats.readSize;
+		m_stats.deltaCompressionTimeMs += rsyncStats.rsyncTimeMs;
+
+		u8 writeSuccess;
+		if (!receiveData(m_socket, &writeSuccess, sizeof(writeSuccess)))
+			return false;
+
+		if (!writeSuccess)
+			return false;
+
+		outWritten = cmd.info.fileSize;
+		return true;
+		#endif
 		return false;
 	}
-	else
+
+	if (writeResponse == WriteResponse_BadDestination)
 	{
+		logErrorf(L"Failed to write file %s: Server reported Bad destination (check your destination path)", src);
+		return false;
+	}
+
+	return false;
+}
+
+bool
+Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, CopyBuffer& copyBuffer)
+{
+	outSize = 0;
+	outRead = 0;
+
+	// Make src a local path to server
+	src += m_settings.sourceDirectory.size();
+
+	char buffer[MAX_PATH*2 + sizeof(ReadFileCommand)];
+	auto& cmd = *(ReadFileCommand*)buffer;
+	cmd.commandType = CommandType_ReadFile;
+	cmd.compressionEnabled = m_compressionEnabled;
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(src)*2);
+	if (wcscpy_s(cmd.path, MAX_PATH, src))
+	{
+		logErrorf(L"Failed to read file %s: wcscpy_s in sendReadFileCommand failed", src);
+		return false;
+	}
+
+	WString fullDest = m_settings.destDirectory + dst;
+
+	if (DWORD fileAttributes = getFileInfo(cmd.info, fullDest.c_str()))
+		if (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			logErrorf(L"Trying to copy to file %s which is a directory", fullDest.c_str());
+			return false;
+		}
+
+	if (!sendCommand(cmd))
+		return false;
+
+	ReadResponse readResponse;
+	if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))
+		return false;
+
+	// Skip file, we already have the same file as source
+	if (readResponse == ReadResponse_Skip)
+	{
+		outSize = cmd.info.fileSize;
 		return true;
 	}
+
+	FILETIME newFileLastWriteTime;
+	if (!receiveData(m_socket, &newFileLastWriteTime, sizeof(newFileLastWriteTime)))
+		return false;
+
+	if (readResponse == ReadResponse_Copy)
+	{
+		// Read file size and lastwritetime for new file from server
+		u64 newFileSize;
+		if (!receiveData(m_socket, &newFileSize, sizeof(newFileSize)))
+			return false;
+
+
+		bool success = true;
+		WriteFileType writeType = m_compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
+		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
+		FileReceiveBuffers fileBuf;
+		uint commandSize = 0;
+
+		// Read actual file from server
+		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, fileBuf, nullptr, 0, commandSize))
+			return false;
+
+		outRead = newFileSize;
+		outSize = newFileSize;
+		return success;
+	}
+	else // ReadResponse_CopyDelta
+	{
+		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+		if (!receiveZdelta(m_socket, fullDest.c_str(), fullDest.c_str(), newFileLastWriteTime, copyBuffer))
+			return false;
+		return true;
+		#endif
+	}
+	return false;
 }
 
 bool
@@ -1415,11 +1435,7 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
 bool
 Client::Connection::destroy()
 {
-	if (m_compressionContext)
-		ZSTD_freeCCtx((ZSTD_CCtx*)m_compressionContext);
-	m_compressionContext = nullptr;
-
-	ScopeGuard socketCleanup([this]() { closesocket(m_socket); m_socket = INVALID_SOCKET;; });
+	ScopeGuard socketCleanup([this]() { closesocket(m_socket); m_socket = INVALID_SOCKET; });
 
 	// shutdown the connection since no more data will be sent
 	if (shutdown(m_socket, SD_SEND) == SOCKET_ERROR)

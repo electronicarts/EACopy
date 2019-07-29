@@ -51,9 +51,14 @@ public:
 	{
 		while (!m_isServerReady)
 		{
-			EACOPY_ASSERT(!m_threadExited || !m_threadExited);
+			EACOPY_ASSERT(!m_threadExited);
 			Sleep(1);
 		}
+	}
+
+	bool primeDirectory(const wchar_t* directory)
+	{
+		return m_server.primeDirectory(directory);
 	}
 
 private:
@@ -92,33 +97,37 @@ struct TestBase
 		s_lastTest = this;
 	}
 
-	void run(int index, int count)
+	void run(uint& testIndex, int count)
 	{
-		testSourceDir = g_testSourceDir + L'\\' + name + L'\\';
-		testDestDir = g_testDestDir + L'\\' + name + L'\\';
+		for (uint loopIndex=0; loopIndex!=runCount(); ++loopIndex)
+		{
+			++testIndex;
+			testSourceDir = g_testSourceDir + L'\\' + name + L'\\';
+			testDestDir = g_testDestDir + L'\\' + name + L'\\';
 
-		bool log = false;
-		if (log)
-		{
-			clientLog.init((name + L"_ClientLog.txt").c_str(), true);
-			serverLog.init((name + L"_ServerLog.txt").c_str(), true);
-		}
-		wprintf(L"Running test %2u/%u '%s'...", index, count, name.c_str());
-		EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
-		EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
-		EACOPY_ASSERT(ensureDirectory(testSourceDir.c_str()));
-		EACOPY_ASSERT(ensureDirectory(testDestDir.c_str()));
-		m_setupTime = 0;
-		u64 startTime = getTimeMs();
-		runImpl();
-		u64 endTime = getTimeMs();
-		wprintf(L"Done (%s)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
-		EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
-		EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
-		if (log)
-		{
-			serverLog.deinit();
-			clientLog.deinit();
+			bool log = false;
+			if (log)
+			{
+				clientLog.init((name + L"_ClientLog.txt").c_str(), true);
+				serverLog.init((name + L"_ServerLog.txt").c_str(), true);
+			}
+			wprintf(L"Running test %2u/%u '%s'...", testIndex, count, name.c_str());
+			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
+			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
+			EACOPY_ASSERT(ensureDirectory(testSourceDir.c_str()));
+			EACOPY_ASSERT(ensureDirectory(testDestDir.c_str()));
+			m_setupTime = 0;
+			u64 startTime = getTimeMs();
+			runImpl(loopIndex);
+			u64 endTime = getTimeMs();
+			wprintf(L"Done (%s)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
+			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
+			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
+			if (log)
+			{
+				serverLog.deinit();
+				clientLog.deinit();
+			}
 		}
 	}
 
@@ -126,14 +135,15 @@ struct TestBase
 	{
 		uint testCount = 0;
 		for (TestBase* it=s_firstTest; it; it = it->m_nextTest)
-			++testCount;
+			testCount += it->runCount();
 
 		uint testIt = 0;
 		for (TestBase* it=s_firstTest; it; it = it->m_nextTest)
-			it->run(++testIt, testCount);
+			it->run(testIt, testCount);
 	}
 
-	virtual void runImpl() = 0;
+	virtual void runImpl(uint loopIndex) = 0;
+	virtual uint runCount() = 0;
 
 	ClientSettings getDefaultClientSettings(const wchar_t* wildcard = L"*.*")
 	{
@@ -198,7 +208,7 @@ struct TestBase
 		HANDLE fileHandle;
 		(void)fileHandle; // suppress unused variable warning
 
-		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, false));
+		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, true));
 		EACOPY_ASSERT(writeFile(fileName.c_str(), fileHandle, fileOrWildcard, strlen(fileOrWildcard)));
 		EACOPY_ASSERT(closeFile(fileName.c_str(), fileHandle));
 	}
@@ -207,6 +217,21 @@ struct TestBase
 	{
 		const WString dir = source ? testSourceDir : testDestDir;
 		EACOPY_ASSERT(SetFileAttributesW((dir + file).c_str(), readonly ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_NORMAL) != 0);
+	}
+
+	void writeRandomData(const wchar_t* sourceFile, u64 fileSize)
+	{
+		HANDLE file = CreateFileW(sourceFile, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+		EACOPY_ASSERT(file != INVALID_HANDLE_VALUE);
+		for (uint i=0; i!=100; ++i)
+		{
+			char buffer[128];
+			memset(buffer, 0, sizeof(buffer));
+			uint writePos = max(0, ((uint(rand()) << 16) + uint(rand())) % (fileSize - 128));
+			EACOPY_ASSERT(SetFilePointer(file, writePos, NULL, FILE_BEGIN) == writePos);
+			EACOPY_ASSERT(WriteFile(file, buffer, sizeof(buffer), NULL, NULL) != 0);
+		}
+		CloseHandle(file);
 	}
 
 	u64 m_setupTime;
@@ -227,15 +252,18 @@ TestBase* TestBase::s_lastTest;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define EACOPY_TEST(name)											\
-	struct Test_##name : public TestBase							\
-	{																\
-		Test_##name(bool isTemp) : TestBase(L#name, isTemp) {}		\
-		virtual void runImpl() override;							\
-	} test_##name(false);											\
-	void test##name() { Test_##name test(true); test.run(1, 1); }	\
-	void Test_##name::runImpl()										\
+#define EACOPY_TEST_LOOP(name, loopCount)															\
+	struct Test_##name : public TestBase															\
+	{																								\
+		Test_##name(bool isTemp) : TestBase(L#name, isTemp) {}										\
+		virtual void runImpl(uint loopIndex) override;												\
+		virtual uint runCount() override { return loopCount; }										\
+	} test_##name(false);																			\
+	void test##name() { uint index = 0; Test_##name test(true); test.run(index, test.runCount()); }	\
+	void Test_##name::runImpl(uint loopIndex)														\
 
+
+#define EACOPY_TEST(name) EACOPY_TEST_LOOP(name, 1)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -248,6 +276,20 @@ EACOPY_TEST(UncPathOptimization)
 
 EACOPY_TEST(CopySmallFile)
 {
+	createTestFile(L"Foo.txt", 100);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 100);
+}
+
+EACOPY_TEST(CopySmallFileDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
 	createTestFile(L"Foo.txt", 100);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -901,6 +943,30 @@ EACOPY_TEST(ServerCopySmallFile)
 	EACOPY_ASSERT(destFile.fileSize == 10);
 }
 
+EACOPY_TEST(ServerCopySmallFileDestIsLocal)
+{
+	std::swap(testSourceDir, testDestDir);
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 10);
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.skipCount == 1);
+}
+
 EACOPY_TEST(ServerCopyMediumFile)
 {
 	uint fileSize = 3*1024*1024 + 123;
@@ -1249,10 +1315,19 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath2)
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Test2\\Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
-/*
-EACOPY_TEST(ServerCopyDelta)
+
+#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 {
-	createTestFile(L"Foo.txt", 10);
+	u64 fileSizes[] =
+	{
+		8 * 1024,
+		8 * 1024 * 1024,
+		u64(INT_MAX) + 2*1024*1024 + 123,
+	};
+	u64 fileSize = fileSizes[loopIndex];
+
+	createTestFile(L"Foo.txt", fileSize);
 
 	ServerSettings serverSettings;
 	TestServer server(serverSettings, serverLog);
@@ -1260,6 +1335,7 @@ EACOPY_TEST(ServerCopyDelta)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
+	clientSettings.deltaCompressionThreshold = 0;
 
 	{
 		clientSettings.destDirectory = testDestDir+ L"\\1";
@@ -1269,7 +1345,7 @@ EACOPY_TEST(ServerCopyDelta)
 		EACOPY_ASSERT(clientStats.copyCount == 1);
 	}
 
-	createTestFile(L"Foo.txt", 13);
+	writeRandomData((testSourceDir + L"Foo.txt").c_str(), fileSize);
 
 	{
 		clientSettings.destDirectory = testDestDir+ L"\\2";
@@ -1279,11 +1355,44 @@ EACOPY_TEST(ServerCopyDelta)
 		EACOPY_ASSERT(clientStats.copyCount == 1);
 	}
 
-	//FileInfo destFile;
-	//EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	//EACOPY_ASSERT(destFile.fileSize == 10);
+	FileInfo sourceFile;
+	EACOPY_ASSERT(getFileInfo(sourceFile, (testSourceDir + L"Foo.txt").c_str()) != 0);
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\2\\Foo.txt").c_str()) != 0);
+
+	EACOPY_ASSERT(destFile.fileSize == sourceFile.fileSize);
+	EACOPY_ASSERT(destFile.lastWriteTime.dwLowDateTime == sourceFile.lastWriteTime.dwLowDateTime && destFile.lastWriteTime.dwHighDateTime == sourceFile.lastWriteTime.dwHighDateTime);
 }
-*/
+#endif
+
+#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
+{
+	std::swap(testSourceDir, testDestDir);
+
+	createTestFile(L"1\\Foo.txt", 16 * 1024 * 1024);
+	createTestFile(L"2\\Foo.txt", 16 * 1024 * 1024);
+	writeRandomData((testSourceDir + L"2\\Foo.txt").c_str(), 16 * 1024 * 1024);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+	EACOPY_ASSERT(server.primeDirectory(wcschr(testSourceDir.c_str() + 2, '\\') + 1));
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	clientSettings.sourceDirectory = testSourceDir + L"1\\";
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+
+	clientSettings.sourceDirectory = testSourceDir + L"2\\";
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+}
+#endif
 
 EACOPY_TEST(CopyLargeFile)
 {
@@ -1441,8 +1550,6 @@ int wmain(int argc, wchar_t* argv[])
 		g_testSourceDir = argv[1];
 		g_testDestDir = argv[2];
 	}
-
-	testServerCopyExistingDestAndFoundLinkSomewhereElse();
 
 	// Run all the tests
 	TestBase::runAll();

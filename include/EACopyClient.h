@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.991"; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.992"; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -40,6 +40,7 @@ struct ClientSettings
 	UseServer			useServer					= UseServer_Automatic;
 	uint				serverPort					= DefaultPort;
 	uint				serverConnectTimeoutMs		= 500;
+	u64					deltaCompressionThreshold	= ~u64(0);
 	bool				compressionEnabled			= false;
 	int					compressionLevel			= 0;
 	bool				logProgress					= true;
@@ -71,6 +72,7 @@ struct ClientStats
 	u64					compressTimeMs				= 0;
 	u64					compressionLevelSum			= 0;
 	float				compressionAverageLevel		= 0;
+	u64					deltaCompressionTimeMs		= 0;
 	CopyStats			copyStats;
 
 	bool				serverUsed					= false;
@@ -108,9 +110,9 @@ private:
 
 	// Methods
 	void				resetWorkState(Log& log);
-	bool				processFile(LogContext& logContext, Connection* connection, CopyBuffer& copyBuffer, ClientStats& stats);
-	bool				processFiles(LogContext& logContext, Connection* connection, ClientStats& stats, bool isMainThread);
-	bool				connectToServer(class Connection*& outConnection, ClientStats& stats);
+	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, CopyBuffer& copyBuffer, ClientStats& stats);
+	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, bool isMainThread);
+	bool				connectToServer(const wchar_t* networkPath, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(ClientStats& stats);
 	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc);
 	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
@@ -122,7 +124,7 @@ private:
 	bool				purgeFilesInDirectory(const WString& destPath, int depthLeft);
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
-	Connection*			createConnection(ClientStats& stats, bool& failedToConnect);
+	Connection*			createConnection(const wchar_t* networkPath, ClientStats& stats, bool& failedToConnect);
 
 
 	// Settings
@@ -130,10 +132,11 @@ private:
 
 	// Work state. Will initialize at beginning of each process call.
 	Log*				m_log;
-	bool				m_useServerFailed;
+	bool				m_useSourceServerFailed;
+	bool				m_useDestServerFailed;
 	bool				m_workersActive;
 	bool				m_tryCopyFirst;
-	Connection*			m_connection;
+	Connection*			m_destConnection;
 	CriticalSection		m_copyEntriesCs;
 	CopyEntries			m_copyEntries;
 	FilesSet			m_handledFiles;
@@ -161,6 +164,7 @@ public:
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
 	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyBuffer& copyBuffer);
+	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, CopyBuffer& copyBuffer);
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
 	bool				destroy();
 
@@ -169,12 +173,7 @@ public:
 
 	SOCKET				m_socket;
 	bool				m_compressionEnabled;
-	bool				m_fixedCompressionLevel;
-	int					m_compressionLevel;
-	void*				m_compressionContext = nullptr;
-
-	int					m_lastCompressionLevel = 0;
-	u64					m_lastCompressWeight = 0;
+	CompressionData		m_compressionData;
 
 						Connection(const Connection&) = delete;
 	void				operator=(const Connection&) = delete;

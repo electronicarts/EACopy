@@ -12,6 +12,8 @@ set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "My multi config type
 #-------------------------------------------------------------------------------------------
 option(EACOPY_BUILD_TESTS "Enable generation of build files for tests" OFF)
 
+SET(CMAKE_CXX_FLAGS "/GR-") 
+
 #-------------------------------------------------------------------------------------------
 # Library definitions
 #-------------------------------------------------------------------------------------------

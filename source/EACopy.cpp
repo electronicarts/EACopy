@@ -48,9 +48,13 @@ void printHelp()
 	logInfoLinef(L"         /NOSERVER :: will not try to connect to Server.");
 	logInfoLinef(L"           /SERVER :: must connect to Server. Fails copy if not succeed");
 	logInfoLinef(L"           /PORT:n :: Port used to connect to Server (default %u).", DefaultPort);
-	logInfoLinef(L"           /C[:n]  :: Compression Level. No value provided will auto adjust");
-	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (zstd)");
+	logInfoLinef(L"           /C[:n]  :: use Compression. No value provided will auto adjust level");
+	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (uses zstd)");
+	#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+	logInfoLinef(L"           /DC[:b] :: use DeltaCompression. Provide value to set min file size");
+	logInfoLinef(L"                      b defaults to %s (uses rsync algorithm)", toPretty(DefaultDeltaCompressionThreshold).c_str());
 	logInfoLinef();
+	#endif
 	logInfoLinef(L"/DCOPY:copyflag[s] :: what to COPY for directories (default is /DCOPY:DA).");
 	logInfoLinef(L"                      (copyflags : D=Data, A=Attributes, T=Timestamps).");
 	logInfoLinef();
@@ -187,6 +191,12 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			outSettings.compressionEnabled = true;
 			if (arg[2] == ':')
 				outSettings.compressionLevel = _wtoi(arg + 3);
+		}
+		else if (startsWithIgnoreCase(arg, L"/DC"))
+		{
+			outSettings.deltaCompressionThreshold = 0;
+			if (arg[3] == ':')
+				outSettings.deltaCompressionThreshold = _wtoi(arg + 4);
 		}
 		else if (startsWithIgnoreCase(arg, L"/XF"))
 		{
@@ -426,7 +436,7 @@ int wmain(int argc, wchar_t* argv[])
 			logInfoLinef(L"   FindFile:     %s      SendFile:         %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.sendTimeMs, 7).c_str());
 			logInfoLinef(L"   ReadFile:     %s      SendBytes:        %s", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toPretty(stats.sendSize, 7).c_str());
 			logInfoLinef(L"   CompressFile: %s      CompressLevel:     %7.1f", toHourMinSec(stats.compressTimeMs, 7).c_str(), stats.compressionAverageLevel);
-			logInfoLinef(L"   ConnectTime:  %s", toHourMinSec(stats.connectTimeMs, 7).c_str());
+			logInfoLinef(L"   ConnectTime:  %s      DeltaCompress:    %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
 			logInfoLinef();
 			logInfoLinef(L"   Server found and used!");
 		}

@@ -10,7 +10,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr char ServerVersion[] = "0.86"; // Version of server
+constexpr char ServerVersion[] = "0.87"; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -24,6 +24,7 @@ struct ServerSettings
 	uint			maxHistory		= DefaultHistorySize;
 	bool			logDebug		= false;
 	UseBufferedIO	useBufferedIO	= UseBufferedIO_Auto;
+	WString			primingDirectory;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -34,8 +35,15 @@ public:
 					Server() {}
 					~Server() {}
 
+					// Starts the server. Call will not return until some other thread call stop() or
+					// if it is started with isConsole true, then it will also exit on pressing esc or 'q'
 	void			start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus);
+
+					// Stops the server. This call will return before the server is fully stopped. When start() returns server is stopped
 	void			stop();
+
+					// Will parse provided directory and add all found files to history
+	bool			primeDirectory(const wchar_t* directory);
 
 private:
 	struct			ConnectionInfo;
@@ -43,6 +51,8 @@ private:
 
 	DWORD			connectionThread(ConnectionInfo& info);
 	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
+	bool			getLocalFromNet(WString& localDirectory, const wchar_t* netDirectory);
+	bool			primeDirectoryRecursive(const WString& directory);
 	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 
 	using			FilesHistory = List<FileKey>;
