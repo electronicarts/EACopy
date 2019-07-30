@@ -1213,6 +1213,27 @@ EACOPY_TEST(ServerCopyFileDestLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 }
 
+EACOPY_TEST(ServerPurgeWithNoCopy)
+{
+	createTestFile(L"Foo.txt", 10, false);
+	createTestFile(L"DestFolder\\Boo.txt", 10, false);
+	createTestFile(L"SourceFolder2\\Boo.txt", 10, false);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.purgeDestination = true;
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(getTestFileExists(L"Foo.txt") == false);
+	EACOPY_ASSERT(getTestFileExists(L"DestFolder") == false);
+	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2") == false);
+}
+
 EACOPY_TEST(ServerReport)
 {
 	ServerSettings serverSettings;

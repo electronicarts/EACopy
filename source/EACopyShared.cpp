@@ -417,8 +417,9 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	return false;
 }
 
-bool deleteDirectory(const wchar_t* directory)
+bool deleteAllFiles(const wchar_t* directory, bool& outPathFound)
 {
+	outPathFound = true;
     WIN32_FIND_DATAW fd; 
 	WString dir(directory);
 	dir += L'\\';
@@ -428,7 +429,11 @@ bool deleteDirectory(const wchar_t* directory)
 	{
 		DWORD error = GetLastError();
 		if (ERROR_PATH_NOT_FOUND == error)
+		{
+			outPathFound = false;
 			return true;
+		}
+
 		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %s: %s", directory, getErrorText(error).c_str());
 		return false;
 	}
@@ -468,6 +473,24 @@ bool deleteDirectory(const wchar_t* directory)
 	while(FindNextFileW(hFind, &fd)); 
 
 	closeFindGuard.execute(); // Need to close find handle otherwise RemoveDirectory will fail now and then
+
+	return true;
+}
+
+bool deleteAllFiles(const wchar_t* directory)
+{
+	bool pathFound;
+	return deleteAllFiles(directory, pathFound);
+}
+
+bool deleteDirectory(const wchar_t* directory)
+{
+	bool outPathFound;
+	if (!deleteAllFiles(directory, outPathFound))
+		return false;
+
+	if (!outPathFound)
+		return true;
 
 	if (!RemoveDirectoryW(directory))
 	{

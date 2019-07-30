@@ -142,6 +142,7 @@ DWORD					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
 bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true);
 bool					deleteDirectory(const wchar_t* directory);
+bool					deleteAllFiles(const wchar_t* directory);
 bool					isAbsolutePath(const wchar_t* path);
 bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true);
 bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);

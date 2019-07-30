@@ -166,6 +166,7 @@ public:
 	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
 	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
+	bool				sendDeleteAllFiles(const wchar_t* dir);
 	bool				destroy();
 
 	const ClientSettings& m_settings;

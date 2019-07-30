@@ -58,7 +58,7 @@ Client::process(Log& log, ClientStats& outStats)
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
 	if (!connectToServer(destDir.c_str(), m_destConnection, m_useDestServerFailed, outStats))
 		return -1;
-
+	ScopeGuard destConnectionCleanup([this]() { delete m_destConnection; });
 
 	// Spawn worker threads that will copy the files
 	Vector<HANDLE> workerThreadList(m_settings.threadCount);
@@ -124,6 +124,7 @@ Client::process(Log& log, ClientStats& outStats)
 	if (!m_destConnection)
 		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, outStats))
 			return false;
+	ScopeGuard sourceConnectionGuard([&] { delete sourceConnection; });
 
 	// Process files (worker threads are doing the same right now)
 	if (!processFiles(logContext, sourceConnection, m_destConnection, outStats, true))
@@ -253,6 +254,7 @@ Client::resetWorkState(Log& log)
 	m_networkServerName.clear();
 	m_copyEntries.clear();
 	m_handledFiles.clear();
+	m_destConnection = nullptr;
 }
 
 bool
@@ -380,7 +382,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				else
 				{
 					// Skip file if the same
-					if (memcmp(&entry.srcInfo, &destInfo, sizeof(FileInfo)) == 0)
+					if (equals(entry.srcInfo, destInfo))
 					{
 						if (m_settings.logProgress)
 							logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
@@ -470,9 +472,6 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 			break;
 	}
 
-	// Delete connection, worker is done
-	delete destConnection;
-
 	logDebugLinef(L"Worker done - %u file(s) processed", filesProcessedCount);
 
 	return true;
@@ -485,13 +484,13 @@ Client::workerThread(ClientStats& stats)
 	Connection* destConnection;
 	if (!connectToServer(m_settings.destDirectory.c_str(), destConnection, m_useDestServerFailed, stats))
 		return false;
+	ScopeGuard destConnectionGuard([&] { delete destConnection; });
 
 	Connection* sourceConnection = nullptr;
 	if (!destConnection)
-	{
 		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, stats))
 			return false;
-	}
+	ScopeGuard sourcesConnectionGuard([&] { delete sourceConnection; });
 
 
 	// Help process the files
@@ -915,6 +914,16 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 bool
 Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 {
+	WString relPath;
+	if (path.size() > m_settings.destDirectory.size())
+		relPath.append(path.c_str() + m_settings.destDirectory.size());
+
+	// If there is a connection and no files were handled inside the directory we can just do a full delete on the server side
+	if (m_destConnection)
+		if ((relPath.empty() && m_handledFiles.empty()) || m_handledFiles.find(relPath) == m_handledFiles.end())
+			return m_destConnection->sendDeleteAllFiles(relPath.c_str());
+
+
     WIN32_FIND_DATAW fd; 
     WString searchStr = path + L"*.*";
     HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
@@ -929,20 +938,17 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
     do
 	{ 
 		// Check if file was copied here
-		WString relPath;
-		if (path.size() > m_settings.destDirectory.size())
-			relPath.append(path.c_str() + m_settings.destDirectory.size());
-		relPath.append(fd.cFileName);
+		WString filePath = relPath + fd.cFileName;
 
 		bool isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 		if (isDir)
 		{
 			if ((wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
 				continue;
-			relPath += L'\\';
+			filePath += L'\\';
 		}
 
-		if (m_handledFiles.find(relPath) == m_handledFiles.end())
+		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
 			WString fullPath = (path + L'\\' + fd.cFileName);
 	        if(isDir)
@@ -1147,6 +1153,7 @@ Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& f
 	// Connection is ready, cancel socket cleanup and create connection object
 	socketCleanup.cancel();
 	auto connection = new Connection(m_settings, stats, sock);
+	ScopeGuard connectionGuard([&] { delete connection; });
 
 	{
 		// Send environment command
@@ -1163,11 +1170,10 @@ Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& f
 		}
 	
 		if (!connection->sendCommand(cmd))
-		{
-			delete connection;
 			return nullptr;
-		}
 	}
+
+	connectionGuard.cancel();
 
 	return connection;
 }
@@ -1418,16 +1424,51 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
 
 	if (createDirResponse == CreateDirResponse_BadDestination)
 	{
-		logErrorf(L"Failed to create directory file %s: Server reported Bad destination (check your destination path)", dst);
+		logErrorf(L"Failed to create directory %s: Server reported Bad destination (check your destination path)", dst);
 		return false;
 	}
 
 	if (createDirResponse == CreateDirResponse_Error)
 	{
-		logErrorf(L"Failed to create directory file %s: Server reported unknown error", dst);
+		logErrorf(L"Failed to create directory %s: Server reported unknown error", dst);
 		return false;
 	}
 
+	return true;
+}
+
+bool
+Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
+{
+	char buffer[MAX_PATH*2 + sizeof(DeleteFilesCommand)+1];
+	auto& cmd = *(DeleteFilesCommand*)buffer;
+	cmd.commandType = CommandType_DeleteFiles;
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(dir)*2);
+
+	if (wcscpy_s(cmd.path, MAX_PATH, dir))
+	{
+		logErrorf(L"Failed to delete directory %s: wcscpy_s in sendDeleteAllFiles failed", dir);
+		return false;
+	}
+
+	if (!sendCommand(cmd))
+		return false;
+
+	DeleteFilesResponse deleteFilesResponse;
+	if (!receiveData(m_socket, &deleteFilesResponse, sizeof(deleteFilesResponse)))
+		return false;
+
+	if (deleteFilesResponse == DeleteFilesResponse_BadDestination)
+	{
+		logErrorf(L"Failed to delete directory %s: Server reported Bad destination (check your destination path)", dir);
+		return false;
+	}
+
+	if (deleteFilesResponse == DeleteFilesResponse_Error)
+	{
+		logErrorf(L"Failed to delete directory %s: Server reported unknown error", dir);
+		return false;
+	}
 	return true;
 }
 
@@ -1452,7 +1493,7 @@ Client::Connection::destroy()
 
 		if (res == 0)
 		{
-			logDebugLinef(L"Connection closed");
+			//logDebugLinef(L"Connection closed");
 			break;
 		}
 		

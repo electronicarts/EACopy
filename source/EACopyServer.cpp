@@ -568,6 +568,26 @@ Server::connectionThread(ConnectionInfo& info)
 						return -1;
 				}
 				break;
+
+			case CommandType_DeleteFiles:
+				{
+					DeleteFilesResponse deleteFilesResponse = DeleteFilesResponse_Success;
+
+					if (isValidEnvironment)
+					{
+						auto& cmd = *(const CreateDirCommand*)recvBuffer;
+						WString fullPath = destDirectory + cmd.path;
+						if (!deleteAllFiles(fullPath.c_str()))
+							deleteFilesResponse = DeleteFilesResponse_Error;
+					}
+					else
+						deleteFilesResponse = DeleteFilesResponse_BadDestination;
+
+					if (!sendData(info.socket, &deleteFilesResponse, sizeof(deleteFilesResponse)))
+						return -1;
+				}
+				break;
+
 			case CommandType_RequestReport:
 				{
 					u64 uptimeMs = getTimeMs() - m_startTime;

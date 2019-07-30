@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 6 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 7 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -25,6 +25,7 @@ enum CommandType : u8
 	CommandType_ReadFile,		// Read file from server to client
 	CommandType_CreateDir,		// Create directory on server
 	CommandType_Environment,	// Sends information to server about where all relative file paths should be stored
+	CommandType_DeleteFiles,	// Tell server to delete files
 	CommandType_Done,			// Tell server that connection is done copying and can close
 	CommandType_RequestReport	// Ask server for a status report
 };
@@ -105,6 +106,18 @@ enum CreateDirResponse : u8
 	CreateDirResponse_Success,
 	CreateDirResponse_Error,
 	CreateDirResponse_BadDestination,
+};
+
+struct DeleteFilesCommand : Command
+{
+	wchar_t path[1];
+};
+
+enum DeleteFilesResponse : u8
+{
+	DeleteFilesResponse_Success,
+	DeleteFilesResponse_Error,
+	DeleteFilesResponse_BadDestination,
 };
 
 struct DoneCommand : Command
