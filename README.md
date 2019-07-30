@@ -4,14 +4,14 @@ EACopy is an alternative to Robocopy for copying files from one location to anot
 
 On frostbite we have a build farm that produce new builds for all supported platforms at quite a fast rate. Binaries and system files for all supported platforms adds up to over 250gb per build and we try to get a full turnaround of these builds every 5 minutes or so. Unfortunately network throughput to the network share is one of the limiting factors as well as storage to be able to go faster. Funny enough most of this data being copied over has been copied over 5 minutes ago to another folder since the majority of those 250gb is the same (unless you change something _everything_ pulls in) and it feels like we could save lots of work by not copying those files again. This is where EACopyService comes in.
 
-EACopyService is a service that can be started on any windows based server that hosts a network share. It acts as an accellerator for clients to copy data to the network share and doesnt store any additional state anywhere. It needs to be allowed to create hardlinks on the file system in order to work.
+EACopyService is a service that can be started on any windows based server that hosts a network share. It acts as an accelerator for clients copying data to the network share and doesnt store any additional state anywhere. It needs to be allowed to create hardlinks on the file system in order to work.
 
 Using EACopyService we've seen builds that has a very small delta from previous builds go down in copy-time from ~2 minutes to 1 second :-)
 
 When EACopy starts copying to a network share it also tries to connect to an EACopyService. If there is no server it behaves just like Robocopy using smb. If it finds a service it switches over to do communication with the service instead of smb. Before copying a file it uses the same criterias as robocopy to compute the key of the file, the key is sent over to EACopyService together with destination path. EACopyService keeps track of all the files it has copied since it started by key and destination. If EACopyService already has the key it will check so the file still exists and has the same key, if the file is still valid it just creates a hardlink for the new file to the old file and return to the EACopy client that the file is already copied. 
 If the server doesn't have the key it asks the EACopy client to send the new file. EACopy uses zstd to compress the file while sending. It self-balance compression based on throughput of uncompressed data. If network is fast it will do less compression, if it for some reason is contended it will do more compression.
 
-Note that the copy-reduction feature is on a per-file basis so if your files are zipped up to some big archives with one changed file in it, it will still copy these files even though only 1 byte diffed from previous copy. This might be a feature added in the future.
+Note that the link-to-old-file feature is on a per-file basis so if your files are zipped up to some big archives with one changed file in it, it will still copy these files even though only 1 byte diffed from previous copy. This might be a feature added in the future.
 
 Here's an example on how the summary of a copy could look like when using the EACopyservice (this is a real example from frostbite's farm deploy).
 ```
