@@ -396,8 +396,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 
 				if (fileAttributes & FILE_ATTRIBUTE_READONLY)
 				{
-					if (m_settings.logProgress)
-						logErrorf(L"Can't copy to file that is read-only (%s)", fullDst.c_str());
+					if (!SetFileAttributesW(fullDst.c_str(), FILE_ATTRIBUTE_NORMAL))
+						logErrorf(L"Could not copy over read-only destination file (%s).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
 				}
 				else if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{

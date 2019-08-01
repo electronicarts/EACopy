@@ -75,6 +75,27 @@ As an example, look at the "build.bat" file in the scripts folder for how to bui
 @popd
 ```
 
+## Running the Tests
+To run the tests you need to have a source folder and a destination folder specified.
+
+The source folder needs to be a absolute path on one of your local drives. Ex: D:\EACopyTest\source
+the destination folder needs to be a unc network path.  This can be a shared location on your local machine Ex: \\localhost\EACopyTest\dest, which is mapped to D:\EACopyTest\dest.
+
+NOTE: These folders have to actually exist on your system or EACopyTest will complain about the folder(s) not existing
+
+You can specify these on the cmdline for EACopyTest.exe:
+```
+EACopyTest D:\EACopyTest\source \\localhost\EACopyTest\dest
+```
+
+Another way to set this up for ease of local development is to set these defines in the top of EACopyTest.cpp to the source and dest folders you have setup:
+```
+#define DEFAULT_SOURCE_DIR  L"D:\\\\EACopyTest\\source"
+#define DEFAULT_DEST_DIR  L"\\\\localhost\\EACopyTest\\dest" // local share to D:\EACopyTest\dest
+```
+
+You can then set EACopyTest as your startup project in Visual Studio and debug from there, or just run EACopyTest.exe from the cmdline without parameters and it will use those folders set in the code.
+
 ## License
 
 Modified BSD License (3-Clause BSD license) see the file LICENSE in the project root.

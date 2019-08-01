@@ -15,8 +15,8 @@ namespace eacopy
 	#define EACOPY_ASSERT(x) assert(x)
 #endif
 
-#define DEFAULT_SOURCE_DIR  L"" //L"C:\\temp\\EACopyTest"
-#define DEFAULT_DEST_DIR  L"" //L"\\\\localhost\\Tests\\EACopyTest"
+#define DEFAULT_SOURCE_DIR  L"" // L"C:\\temp\\EACopyTest\\source"
+#define DEFAULT_DEST_DIR  L"" // L"\\\\localhost\\EACopyTest\\dest" // local share to C:\temp\EACopyTest\dest
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -387,12 +387,20 @@ EACOPY_TEST(CopyEmptyDir)
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"FOLDER").c_str()) != 0);
 }
 
-EACOPY_TEST(CopyFileFailWrite)
+EACOPY_TEST(CopyFileToReadOnlyDest)
 {
+	// Create 3 files, 2 which exist in the destination and are different but Foo.txt is set to be readonly.
+	// We expect that even though Foo.txt is readonly it will still get copied over the destination Foo.txt
+	
+	// source files:
 	createTestFile(L"Foo.txt", 10);
-	createTestFile(L"Bar.txt", 10);
+	createTestFile(L"Bar1.txt", 10);
+	createTestFile(L"Bar2.txt", 10);
+	
+	//dest files:
 	createTestFile(L"Foo.txt", 100, false);
 	setReadOnly(L"Foo.txt", true, false);
+	createTestFile(L"Bar2.txt", 100, false);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.retryWaitTimeMs = 1;
@@ -400,9 +408,11 @@ EACOPY_TEST(CopyFileFailWrite)
 
 	Client client(clientSettings);
 	ClientStats clientStats;
-	EACOPY_ASSERT(client.process(clientLog, clientStats) != 0);
-	EACOPY_ASSERT(clientStats.failCount == 1);
-	EACOPY_ASSERT(clientStats.copyCount == 1);
+
+	// We expect this to succeed because Foo.txt in dest should have its file attributes changed from read-only to normal
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.failCount == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 3);
 }
 
 EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
