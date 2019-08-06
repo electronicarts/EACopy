@@ -167,6 +167,8 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+enum { NetworkTransferChunkSize = CopyContextBufferSize };
+
 struct NetworkCopyContext : CopyContext
 {
 	void* compContext = nullptr;

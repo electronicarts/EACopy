@@ -590,6 +590,7 @@ bool setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWr
 
 	logErrorf(L"Failed to set file time on %s", fullPath);
 	CloseHandle(file);
+	file = INVALID_HANDLE_VALUE;
 	return false;
 }
 
@@ -685,6 +686,9 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 	if (UseOwnCopyFunction)
 	{
+		enum { ReadChunkSize = 2 * 1024 * 1024 };
+		static_assert(ReadChunkSize <= CopyContextBufferSize, "ReadChunkSize must be smaller than CopyContextBufferSize");
+
 		FileInfo sourceInfo;
 		DWORD sourceAttributes = getFileInfo(sourceInfo, source);
 		if (!sourceAttributes)
@@ -784,7 +788,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			{
 				u64 startReadMs = getTimeMs();
 
-				uint toRead = (uint)min(left, CopyContextBufferSize);
+				uint toRead = (uint)min(left, ReadChunkSize);
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
 
 				uint toReadAligned = nobufferingFlag ? (((toRead + 4095) / 4096) * 4096) : toRead;

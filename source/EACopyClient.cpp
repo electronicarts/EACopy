@@ -1159,13 +1159,13 @@ Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& f
 
 	{
 		// Send environment command
-		char cmdBuf[MAX_PATH*2 + sizeof(EnvironmentCommand)+1];
+		char cmdBuf[MaxPath*2 + sizeof(EnvironmentCommand)+1];
 		auto& cmd = *(EnvironmentCommand*)cmdBuf;
 		cmd.commandType = CommandType_Environment;
 		cmd.deltaCompressionThreshold = m_settings.deltaCompressionThreshold;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);
 		
-		if (wcscpy_s(cmd.netDirectory, MAX_PATH, m_networkServerNetDirectory.data()))
+		if (wcscpy_s(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
 		{
 			logErrorf(L"Failed send environment %s: wcscpy_s", m_networkServerNetDirectory.c_str());
 			return false;
@@ -1234,12 +1234,12 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 	WriteFileType writeType = m_compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
 
-	char buffer[MAX_PATH*2 + sizeof(WriteFileCommand)];
+	char buffer[MaxPath*2 + sizeof(WriteFileCommand)];
 	auto& cmd = *(WriteFileCommand*)buffer;
 	cmd.commandType = CommandType_WriteFile;
 	cmd.writeType = writeType;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
-	if (wcscpy_s(cmd.path, MAX_PATH, dst))
+	if (wcscpy_s(cmd.path, MaxPath, dst))
 	{
 		logErrorf(L"Failed to write file %s: wcscpy_s in sendWriteFileCommand failed", dst);
 		return false;
@@ -1333,12 +1333,12 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	// Make src a local path to server
 	src += m_settings.sourceDirectory.size();
 
-	char buffer[MAX_PATH*2 + sizeof(ReadFileCommand)];
+	char buffer[MaxPath*2 + sizeof(ReadFileCommand)];
 	auto& cmd = *(ReadFileCommand*)buffer;
 	cmd.commandType = CommandType_ReadFile;
 	cmd.compressionEnabled = m_compressionEnabled;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(src)*2);
-	if (wcscpy_s(cmd.path, MAX_PATH, src))
+	if (wcscpy_s(cmd.path, MaxPath, src))
 	{
 		logErrorf(L"Failed to read file %s: wcscpy_s in sendReadFileCommand failed", src);
 		return false;
@@ -1406,12 +1406,12 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 bool
 Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
 {
-	char buffer[MAX_PATH*2 + sizeof(CreateDirCommand)+1];
+	char buffer[MaxPath*2 + sizeof(CreateDirCommand)+1];
 	auto& cmd = *(CreateDirCommand*)buffer;
 	cmd.commandType = CommandType_CreateDir;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
 	
-	if (wcscpy_s(cmd.path, MAX_PATH, dst))
+	if (wcscpy_s(cmd.path, MaxPath, dst))
 	{
 		logErrorf(L"Failed to create folder %s: wcscpy_s in sendCreateDirectoryCommand failed", dst);
 		return false;
@@ -1442,12 +1442,12 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
 bool
 Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
 {
-	char buffer[MAX_PATH*2 + sizeof(DeleteFilesCommand)+1];
+	char buffer[MaxPath*2 + sizeof(DeleteFilesCommand)+1];
 	auto& cmd = *(DeleteFilesCommand*)buffer;
 	cmd.commandType = CommandType_DeleteFiles;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dir)*2);
 
-	if (wcscpy_s(cmd.path, MAX_PATH, dir))
+	if (wcscpy_s(cmd.path, MaxPath, dir))
 	{
 		logErrorf(L"Failed to delete directory %s: wcscpy_s in sendDeleteAllFiles failed", dir);
 		return false;

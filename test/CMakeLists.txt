@@ -18,7 +18,8 @@ add_executable(EACopyTest
 	../source/EACopyNetwork.cpp
 	../include/EACopyNetwork.h
 	../include/EACopyShared.h
-	../source/EACopyShared.cpp)
+	../source/EACopyShared.cpp
+	../source/Addition.manifest)
 
 target_include_directories(EACopyTest PUBLIC ../include)
 

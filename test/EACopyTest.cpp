@@ -165,7 +165,7 @@ struct TestBase
 		if (lastSlash)
 		{
 			dir.append(name, lastSlash - name);
-			ensureDirectory(dir.c_str());
+			EACOPY_ASSERT(ensureDirectory(dir.c_str()));
 			dir += L'\\';
 			name = lastSlash + 1;
 		}
@@ -879,6 +879,24 @@ EACOPY_TEST(CopyFileTargetHasSymlink)
 	EACOPY_ASSERT(getTestFileExists(L"Source\\RealDir\\Boo.txt", true) == true);
 	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir\\Boo.txt", false) == true);
 	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+}
+
+EACOPY_TEST(CopyFileWithVeryLongPath)
+{
+	WString longPath;
+	for (uint i=0;i!=30; ++i)
+		longPath.append(L"TestFolder\\");
+	longPath.append(L"Foo.txt");
+	createTestFile(longPath.c_str(), 100);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.copySubdirDepth = 1000;
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + longPath).c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 100);
 }
 
 EACOPY_TEST(ServerCopyAttemptFallback)

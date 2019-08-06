@@ -91,11 +91,11 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 		if (!localPath)
 			localPath = netDirectory + wcslen(netDirectory);
 
-		wchar_t wnetName[MAX_PATH] = { 0 };
+		wchar_t wnetName[MaxPath] = { 0 };
 		if (wcsncpy_s(wnetName, eacopy_sizeof_array(wnetName), netDirectory, size_t(localPath - netDirectory)))
 			return uncPath;
 
-		wchar_t wserverName[MAX_PATH] = { 0 };
+		wchar_t wserverName[MaxPath] = { 0 };
 		if (wcscpy_s(wserverName, eacopy_sizeof_array(wserverName), serverName.c_str()))
 			return uncPath;
 
@@ -265,7 +265,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 		while (left)
 		{
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyContextBufferSize);
+			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize);
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
@@ -293,7 +293,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 		while (left)
 		{
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, CopyContextBufferSize);
+			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize);
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
@@ -312,7 +312,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressMs = getTimeMs();
-			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CopyContextBufferSize - 4, copyContext.buffers[0], toRead, compressionData.level);
+			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], toRead, compressionData.level);
 			u64 compressTimeMs = getTimeMs() - startCompressMs;
 
 			*(uint*)destBuf =  compressedSize;
@@ -394,7 +394,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 		while (read != fileSize)
 		{
 			u64 left = fileSize - read;
-			uint toRead = (uint)min(left, CopyContextBufferSize);
+			uint toRead = (uint)min(left, NetworkTransferChunkSize);
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
@@ -458,7 +458,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 			totalReceivedSize += compressedSize + sizeof(uint);
 
-			if (compressedSize > CopyContextBufferSize)
+			if (compressedSize > NetworkTransferChunkSize)
 			{
 				logErrorf(L"Compressed size is bigger than compression buffer capacity");
 				return false;
@@ -487,7 +487,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 				copyContext.compContext = ZSTD_createDCtx();
 
 
-			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], CopyContextBufferSize, copyContext.buffers[2], recvBytes);
+			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], recvBytes);
 			outSuccess = outSuccess && !ZSTD_isError(decompressedSize);
 
 

@@ -24,7 +24,8 @@ add_executable(EACopy
 	include/EACopyNetwork.h
 	source/EACopyNetwork.cpp
 	include/EACopyShared.h
-	source/EACopyShared.cpp)
+	source/EACopyShared.cpp
+	source/Addition.manifest)
 
 add_executable(EACopyService
 	source/EACopyService.cpp
@@ -33,7 +34,8 @@ add_executable(EACopyService
 	include/EACopyNetwork.h
 	source/EACopyNetwork.cpp
 	include/EACopyShared.h
-	source/EACopyShared.cpp)
+	source/EACopyShared.cpp
+	source/Addition.manifest)
 
 target_include_directories(EACopy PUBLIC include)
 target_include_directories(EACopyService PUBLIC include)

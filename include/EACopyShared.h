@@ -20,7 +20,7 @@ namespace eacopy
 // Global Constants
 
 enum { CopyContextBufferSize = 8*1024*1024 }; // This is the chunk size used when reading/writing/copying files
-
+enum { MaxPath = 4096 }; // Max path for EACopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Types
