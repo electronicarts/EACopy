@@ -995,6 +995,37 @@ EACOPY_TEST(ServerCopySmallFileDestIsLocal)
 	EACOPY_ASSERT(clientStats.skipCount == 1);
 }
 
+EACOPY_TEST(ServerCopyDirectoriesDestIsLocal)
+{
+	std::swap(testSourceDir, testDestDir);
+	createTestFile(L"Foo.txt", 10);
+	createTestFile(L"A\\Bar.txt", 10);
+	createTestFile(L"B\\Meh.txt", 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.copySubdirDepth = 2;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 3);
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\A\\Bar.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\B\\Meh.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 10);
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.skipCount == 3);
+}
+
 EACOPY_TEST(ServerCopyMediumFile)
 {
 	uint fileSize = 3*1024*1024 + 123;

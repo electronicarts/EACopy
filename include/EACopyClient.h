@@ -111,11 +111,12 @@ private:
 	using				FilesSet = Set<WString, NoCaseWStringLess>;
 	using				CopyEntries = List<CopyEntry>;
 	class				Connection;
+	struct				NameAndFileInfo { WString name; FileInfo info; DWORD attributes; };
 
 	// Methods
 	void				resetWorkState(Log& log);
 	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
-	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, bool isMainThread);
+	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
 	bool				connectToServer(const wchar_t* networkPath, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(ClientStats& stats);
 	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc);
@@ -140,6 +141,8 @@ private:
 	bool				m_useDestServerFailed;
 	bool				m_workersActive;
 	bool				m_tryCopyFirst;
+	NetworkCopyContext	m_copyContext;
+	Connection*			m_sourceConnection;
 	Connection*			m_destConnection;
 	CriticalSection		m_copyEntriesCs;
 	CopyEntries			m_copyEntries;
@@ -171,6 +174,8 @@ public:
 	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
 	bool				sendDeleteAllFiles(const wchar_t* dir);
+	bool				sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext);
+
 	bool				destroy();
 
 	const ClientSettings& m_settings;

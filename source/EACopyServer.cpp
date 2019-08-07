@@ -292,7 +292,7 @@ Server::connectionThread(ConnectionInfo& info)
 	}
 
 	uint recvPos = 0;
-	WString destDirectory;
+	WString localPath;
 
 	// This is using writeReport
 	int entryCount[] = { 0, 0, 0, 0 };
@@ -348,7 +348,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
 
-					if (!getLocalFromNet(destDirectory, cmd.netDirectory))
+					if (!getLocalFromNet(localPath, cmd.netDirectory))
 						break;
 					isValidEnvironment  = true;
 				}
@@ -370,7 +370,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					auto& cmd = *(const WriteFileCommand*)recvBuffer;
-					WString fullPath = destDirectory + cmd.path;
+					WString fullPath = localPath + cmd.path;
 
 					//logDebugLinef("%s", fullPath.c_str());
 
@@ -486,7 +486,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					auto& cmd = *(const ReadFileCommand*)recvBuffer;
-					WString fullPath = destDirectory + cmd.path;
+					WString fullPath = localPath + cmd.path;
 
 					FileInfo fi;
 					DWORD attributes = getFileInfo(fi, fullPath.c_str());
@@ -558,7 +558,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (isValidEnvironment)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
-						WString fullPath = destDirectory + cmd.path;
+						WString fullPath = localPath + cmd.path;
 						if (!ensureDirectory(fullPath.c_str()))
 							createDirResponse = CreateDirResponse_Error;
 					}
@@ -578,7 +578,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (isValidEnvironment)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
-						WString fullPath = destDirectory + cmd.path;
+						WString fullPath = localPath + cmd.path;
 						if (!deleteAllFiles(fullPath.c_str()))
 							deleteFilesResponse = DeleteFilesResponse_Error;
 					}
@@ -586,6 +586,65 @@ Server::connectionThread(ConnectionInfo& info)
 						deleteFilesResponse = DeleteFilesResponse_BadDestination;
 
 					if (!sendData(info.socket, &deleteFilesResponse, sizeof(deleteFilesResponse)))
+						return -1;
+				}
+				break;
+
+			case CommandType_FindFiles:
+				{
+					auto& cmd = *(const FindFilesCommand*)recvBuffer;
+					WIN32_FIND_DATAW fd; 
+					WString searchStr = localPath + cmd.pathAndWildcard;
+					HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
+					if(hFind == INVALID_HANDLE_VALUE)
+					{
+						uint blockSize = ~0u;
+						if (!sendData(info.socket, &blockSize, sizeof(blockSize)))
+							return -1;
+						break;
+					}
+					ScopeGuard _([&]() { FindClose(hFind); });
+
+					u8* bufferPos = copyContext.buffers[0];
+
+					auto writeBlock = [&]()
+					{
+						uint blockSize = bufferPos - copyContext.buffers[0];
+						if (!sendData(info.socket, &blockSize, sizeof(blockSize)))
+							return false;
+						bufferPos = copyContext.buffers[0];
+						if (!sendData(info.socket, bufferPos, blockSize))
+							return false;
+						return true;
+					};
+
+					do
+					{ 
+						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
+							continue;
+
+						uint fileNameBytes = (wcslen(fd.cFileName)+1)*2;
+
+						if (fileNameBytes + 20 >= CopyContextBufferSize)
+							if (!writeBlock())
+								return -1;
+
+						*(uint*)bufferPos = fd.dwFileAttributes;
+						bufferPos += sizeof(uint);
+						*(FILETIME*)bufferPos = fd.ftLastWriteTime;
+						bufferPos += sizeof(u64);
+						*(u64*)bufferPos = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+						bufferPos += sizeof(u64);
+
+						memcpy(bufferPos, fd.cFileName, fileNameBytes);
+						bufferPos += fileNameBytes;
+					}
+					while(FindNextFileW(hFind, &fd)); 
+
+					if (!writeBlock()) // Flush block
+						return -1;
+
+					if (!writeBlock()) // Write empty block to tell client we're done
 						return -1;
 				}
 				break;
@@ -603,7 +662,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					u64 freeVolumeSpace = 0;
 					ULARGE_INTEGER freeBytesAvailable;
-					if (GetDiskFreeSpaceExW(destDirectory.c_str(), nullptr, nullptr, &freeBytesAvailable))
+					if (GetDiskFreeSpaceExW(localPath.c_str(), nullptr, nullptr, &freeBytesAvailable))
 						freeVolumeSpace = freeBytesAvailable.QuadPart;
 
 					uint activeConnectionCount = m_activeConnectionCount - 1; // Skip the connection that is asking for this info

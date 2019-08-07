@@ -58,7 +58,7 @@ Client::process(Log& log, ClientStats& outStats)
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
 	if (!connectToServer(destDir.c_str(), m_destConnection, m_useDestServerFailed, outStats))
 		return -1;
-	ScopeGuard destConnectionCleanup([this]() { delete m_destConnection; });
+	ScopeGuard destConnectionCleanup([this]() { delete m_destConnection; m_destConnection = nullptr; });
 
 	// Spawn worker threads that will copy the files
 	Vector<HANDLE> workerThreadList(m_settings.threadCount);
@@ -82,6 +82,12 @@ Client::process(Log& log, ClientStats& outStats)
 		m_workersActive = false;
 		WaitForMultipleObjects((uint)workerThreadList.size(), workerThreadList.data(), TRUE, INFINITE);
 	});
+
+	// Connect to source if no destination is set
+	if (!m_destConnection)
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), m_sourceConnection, m_useSourceServerFailed, outStats))
+			return false;
+	ScopeGuard sourceConnectionGuard([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
 
 	u64 startFindFileTimeMs = getTimeMs();
 
@@ -119,15 +125,8 @@ Client::process(Log& log, ClientStats& outStats)
 	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs;
 
 
-	// Connect to source if no destination is set
-	Connection* sourceConnection = nullptr;
-	if (!m_destConnection)
-		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, outStats))
-			return false;
-	ScopeGuard sourceConnectionGuard([&] { delete sourceConnection; });
-
 	// Process files (worker threads are doing the same right now)
-	if (!processFiles(logContext, sourceConnection, m_destConnection, outStats, true))
+	if (!processFiles(logContext, m_sourceConnection, m_destConnection, m_copyContext, outStats, true))
 		return -1;
 	
 
@@ -257,6 +256,7 @@ Client::resetWorkState(Log& log)
 	m_networkServerName.clear();
 	m_copyEntries.clear();
 	m_handledFiles.clear();
+	m_sourceConnection = nullptr;
 	m_destConnection = nullptr;
 }
 
@@ -460,11 +460,10 @@ Client::connectToServer(const wchar_t* networkPath, Connection*& outConnection, 
 }
 
 bool
-Client::processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, bool isMainThread)
+Client::processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread)
 {
 	logDebugLinef(L"Worker started");
 
-	NetworkCopyContext copyContext;
 	CopyStats copyStats;
 	uint filesProcessedCount = 0;
 
@@ -500,7 +499,8 @@ Client::workerThread(ClientStats& stats)
 
 	// Help process the files
 	LogContext logContext(*m_log);
-	processFiles(logContext, sourceConnection, destConnection, stats, false);
+	NetworkCopyContext copyContext;
+	processFiles(logContext, sourceConnection, destConnection, copyContext, stats, false);
 
 	return logContext.getLastError();
 }
@@ -680,37 +680,65 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 bool
 Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc)
 {
-    WIN32_FIND_DATAW fd; 
-    WString searchStr = sourcePath + wildcard;
-    HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-    if(hFind == INVALID_HANDLE_VALUE)
+	if (m_sourceConnection)
 	{
-		logErrorf(L"Can't find %s", searchStr.c_str());
-		return false;
-	}
-	ScopeGuard _([&]() { FindClose(hFind); });
+		WString relPath;
+		if (sourcePath.size() > m_settings.sourceDirectory.size())
+			relPath.append(sourcePath.c_str() + m_settings.sourceDirectory.size());
 
-    do
-	{ 
-        if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		WString searchStr = relPath + wildcard;
+
+		Vector<NameAndFileInfo> files;
+		if (!m_sourceConnection->sendFindFiles(searchStr.c_str(), files, m_copyContext))
+			return false;
+		for (auto& file : files)
 		{
-			FileInfo fileInfo;
-			fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-			fileInfo.lastWriteTime = fd.ftLastWriteTime;
-			fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-			if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
-				return false;
-        }
-		else if (depthLeft)
-		{
-			if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
-				if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc))
+			if(!(file.attributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				if (!handleFile(sourcePath, destPath, file.name.c_str(), file.info, handleFileFunc))
 					return false;
+			}
+			else if (depthLeft)
+			{
+				if (!handleDirectory(sourcePath, destPath, file.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc))
+					return false;
+			}
 		}
-
 	}
-	while(FindNextFileW(hFind, &fd)); 
-        
+	else
+	{
+		WString searchStr = sourcePath + wildcard;
+
+		WIN32_FIND_DATAW fd; 
+		HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
+		if(hFind == INVALID_HANDLE_VALUE)
+		{
+			logErrorf(L"Can't find %s", searchStr.c_str());
+			return false;
+		}
+		ScopeGuard _([&]() { FindClose(hFind); });
+
+		do
+		{ 
+			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				FileInfo fileInfo;
+				fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
+				fileInfo.lastWriteTime = fd.ftLastWriteTime;
+				fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+				if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
+					return false;
+			}
+			else if (depthLeft)
+			{
+				if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
+					if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc))
+						return false;
+			}
+
+		}
+		while(FindNextFileW(hFind, &fd)); 
+	}
 	return true;
 }
 
@@ -737,13 +765,13 @@ Client::handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString&
 
 	ScopeGuard _([&]() { CloseHandle(hFile); });
 
-	char buffer[2048];
+	char* buffer = (char*)m_copyContext.buffers[1]; // Important that we use '1'.. '0' is used by SendFindFiles command
 	uint left = 0;
 
 	while (true)
 	{
 		DWORD read = 0;
-		if (ReadFile(hFile, buffer + left, sizeof(buffer) - left - 1, &read, NULL) == 0)
+		if (ReadFile(hFile, buffer + left, CopyContextBufferSize - left - 1, &read, NULL) == 0)
 		{
 			logErrorf(L"Error %s. Failed reading input file %s", getLastErrorText().c_str(), fullPath.c_str());
 			return false;
@@ -1219,7 +1247,7 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 	char buffer[1024];
 	auto& cmd = *(TextCommand*)buffer;
 	cmd.commandType = CommandType_Text;
-	cmd.commandSize = sizeof(cmd) + uint(wcslen(text));
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(text)*2);
 	if (wcscpy_s(cmd.string, eacopy_sizeof_array(buffer) - sizeof(cmd), text))
 	{
 		logErrorf(L"wcscpy_s in sendTextCommand failed");
@@ -1479,6 +1507,65 @@ Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
 		return false;
 	}
 	return true;
+}
+
+bool
+Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext)
+{
+	char buffer[MaxPath*2 + sizeof(FindFilesCommand)+1];
+	auto& cmd = *(FindFilesCommand*)buffer;
+	cmd.commandType = CommandType_FindFiles;
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(dirAndWildcard)*2);
+
+	if (wcscpy_s(cmd.pathAndWildcard, MaxPath, dirAndWildcard))
+	{
+		logErrorf(L"Failed to find files %s: wcscpy_s in sendFindFiles failed", dirAndWildcard);
+		return false;
+	}
+
+	if (!sendCommand(cmd))
+		return false;
+
+	u8* copyBuffer = copyContext.buffers[0]; // Important that we use '0'.. '1' is used by file wildcard reading
+
+	while (true)
+	{
+		uint blockSize;
+		if (!receiveData(m_socket, &blockSize, sizeof(blockSize)))
+			return false;
+
+		if (blockSize == 0)
+			return true;
+
+		if (blockSize == ~0u)
+		{
+			logErrorf(L"Can't find %s", dirAndWildcard);
+			return false;
+		}
+	
+		if (!receiveData(m_socket, copyBuffer, blockSize))
+			return false;
+
+		u8* blockPos = copyBuffer;
+		u8* blockEnd = blockPos + blockSize;
+		while (blockPos != blockEnd)
+		{
+			NameAndFileInfo nafi;
+
+			nafi.attributes = *(uint*)blockPos;
+			blockPos += sizeof(uint);
+			nafi.info.lastWriteTime = *(FILETIME*)blockPos;
+			blockPos += sizeof(u64);
+			nafi.info.fileSize = *(u64*)blockPos;
+			blockPos += sizeof(u64);
+			nafi.name = (wchar_t*)blockPos;
+			blockPos += (nafi.name.size()+1)*2;
+			outFiles.push_back(std::move(nafi));
+		}
+	}
+
+
+	return false;
 }
 
 bool
