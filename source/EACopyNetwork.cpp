@@ -363,7 +363,7 @@ NetworkCopyContext::~NetworkCopyContext()
 	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
 }
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize)
+bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
 {
 	u64 totalReceivedSize = 0;
 
@@ -375,7 +375,10 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
+		//copyStats.createWriteTimeMs 
+		u64 startCreateWriteTimeMs = getTimeMs();
 		outSuccess = openFileWrite(fullPath, file, useBufferedIO);
+		copyStats.createWriteTimeMs = getTimeMs() - startCreateWriteTimeMs;
 		ScopeGuard fileGuard([&]() { closeFile(fullPath, file); CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
@@ -383,16 +386,19 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
+			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
 			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
+			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 		}
 
 		int fileBufIndex = 0;
 
 		while (read != fileSize)
 		{
+			u64 startRecvTimeMs = getTimeMs();
 			u64 left = fileSize - read;
 			uint toRead = (uint)min(left, NetworkTransferChunkSize);
 			WSABUF wsabuf;
@@ -413,8 +419,12 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 			}
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
+			recvStats.recvTimeMs += getTimeMs() - startRecvTimeMs;
+			recvStats.recvSize += recvBytes;
 
+			u64 startWriteTimeMs = getTimeMs();
 			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], recvBytes, &osWrite);
+			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 
 			read += recvBytes;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -422,9 +432,11 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 		totalReceivedSize += read;
 
+		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime);
 		outSuccess = outSuccess && closeFile(fullPath, file);
+		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
@@ -442,16 +454,20 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
+			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
 			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
+			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 		}
 
 		int fileBufIndex = 0;
 
 		while (read != fileSize)
 		{
+			u64 startRecvTimeMs = getTimeMs();
+
 			uint compressedSize;
 			if (!receiveData(socket, &compressedSize, sizeof(uint)))
 				return false;
@@ -483,24 +499,32 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 				return false;
 			}
 
+			recvStats.recvTimeMs += getTimeMs() - startRecvTimeMs;
+			recvStats.recvSize += recvBytes;
+
 			if (!copyContext.compContext)
 				copyContext.compContext = ZSTD_createDCtx();
 
-
+			u64 startDecompressTimeMs = getTimeMs();
 			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], recvBytes);
 			outSuccess = outSuccess && !ZSTD_isError(decompressedSize);
-
+			recvStats.decompressTimeMs = getTimeMs() - startDecompressTimeMs;
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
+
+			u64 startWriteTimeMs = getTimeMs();
 			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, &osWrite);
+			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 
 			read += decompressedSize;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
 		}
 
+		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime);
 		outSuccess = outSuccess && closeFile(fullPath, file);
+		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 	}
 
 	return true;

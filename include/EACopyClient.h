@@ -69,13 +69,17 @@ struct ClientStats
 	u64					connectTimeMs				= 0;
 	u64					sendTimeMs					= 0;
 	u64					sendSize					= 0;
+	u64					recvTimeMs					= 0;
+	u64					recvSize					= 0;
 	u64					compressTimeMs				= 0;
 	u64					compressionLevelSum			= 0;
 	float				compressionAverageLevel		= 0;
+	u64					decompressTimeMs			= 0;
 	u64					deltaCompressionTimeMs		= 0;
 	CopyStats			copyStats;
 
-	bool				serverUsed					= false;
+	bool				destServerUsed				= false;
+	bool				sourceServerUsed			= false;
 	bool				serverAttempt				= false;
 	u64					findFileTimeMs				= 0;
 };

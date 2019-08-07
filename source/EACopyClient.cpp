@@ -180,6 +180,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.deltaCompressionTimeMs += threadStats.deltaCompressionTimeMs;
 		outStats.sendTimeMs += threadStats.sendTimeMs;
 		outStats.sendSize += threadStats.sendSize;
+		outStats.recvTimeMs += threadStats.recvTimeMs;
+		outStats.recvSize += threadStats.recvSize;
 		outStats.compressionLevelSum += threadStats.compressionLevelSum;
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
@@ -193,7 +195,8 @@ Client::process(Log& log, ClientStats& outStats)
 
 	outStats.compressionAverageLevel = outStats.copySize ? (float)((double)outStats.compressionLevelSum / outStats.copySize) : 0;
 
-	outStats.serverUsed =  m_settings.useServer != UseServer_Disabled && !m_useDestServerFailed;
+	outStats.destServerUsed =  m_settings.useServer != UseServer_Disabled && !m_useDestServerFailed;
+	outStats.sourceServerUsed =  m_settings.useServer != UseServer_Disabled && !m_useSourceServerFailed;
 
 	// Success!
 	return 0;
@@ -1385,8 +1388,12 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		uint commandSize = 0;
 
 		// Read actual file from server
-		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize))
+		RecvFileStats recvStats;
+		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize, m_stats.copyStats, recvStats))
 			return false;
+		m_stats.recvTimeMs += recvStats.recvTimeMs;
+		m_stats.recvSize += recvStats.recvSize;
+		m_stats.decompressTimeMs += recvStats.decompressTimeMs;
 
 		outRead = newFileSize;
 		outSize = newFileSize;

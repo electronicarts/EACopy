@@ -1,4 +1,4 @@
-* Fix so server connection is happening in parallel with copying files  
+* Add FindFiles command client -> server
 * Fix Authentication (Using SSPI with a Windows Sockets Client)  
 * Add /SERVER:<host> that can be different than dest path (could be used as optimization overseas)  
 * Robocopy exit codes? https://ss64.com/nt/robocopy-exit.html  

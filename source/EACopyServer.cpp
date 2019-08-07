@@ -457,7 +457,9 @@ Server::connectionThread(ConnectionInfo& info)
 					else
 					{
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize);
-						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, copyContext, recvBuffer, recvPos, header.commandSize))
+						CopyStats copyStats;
+						RecvFileStats recvStats;
+						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, copyContext, recvBuffer, recvPos, header.commandSize, copyStats, recvStats))
 							return -1;
 					}
 
@@ -599,9 +601,14 @@ Server::connectionThread(ConnectionInfo& info)
 					memCounters.cb = sizeof(memCounters);
 					GetProcessMemoryInfo(GetCurrentProcess(), &memCounters, sizeof(memCounters));
 
+					u64 freeVolumeSpace = 0;
+					ULARGE_INTEGER freeBytesAvailable;
+					if (GetDiskFreeSpaceExW(destDirectory.c_str(), nullptr, nullptr, &freeBytesAvailable))
+						freeVolumeSpace = freeBytesAvailable.QuadPart;
+
 					uint activeConnectionCount = m_activeConnectionCount - 1; // Skip the connection that is asking for this info
 
-					wchar_t buffer[1024];
+					wchar_t buffer[2048];
 					StringCbPrintfW(buffer, sizeof(buffer),
 						L"   Server v%S  (c) Electronic Arts.  All Rights Reserved.\n"
 						L"\n"
@@ -611,6 +618,7 @@ Server::connectionThread(ConnectionInfo& info)
 						L"   Connections active: %u (handled: %u)\n"
 						L"   Local file history size: %u\n"
 						L"   Memory working set: %s (Peak: %s)\n"
+						L"   Free space on volume: %s\n"
 						L"\n"
 						L"   %s copied (%s received)\n"
 						L"   %s linked\n"
@@ -618,7 +626,7 @@ Server::connectionThread(ConnectionInfo& info)
 						, ServerVersion, ProtocolVersion, m_isConsole ? L"Console" : L"Service"
 						, toHourMinSec(uptimeMs).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
-						, toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());
+						, toPretty(freeVolumeSpace).c_str(), toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());
 
 					uint bufferLen = (uint)wcslen(buffer);
 					if (!sendData(info.socket, &bufferLen, sizeof(bufferLen)))

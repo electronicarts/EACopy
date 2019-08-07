@@ -176,7 +176,14 @@ struct NetworkCopyContext : CopyContext
 	~NetworkCopyContext();
 };
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize);
+struct RecvFileStats
+{
+	u64			recvTimeMs = 0;
+	u64			recvSize = 0;
+	u64			decompressTimeMs = 0;
+};
+
+bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

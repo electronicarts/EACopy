@@ -430,12 +430,22 @@ int wmain(int argc, wchar_t* argv[])
 		logInfoLinef(L"   Bytes:     %s  %s  %s  %s   %7i   %7i   %7i", toPretty(totalSize, 7).c_str(), toPretty(stats.copySize, 7).c_str(), toPretty(stats.linkSize, 7).c_str(), toPretty(stats.skipSize, 7).c_str(), 0, 0, 0);
 		logInfoLinef(L"   Times:     %s  %s  %s  %s", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str());
 	
-		if (stats.serverUsed)
+		if (stats.destServerUsed)
 		{
 			logInfoLinef();
 			logInfoLinef(L"   FindFile:     %s      SendFile:         %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.sendTimeMs, 7).c_str());
 			logInfoLinef(L"   ReadFile:     %s      SendBytes:        %s", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toPretty(stats.sendSize, 7).c_str());
 			logInfoLinef(L"   CompressFile: %s      CompressLevel:     %7.1f", toHourMinSec(stats.compressTimeMs, 7).c_str(), stats.compressionAverageLevel);
+			logInfoLinef(L"   ConnectTime:  %s      DeltaCompress:    %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
+			logInfoLinef();
+			logInfoLinef(L"   Server found and used!");
+		}
+		else if (stats.sourceServerUsed)
+		{
+			logInfoLinef();
+			logInfoLinef(L"   FindFile:     %s      RecvFile:         %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.recvTimeMs, 7).c_str());
+			logInfoLinef(L"   WriteFile:    %s      RecvBytes:        %s", toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str(), toPretty(stats.recvSize, 7).c_str());
+			logInfoLinef(L"   DecompreFile: %s                          ", toHourMinSec(stats.decompressTimeMs, 7).c_str());
 			logInfoLinef(L"   ConnectTime:  %s      DeltaCompress:    %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
 			logInfoLinef();
 			logInfoLinef(L"   Server found and used!");
@@ -448,7 +458,7 @@ int wmain(int argc, wchar_t* argv[])
 			logInfoLinef(L"   ConnectTime:  %s      SetLastWriteTime: %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.setLastWriteTimeTimeMs, 7).c_str());
 			logInfoLinef();
 
-			if (stats.serverAttempt && !stats.serverUsed)
+			if (stats.serverAttempt && !stats.destServerUsed)
 				logInfoLinef(L"   Server not found (Spent ~%s trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/max(1, settings.threadCount)).c_str());
 			else
 				logInfoLinef(L"   No server used!");

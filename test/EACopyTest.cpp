@@ -910,7 +910,7 @@ EACOPY_TEST(ServerCopyAttemptFallback)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.serverAttempt == 1);
-	EACOPY_ASSERT(clientStats.serverUsed == false);
+	EACOPY_ASSERT(clientStats.destServerUsed == false);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 	FileInfo destFile;
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
@@ -928,7 +928,7 @@ EACOPY_TEST(ServerCopyAttemptFail)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) != 0);
 	EACOPY_ASSERT(clientStats.serverAttempt == true);
-	EACOPY_ASSERT(clientStats.serverUsed == false);
+	EACOPY_ASSERT(clientStats.destServerUsed == false);
 	EACOPY_ASSERT(clientStats.copyCount == 0);
 }
 
