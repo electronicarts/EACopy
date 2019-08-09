@@ -33,6 +33,7 @@ struct ClientSettings
 	uint				retryWaitTimeMs				= 30 * 1000;
 	uint				retryCount					= 1000000;
 	int					dirCopyFlags				= FileFlags_Data | FileFlags_Attributes;
+	bool				forceCopy					= false;
 	bool				flattenDestination			= false;
 	int					copySubdirDepth				= 0;
 	bool				copyEmptySubdirectories		= false;

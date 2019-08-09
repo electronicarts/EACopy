@@ -5,7 +5,9 @@
 #include <codecvt>
 #include <shlwapi.h>
 #include <strsafe.h>
+#include "RestartManager.h"
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Rstrtmgr.lib")
 
 //#define EACOPY_USE_OUTPUTDEBUGSTRING
 #define EACOPY_IS_DEBUGGER_PRESENT false//::IsDebuggerPresent()
@@ -530,7 +532,7 @@ bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, 
 	if (outFile != INVALID_HANDLE_VALUE)
 		return true;
 
-	logErrorf(L"Failed to open file %s: %s", fullPath, getLastErrorText().c_str());
+	logErrorf(L"Failed to open file %s: %s", fullPath, getErrorText(fullPath, GetLastError()).c_str());
 	return false;
 
 }
@@ -547,7 +549,7 @@ bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO,
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != INVALID_HANDLE_VALUE)
 		return true;
-	logErrorf(L"Trying to create file %s: %s", fullPath, getLastErrorText().c_str());
+	logErrorf(L"Trying to create file %s: %s", fullPath, getErrorText(fullPath, GetLastError()).c_str());
 	return false;
 }
 
@@ -584,6 +586,13 @@ bool setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWr
 {
 	if (file == INVALID_HANDLE_VALUE)
 		return false;
+
+	// This should not be needed!
+	//if (!FlushFileBuffers(file))
+	//{
+	//	logErrorf(L"Failed flushing buffer for file %s: %s", fullPath, getLastErrorText().c_str());
+	//	return false;
+	//}
 
 	if (SetFileTime(file, NULL, NULL, &lastWriteTime))
 		return true;
@@ -700,6 +709,23 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		DWORD nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
 		DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
+		OVERLAPPED osRead  = {0,0,0};
+		osRead.Offset = 0;
+		osRead.OffsetHigh = 0;
+		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+		u64 startCreateReadTimeMs = getTimeMs();
+		HANDLE sourceFile = CreateFileW(source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
+		copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
+
+		if (sourceFile == INVALID_HANDLE_VALUE)
+		{
+			logErrorf(L"Failed to open file %s for read: %s", source, getErrorText(source, GetLastError()).c_str());
+			return false;
+		}
+
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); CloseHandle(sourceFile); });
+
 		OVERLAPPED osWrite = {0,0,0};
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
@@ -718,27 +744,10 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 				return false;
 			}
 
-			logErrorf(L"Failed to create file %s: %s", dest, getErrorText(error).c_str());
+			logErrorf(L"Failed to create file %s: %s", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
 		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); CloseHandle(destFile); });
-
-		OVERLAPPED osRead  = {0,0,0};
-		osRead.Offset = 0;
-		osRead.OffsetHigh = 0;
-		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-
-		u64 startCreateReadTimeMs = getTimeMs();
-		HANDLE sourceFile = CreateFileW(source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
-		copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
-
-		if (sourceFile == INVALID_HANDLE_VALUE)
-		{
-			logErrorf(L"Failed to open file %s: %s", source, getLastErrorText().c_str());
-			return false;
-		}
-
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); CloseHandle(sourceFile); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -952,12 +961,68 @@ WString getErrorText(uint error)
 
 	WString res = lpszTemp;
 	LocalFree((HLOCAL)lpszTemp);
-	return res;
+	return std::move(res);
+}
+
+WString	getErrorText(const wchar_t* resourceName, uint error)
+{
+	WString errorText = getErrorText(error);
+	if (error == ERROR_SHARING_VIOLATION)
+	{
+		WString processes = getProcessesUsingResource(resourceName);
+		if (!processes.empty())
+			return L"Already in use by " + processes;
+	}
+
+	return getErrorText(error);
 }
 
 WString getLastErrorText()
 {
 	return getErrorText(GetLastError());
+}
+
+WString getProcessesUsingResource(const wchar_t* resourceName)
+{
+	DWORD dwSession;
+	WCHAR szSessionKey[CCH_RM_SESSION_KEY+1] = { 0 };
+	if (DWORD dwError = RmStartSession(&dwSession, 0, szSessionKey))
+		return L"";
+	ScopeGuard sessionGuard([&]() { RmEndSession(dwSession); });
+
+	if (DWORD dwError = RmRegisterResources(dwSession, 1, &resourceName, 0, NULL, 0, NULL))
+		return L"";
+
+	WString result;
+
+	DWORD dwReason;
+	uint nProcInfoNeeded;
+	uint nProcInfo = 10;
+	RM_PROCESS_INFO rgpi[10];
+	if (DWORD dwError = RmGetList(dwSession, &nProcInfoNeeded, &nProcInfo, rgpi, &dwReason))
+		return L"";
+
+	for (uint i = 0; i < nProcInfo; i++)
+	{
+		HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, rgpi[i].Process.dwProcessId);
+		if (hProcess == INVALID_HANDLE_VALUE)
+			continue;
+		ScopeGuard processGuard([&]() { CloseHandle(hProcess); });
+
+		FILETIME ftCreate, ftExit, ftKernel, ftUser;
+		if (!GetProcessTimes(hProcess, &ftCreate, &ftExit, &ftKernel, &ftUser) && CompareFileTime(&rgpi[i].Process.ProcessStartTime, &ftCreate) == 0)
+			continue;
+		WCHAR sz[MaxPath];
+		DWORD cch = MaxPath;
+		if (!QueryFullProcessImageNameW(hProcess, 0, sz, &cch))
+			continue;
+
+		if (!result.empty())
+			result += L", ";
+		result += sz;
+	}
+
+	return std::move(result);
 }
 
 WString toPretty(u64 bytes, uint alignment)

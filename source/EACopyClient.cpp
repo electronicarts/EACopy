@@ -382,19 +382,15 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					if (m_settings.logProgress)
 						logDebugLinef(L"Failed to get attributes from file %s", fullDst.c_str());
 				}
-				else
+				else if (!m_settings.forceCopy && equals(entry.srcInfo, destInfo)) // Skip file if the same
 				{
-					// Skip file if the same
-					if (equals(entry.srcInfo, destInfo))
-					{
-						if (m_settings.logProgress)
-							logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
-						stats.skipTimeMs += getTimeMs() - startTimeMs;
-						++stats.skipCount;
-						stats.skipSize += destInfo.fileSize;
+					if (m_settings.logProgress)
+						logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
+					stats.skipTimeMs += getTimeMs() - startTimeMs;
+					++stats.skipCount;
+					stats.skipSize += destInfo.fileSize;
 
-						return true;
-					}
+					return true;
 				}
 
 				// if destination file is read-only then we will clear that flag so the copy can succeed
@@ -758,7 +754,7 @@ Client::handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString&
 		if (ERROR_FILE_NOT_FOUND == error)
 			logErrorf(L"Can't find input file %s", fullPath.c_str());
 		else
-			logErrorf(L"Error %s. Failed to open input file %s", getErrorText(error).c_str(), fullPath.c_str());
+			logErrorf(L"Error %s. Failed to open input file %s", getErrorText(fullPath.c_str(), error).c_str(), fullPath.c_str());
 		return false;
 	}
 

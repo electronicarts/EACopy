@@ -202,6 +202,22 @@ struct TestBase
 		return PathFileExistsW(str.c_str()) == TRUE;
 	}
 
+	bool isEqual(const wchar_t* fileA, const wchar_t* fileB)
+	{
+		FileInfo a;
+		FileInfo b;
+		DWORD attrA = getFileInfo(a, fileA);
+		DWORD attrB = getFileInfo(b, fileB);
+		if (!attrA || attrA != attrB)
+			return false;
+		return equals(a, b);
+	}
+
+	bool isSourceEqualDest(const wchar_t* file)
+	{
+		return isEqual((testSourceDir + file).c_str(), (testDestDir + file).c_str());
+	}
+
 	void createFileList(const wchar_t* name, const char* fileOrWildcard)
 	{
 		WString fileName = testSourceDir + L'\\' + name;
@@ -281,10 +297,7 @@ EACOPY_TEST(CopySmallFile)
 	ClientSettings clientSettings(getDefaultClientSettings());
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopySmallFileDestIsLocal)
@@ -295,10 +308,7 @@ EACOPY_TEST(CopySmallFileDestIsLocal)
 	ClientSettings clientSettings(getDefaultClientSettings());
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopyMediumFile)
@@ -309,10 +319,7 @@ EACOPY_TEST(CopyMediumFile)
 	ClientSettings clientSettings(getDefaultClientSettings());
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == fileSize);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(SkipFile)
@@ -333,12 +340,14 @@ EACOPY_TEST(SkipFile)
 	EACOPY_ASSERT(client.process(clientLog, stats) == 0);
 	EACOPY_ASSERT(stats.skipCount == 1);
 	EACOPY_ASSERT(stats.skipSize = 100);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(OverwriteFile)
 {
 	createTestFile(L"Foo.txt", 100);
 	createTestFile(L"Foo.txt", 101, false);
+	EACOPY_ASSERT(!isSourceEqualDest(L"Foo.txt"));
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	Client client(clientSettings);
@@ -346,10 +355,7 @@ EACOPY_TEST(OverwriteFile)
 	EACOPY_ASSERT(client.process(clientLog, stats) == 0);
 	EACOPY_ASSERT(stats.copyCount == 1);
 	EACOPY_ASSERT(stats.copySize = 100);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(OverwriteFirstCopySecondFile)
@@ -364,12 +370,8 @@ EACOPY_TEST(OverwriteFirstCopySecondFile)
 	EACOPY_ASSERT(client.process(clientLog, stats) == 0);
 	EACOPY_ASSERT(stats.copyCount == 2);
 	EACOPY_ASSERT(stats.copySize = 200);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo1.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo2.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo1.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo2.txt"));
 }
 
 EACOPY_TEST(CopyEmptyDir)
@@ -413,12 +415,17 @@ EACOPY_TEST(CopyFileToReadOnlyDest)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.failCount == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 3);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"Bar1.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"Bar2.txt"));
 }
 
 EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	createTestFile(L"Foo.txt", 100, false);
+	EACOPY_ASSERT(!isSourceEqualDest(L"Foo.txt"));
+
 	HANDLE destFile = CreateFileW((testDestDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	EACOPY_ASSERT(destFile);
 
@@ -441,6 +448,7 @@ EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.retryCount > 0);
 	EACOPY_ASSERT(clientStats.failCount == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
@@ -468,6 +476,7 @@ EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.retryCount > 0);
 	EACOPY_ASSERT(clientStats.failCount == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
@@ -495,6 +504,7 @@ EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.retryCount > 0);
 	EACOPY_ASSERT(clientStats.failCount == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
@@ -522,6 +532,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.retryCount > 0);
 	EACOPY_ASSERT(clientStats.failCount == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 
@@ -542,9 +553,7 @@ EACOPY_TEST(CopyFileList)
 
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(CopyFullPathFileList)
@@ -563,11 +572,8 @@ EACOPY_TEST(CopyFullPathFileList)
 
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Dir\\Bar.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 20);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"Dir\\Bar.txt"));
 }
 
 EACOPY_TEST(CopyFileListWithFileWithDefinedDest)
@@ -893,10 +899,7 @@ EACOPY_TEST(CopyFileWithVeryLongPath)
 	clientSettings.copySubdirDepth = 1000;
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + longPath).c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 100);
+	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
 }
 
 EACOPY_TEST(ServerCopyAttemptFallback)
@@ -912,9 +915,7 @@ EACOPY_TEST(ServerCopyAttemptFallback)
 	EACOPY_ASSERT(clientStats.serverAttempt == 1);
 	EACOPY_ASSERT(clientStats.destServerUsed == false);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(ServerCopyAttemptFail)
@@ -949,6 +950,8 @@ EACOPY_TEST(ServerCopyFolders)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 2);
+	EACOPY_ASSERT(isSourceEqualDest(L"A\\Foo.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"B\\Bar.txt"));
 }
 
 EACOPY_TEST(ServerCopySmallFile)
@@ -966,9 +969,7 @@ EACOPY_TEST(ServerCopySmallFile)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(ServerCopySmallFileDestIsLocal)
@@ -987,20 +988,19 @@ EACOPY_TEST(ServerCopySmallFileDestIsLocal)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.skipCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(ServerCopyDirectoriesDestIsLocal)
 {
 	std::swap(testSourceDir, testDestDir);
 	createTestFile(L"Foo.txt", 10);
-	createTestFile(L"A\\Bar.txt", 10);
-	createTestFile(L"B\\Meh.txt", 10);
+	createTestFile(L"A\\Bar.txt", 11);
+	createTestFile(L"B\\Meh.txt", 12);
 
 	ServerSettings serverSettings;
 	TestServer server(serverSettings, serverLog);
@@ -1014,13 +1014,9 @@ EACOPY_TEST(ServerCopyDirectoriesDestIsLocal)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 3);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\A\\Bar.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\B\\Meh.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == 10);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"A\\Bar.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"B\\Meh.txt"));
 
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.skipCount == 3);
@@ -1042,9 +1038,7 @@ EACOPY_TEST(ServerCopyMediumFile)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == fileSize);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(ServerCopyMediumFileCompressed)
@@ -1064,9 +1058,7 @@ EACOPY_TEST(ServerCopyMediumFileCompressed)
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
-	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Foo.txt").c_str()) != 0);
-	EACOPY_ASSERT(destFile.fileSize == fileSize);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 EACOPY_TEST(ServerCopyMultiThreaded)
@@ -1588,6 +1580,32 @@ EACOPY_TEST(ServerTestMemory)
 	}
 }
 */
+
+EACOPY_TEST(UsedByOtherProcessError)
+{
+	wchar_t buffer[1024];
+	DWORD size = GetCurrentDirectoryW(1024, buffer);
+
+	#if !defined(NDEBUG)
+	wcscat(buffer, L"\\..\\Debug\\");
+	#else
+	wcscat(buffer, L"\\..\\Release\\");
+	#endif
+
+	ClientSettings clientSettings;
+	clientSettings.sourceDirectory += buffer;
+	clientSettings.destDirectory = buffer;
+	clientSettings.filesOrWildcards.push_back(L"EACopy.exe");
+	clientSettings.forceCopy = true;
+	clientSettings.retryCount = 0;
+
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) != 0);
+	EACOPY_ASSERT(clientStats.failCount == 1);
+	EACOPY_ASSERT(clientStats.copyCount == 0);
+}
 
 void printHelp()
 {
