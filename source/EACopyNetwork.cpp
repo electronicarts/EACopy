@@ -127,7 +127,7 @@ bool sendData(SOCKET socket, const void* buffer, uint size)
 		int res = ::send(socket, (const char*)pos, left, 0);
 		if (res == SOCKET_ERROR)
 		{
-			logErrorf(L"send failed with error: %d", WSAGetLastError());
+			logErrorf(L"send failed with error: %d", getErrorText(WSAGetLastError()).c_str());
 			return false;
 		}
 		pos += res;
@@ -146,7 +146,7 @@ bool receiveData(SOCKET socket, void* buffer, uint size)
 		int res = ::recv(socket, pos, left, MSG_WAITALL);
 		if (res < 0)
 		{
-			logErrorf(L"recv failed with error: %d", WSAGetLastError());
+			logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
 			return false;
 		}
 		else if (res == 0)
@@ -292,8 +292,12 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 		u64 left = fileSize;
 		while (left)
 		{
+			enum { CompressBoundReservation = 32 * 1024 };
+			// Make sure the amount of data we've read fit in the destination compressed buffer
+			static_assert(ZSTD_COMPRESSBOUND(NetworkTransferChunkSize - CompressBoundReservation) <= NetworkTransferChunkSize - 4, "");
+
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize);
+			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize - CompressBoundReservation);
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
@@ -312,10 +316,16 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressMs = getTimeMs();
-			uint compressedSize = (uint)ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], toRead, compressionData.level);
+			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], toRead, compressionData.level);
+			if (ZSTD_isError(compressedSize))
+			{
+				logErrorf(L"Fail compressing file %s: %s", src, ZSTD_getErrorName(compressedSize));
+				return false;
+			}
+
 			u64 compressTimeMs = getTimeMs() - startCompressMs;
 
-			*(uint*)destBuf =  compressedSize;
+			*(uint*)destBuf =  uint(compressedSize);
 
 			u64 startSendMs = getTimeMs();
 			if (!sendData(socket, destBuf, compressedSize + 4))
@@ -507,7 +517,16 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 
 			u64 startDecompressTimeMs = getTimeMs();
 			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], recvBytes);
-			outSuccess = outSuccess && !ZSTD_isError(decompressedSize);
+			if (outSuccess)
+			{
+				outSuccess &= ZSTD_isError(decompressedSize) == 0;
+				if (!outSuccess)
+				{
+					logErrorf(L"Decompression error: %s", ZSTD_getErrorName(decompressedSize));
+					// Don't return false since we can still continue copying other files after getting this error
+				}
+			}
+
 			recvStats.decompressTimeMs = getTimeMs() - startDecompressTimeMs;
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
