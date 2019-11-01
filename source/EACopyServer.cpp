@@ -324,7 +324,11 @@ Server::connectionThread(ConnectionInfo& info)
 		}
 		if (res < 0)
 		{
-			logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+			int error = WSAGetLastError();
+			if (error == WSAECONNRESET) // An existing connection was forcibly closed by the remote host.
+				logInfoLinef(L"An existing connection was forcibly closed by the remote host");
+			else
+				logErrorf(L"recv failed with error: %s", getErrorText(error).c_str());
 			return -1;
 		}
 
@@ -667,7 +671,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					uint activeConnectionCount = m_activeConnectionCount - 1; // Skip the connection that is asking for this info
 
-					wchar_t buffer[2048];
+					wchar_t buffer[4096];
 					StringCbPrintfW(buffer, sizeof(buffer),
 						L"   Server v%S  (c) Electronic Arts.  All Rights Reserved.\n"
 						L"\n"
@@ -686,6 +690,20 @@ Server::connectionThread(ConnectionInfo& info)
 						, toHourMinSec(uptimeMs).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
 						, toPretty(freeVolumeSpace).c_str(), toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());
+
+					bool isFirst = true;
+					info.log.traverseRecentErrors([&](const WString& error)
+						{
+							if (isFirst)
+							{
+								wcscat_s(buffer, eacopy_sizeof_array(buffer), L"\n   Recent errors:\n");
+								isFirst = false;
+							}
+							wcscat_s(buffer, L"      ");
+							wcscat_s(buffer, eacopy_sizeof_array(buffer), error.c_str());
+							wcscat_s(buffer, L"\n");
+							return true;
+						});
 
 					uint bufferLen = (uint)wcslen(buffer);
 					if (!sendData(info.socket, &bufferLen, sizeof(bufferLen)))

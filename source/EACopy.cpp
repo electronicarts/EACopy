@@ -357,7 +357,7 @@ int wmain(int argc, wchar_t* argv[])
 		settings.destDirectory = optimizeUncPath(argv[2], temp, false);
 		Client client(settings);
 		Log log;
-		log.init(nullptr, false);
+		log.init(nullptr, false, false);
 		LogContext logContext(log);
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
@@ -377,7 +377,7 @@ int wmain(int argc, wchar_t* argv[])
 	//SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
 	Log log;
-	log.init(settings.logFileName.c_str(), settings.logDebug);
+	log.init(settings.logFileName.c_str(), settings.logDebug, false);
 	LogContext logContext(log);
 
 	if (settings.printJobHeader)

@@ -234,7 +234,7 @@ void WINAPI serviceMain(DWORD dwArgc, LPWSTR *lpszArgv)
 	if (!readSettings(settings, logFileName, g_argc, g_argv))
 		goto cleanup;
 
-	log.init(logFileName.c_str(), settings.logDebug);
+	log.init(logFileName.c_str(), settings.logDebug, true);
 	g_server.start(settings, log, false, reportServiceStatus);
 	log.deinit();
 
@@ -455,7 +455,7 @@ int __cdecl wmain(int argc, wchar_t** argv)
 	logInfoLinef(L"Server v%S - Starting... (Add /? for help)", ServerVersion);
 
 	Log log;
-	log.init(logFileName.c_str(), settings.logDebug);
+	log.init(logFileName.c_str(), settings.logDebug, true);
 	ScopeGuard logGuard([&]() { log.deinit(); });
 
 	g_server.start(settings, log, true, reportServiceStatus);

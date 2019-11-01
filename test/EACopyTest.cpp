@@ -108,8 +108,8 @@ struct TestBase
 			bool log = false;
 			if (log)
 			{
-				clientLog.init((name + L"_ClientLog.txt").c_str(), true);
-				serverLog.init((name + L"_ServerLog.txt").c_str(), true);
+				clientLog.init((name + L"_ClientLog.txt").c_str(), true, false);
+				serverLog.init((name + L"_ServerLog.txt").c_str(), true, false);
 			}
 			wprintf(L"Running test %2u/%u '%s'...", testIndex, count, name.c_str());
 			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));

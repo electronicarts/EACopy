@@ -104,7 +104,23 @@ Client::process(Log& log, ClientStats& outStats)
 			if (destDirCreated)
 				return true;
 			destDirCreated = true;
-			return ensureDirectory(destDir.c_str());
+
+			int retryCount = m_settings.retryCount;
+			while (true)
+			{
+				if (ensureDirectory(destDir.c_str()))
+					return true;
+
+				if (retryCount-- == 0)
+					return false;
+
+				// Reset last error and try again!
+				logContext.resetLastError();
+				logInfoLinef(L"Warning - Failed to create directory %s, retrying in %i seconds", destDir.c_str(), m_settings.retryWaitTimeMs/1000);
+				Sleep(m_settings.retryWaitTimeMs);
+
+				++outStats.retryCount;
+			}
 		};
 
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
@@ -232,15 +248,15 @@ Client::reportServerStatus(Log& log)
 	if (!receiveData(connection->m_socket, &dataSize, sizeof(dataSize)))
 		return -1;
 
-	wchar_t buffer[2048];
-	assert(dataSize < sizeof(buffer)-1);
-	if (!receiveData(connection->m_socket, buffer, dataSize*2))
+	Vector<wchar_t> buffer;
+	buffer.resize(dataSize + 1);
+	if (!receiveData(connection->m_socket, buffer.data(), dataSize*2))
 		return -1;
 
 	buffer[dataSize] = 0;
 	
 	// Print report
-	logInfof(buffer);
+	logInfof(buffer.data());
 	return 0;
 }
 
@@ -1311,7 +1327,10 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 			return false;
 
 		if (!writeSuccess)
+		{
+			logErrorf(L"Failed to write file %s: server returned failure after sending file", dst);
 			return false;
+		}
 
 		outWritten = cmd.info.fileSize;
 		return true;
@@ -1334,7 +1353,10 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 			return false;
 
 		if (!writeSuccess)
+		{
+			logErrorf(L"Failed to write file %s: server returned failure after sending file delta", dst);
 			return false;
+		}
 
 		outWritten = cmd.info.fileSize;
 		return true;

@@ -104,6 +104,15 @@ void Log::writeEntry(bool isDebuggerPresent, const LogEntry& entry)
 			fputws(L"\n", stdout);
 		g_logCs.leave();
 	}
+
+	if (entry.isError && m_cacheRecentErrors)
+	{
+		g_logCs.enter();
+		if (m_recentErrors.size() > 10)
+			m_recentErrors.pop_back();
+		m_recentErrors.push_front(entry.str.c_str());
+		g_logCs.leave();
+	}
 }
 
 uint Log::processLogQueue(bool isDebuggerPresent)
@@ -145,9 +154,10 @@ DWORD Log::logQueueThread()
 	return 0;
 }
 
-void Log::init(const wchar_t* logFile, bool logDebug)
+void Log::init(const wchar_t* logFile, bool logDebug, bool cacheRecentErrors)
 {
 	m_logDebug = logDebug;
+	m_cacheRecentErrors = cacheRecentErrors;
 	m_logFileName = logFile ? logFile : L"";
 	m_logQueueCs.enter();
 	m_logQueue = new List<LogEntry>();
@@ -180,9 +190,17 @@ void Log::deinit(const Function<void()>& lastChanceLogging)
 	m_logQueueCs.leave();
 }
 
+void Log::traverseRecentErrors(const Function<bool(const WString&)>& errorFunc)
+{
+		g_logCs.enter();
+		for (auto& err : m_recentErrors)
+			errorFunc(err);
+		g_logCs.leave();
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void logInternal(const wchar_t* buffer, bool flush, bool linefeed)
+void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 {
 	if (LogContext* context = t_logContext)
 	{
@@ -190,7 +208,7 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed)
 		log.m_logQueueCs.enter();
 		if (log.m_logQueue)
 		{
-			log.m_logQueue->push_back({buffer, linefeed});
+			log.m_logQueue->push_back({buffer, linefeed, isError});
 			log.m_logQueueFlush |= flush;
 		}
 		log.m_logQueueCs.leave();
@@ -220,7 +238,7 @@ void logErrorf(const wchar_t* fmt, ...)
 	wcscpy_s(buffer, eacopy_sizeof_array(buffer), L"!!ERROR - ");
 	auto len = wcslen(buffer);
 	int written = vswprintf_s(buffer + len, eacopy_sizeof_array(buffer) - len, fmt, arg);
-	logInternal(buffer, true, true);
+	logInternal(buffer, true, true, true);
 	va_end(arg);
 	if (LogContext* c = t_logContext)
 		c->m_lastError = -1;
@@ -232,7 +250,7 @@ void logInfof(const wchar_t* fmt, ...)
     va_start(arg, fmt);
 	wchar_t buffer[4096];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
-	logInternal(buffer, false, false);
+	logInternal(buffer, false, false, false);
 	va_end(arg);
 }
 
@@ -243,13 +261,13 @@ void logInfoLinef(const wchar_t* fmt, ...)
 	wchar_t buffer[4096];
 	int count = vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
 	if (count)
-		logInternal(buffer, false, true);
+		logInternal(buffer, false, true, false);
 	va_end(arg);
 }
 
 void logInfoLinef()
 {
-	logInternal(L"", false, true);
+	logInternal(L"", false, true, false);
 }
 
 void logDebugf(const wchar_t* fmt, ...)
@@ -262,7 +280,7 @@ void logDebugf(const wchar_t* fmt, ...)
     va_start(arg, fmt);
 	wchar_t buffer[4096];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
-	logInternal(buffer, false, false);
+	logInternal(buffer, false, false, false);
 	va_end(arg);
 }
 
@@ -276,7 +294,7 @@ void logDebugLinef(const wchar_t* fmt, ...)
     va_start(arg, fmt);
 	wchar_t buffer[4096];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
-	logInternal(buffer, false, true);
+	logInternal(buffer, false, true, false);
 	va_end(arg);
 }
 
@@ -415,7 +433,11 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
 
-	logErrorf(L"Error creating directory %s: %s", directory, getLastErrorText().c_str());
+	DWORD error = GetLastError();
+	if (error == ERROR_ALREADY_EXISTS) 
+		return true;
+
+	logErrorf(L"Error creating directory %s: %s", directory, getErrorText(error).c_str());
 	return false;
 }
 
@@ -958,6 +980,12 @@ WString getErrorText(uint error)
 
 	if (!lpszTemp)
 		return WString();
+
+	// Remove line feed in the end
+	if (dwRet > 0 && lpszTemp[dwRet-1] == L'\n')
+		lpszTemp[--dwRet] = 0;
+	if (dwRet > 0 && lpszTemp[dwRet-1] == L'\r')
+		lpszTemp[--dwRet] = 0;
 
 	WString res = lpszTemp;
 	LocalFree((HLOCAL)lpszTemp);

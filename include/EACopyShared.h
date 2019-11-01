@@ -180,12 +180,13 @@ void					logScopeLeave();
 class Log
 {
 public:
-	void				init(const wchar_t* logFile, bool logDebug);
+	void				init(const wchar_t* logFile, bool logDebug, bool cacheRecentErrors);
 	void				deinit(const Function<void()>& lastChanceLogging = Function<void()>());
 	bool				isDebug() const { return m_logDebug; }
+	void				traverseRecentErrors(const Function<bool(const WString&)>& errorFunc);
 
 private:
-	struct				LogEntry { WString str; bool linefeed; };
+	struct				LogEntry { WString str; bool linefeed; bool isError; };
 
 	void				writeEntry(bool isDebuggerPresent, const LogEntry& entry);
 	uint				processLogQueue(bool isDebuggerPresent);
@@ -193,15 +194,16 @@ private:
 
 	WString				m_logFileName;
 	bool				m_logDebug = false;
-
+	bool				m_cacheRecentErrors = false;
 	CriticalSection		m_logQueueCs;
 	List<LogEntry>*		m_logQueue = nullptr;
+	List<WString>		m_recentErrors;
 	WString				m_logLastText;
 	bool				m_logQueueFlush = false;
 	Thread*				m_logThread = nullptr;
 	HANDLE				m_logFile = INVALID_HANDLE_VALUE;
 	bool				m_logThreadActive = false;
-	friend void			logInternal(const wchar_t* buffer, bool flush, bool linefeed);
+	friend void			logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError);
 	friend void			logScopeEnter();
 	friend void			logScopeLeave();
 };
