@@ -143,8 +143,8 @@ bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 DWORD					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
 bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true);
-bool					deleteDirectory(const wchar_t* directory);
-bool					deleteAllFiles(const wchar_t* directory);
+bool					deleteDirectory(const wchar_t* directory, bool errorOnMissingFile = true);
+bool					deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
 bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true);
 bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
@@ -156,11 +156,12 @@ bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* d
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO);
-bool					deleteFile(const wchar_t* fullPath);
+bool					deleteFile(const wchar_t* fullPath, bool errorOnMissingFile = true);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);
 void					convertSlashToBackslash(char* path);
 void					convertSlashToBackslash(char* path, size_t size);
+const wchar_t*			convertToShortPath(const wchar_t* path, WString& outTempBuffer);
 
 
 
@@ -168,6 +169,7 @@ void					convertSlashToBackslash(char* path, size_t size);
 // Logging
 
 void					logErrorf(const wchar_t* fmt, ...);
+void					logInfo(const wchar_t* str);
 void					logInfof(const wchar_t* fmt, ...);
 void					logInfoLinef(const wchar_t* fmt, ...);
 void					logInfoLinef();

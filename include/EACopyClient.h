@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.995" CFG_STR; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.997" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -65,6 +65,8 @@ struct ClientStats
 	u64					linkCount					= 0;
 	u64					linkSize					= 0;
 	u64					linkTimeMs					= 0;
+	u64					createDirCount				= 0;
+	u64					createDirTimeMs				= 0;
 	u64					failCount					= 0;
 	u64					retryCount					= 0;
 	u64					connectTimeMs				= 0;
@@ -118,11 +120,11 @@ private:
 	void				resetWorkState(Log& log);
 	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
 	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
-	bool				connectToServer(const wchar_t* networkPath, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
+	bool				connectToServer(const wchar_t* networkPath, bool isMainConnection, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(ClientStats& stats);
-	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc);
+	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
-	bool				handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc);
+	bool				handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc);
 	bool				handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath);
@@ -130,7 +132,7 @@ private:
 	bool				purgeFilesInDirectory(const WString& destPath, int depthLeft);
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
-	Connection*			createConnection(const wchar_t* networkPath, ClientStats& stats, bool& failedToConnect);
+	Connection*			createConnection(const wchar_t* networkPath, bool isMainConnection, ClientStats& stats, bool& failedToConnect);
 
 
 	// Settings
@@ -171,11 +173,12 @@ public:
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
-	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
-	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
+	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
+	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
 	bool				sendDeleteAllFiles(const wchar_t* dir);
 	bool				sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext);
+	bool				sendGetFileAttributes(const wchar_t* file, FileInfo& outInfo, DWORD& outAttributes, DWORD& outError);
 
 	bool				destroy();
 

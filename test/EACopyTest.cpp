@@ -170,8 +170,11 @@ struct TestBase
 			name = lastSlash + 1;
 		}
 
-		//ensureDirectory((dir + name).c_str());
-		HANDLE file = CreateFileW((dir + name).c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		WString tempBuffer;
+		WString fullFilename = dir + name;
+		const wchar_t* fullFileName = convertToShortPath(fullFilename.c_str(), tempBuffer);
+
+		HANDLE file = CreateFileW(fullFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 		EACOPY_ASSERT(file != INVALID_HANDLE_VALUE);
 
 		u64 dataSize = min(size, 1024*1024*256ull);
@@ -218,9 +221,10 @@ struct TestBase
 		return isEqual((testSourceDir + file).c_str(), (testDestDir + file).c_str());
 	}
 
-	void createFileList(const wchar_t* name, const char* fileOrWildcard)
+	void createFileList(const wchar_t* name, const char* fileOrWildcard, bool source = true)
 	{
-		WString fileName = testSourceDir + L'\\' + name;
+		WString dir = source ? testSourceDir : testDestDir;
+		WString fileName = dir + L'\\' + name;
 		HANDLE fileHandle;
 		(void)fileHandle; // suppress unused variable warning
 
@@ -1306,7 +1310,7 @@ EACOPY_TEST(ServerReportUsingBadPath)
 	ClientSettings clientSettings;
 	clientSettings.destDirectory = L"\\\\localhost\\";
 	Client client(clientSettings);
-	EACOPY_ASSERT(client.reportServerStatus(clientLog) == 0);
+	EACOPY_ASSERT(client.reportServerStatus(clientLog) == -1);
 }
 
 EACOPY_TEST(ServerLinkNotExists)
@@ -1466,6 +1470,60 @@ EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
 }
 #endif
 
+EACOPY_TEST(CopyFileListDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
+	createTestFile(L"Foo.txt", 10);
+	createFileList(L"FileList.txt", "Foo.txt");
+
+	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
+	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
+
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerCopyFileListDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
+	createTestFile(L"Foo.txt", 10);
+	createFileList(L"FileList.txt", "Foo.txt");
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
+
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerCopyMissingFileListDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
+	createFileList(L"FileList.txt", "Foo.txt");
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
+	clientSettings.retryCount = 0;
+
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) != 0);
+}
+
 EACOPY_TEST(CopyLargeFile)
 {
 	u64 fileSize = u64(INT_MAX) + 2*1024*1024 + 123;
@@ -1606,6 +1664,37 @@ EACOPY_TEST(UsedByOtherProcessError)
 	EACOPY_ASSERT(clientStats.failCount == 1);
 	EACOPY_ASSERT(clientStats.copyCount == 0);
 }
+
+EACOPY_TEST(FileGoingOverMaxPath)
+{
+	createTestFile(L"FooLongLongName.txt", 100);
+	createTestFile(L"BarLongLongName.txt", 101);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	while (clientSettings.destDirectory.size() <= MAX_PATH)
+		clientSettings.destDirectory += L"FolderName\\";
+	clientSettings.destDirectory.resize(246);
+	clientSettings.destDirectory += L"\\";
+
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isEqual((testSourceDir + L"FooLongLongName.txt").c_str(), (clientSettings.destDirectory + L"FooLongLongName.txt").c_str()));
+	EACOPY_ASSERT(isEqual((testSourceDir + L"BarLongLongName.txt").c_str(), (clientSettings.destDirectory + L"BarLongLongName.txt").c_str()));
+}
+
+EACOPY_TEST(PathGoingOverMaxPath)
+{
+	createTestFile(L"Foo.txt", 100);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	while (clientSettings.destDirectory.size() <= MAX_PATH + 100)
+		clientSettings.destDirectory += L"wefwqwdqwdef\\";
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isEqual((testSourceDir + L"Foo.txt").c_str(), (clientSettings.destDirectory + L"Foo.txt").c_str()));
+}
+
+
 
 void printHelp()
 {

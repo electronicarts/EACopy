@@ -215,7 +215,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 	if (!openFileRead(src, sourceFile, useBufferedIO))
 		return false;
 
-	ScopeGuard closeFile([&]() { CloseHandle(sourceFile); });
+	ScopeGuard closeSourceFile([&]() { closeFile(src, sourceFile); });
 	copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
 
 

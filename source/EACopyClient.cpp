@@ -56,9 +56,12 @@ Client::process(Log& log, ClientStats& outStats)
 		m_useDestServerFailed = true;
 
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
-	if (!connectToServer(destDir.c_str(), m_destConnection, m_useDestServerFailed, outStats))
+	if (!connectToServer(destDir.c_str(), true, m_destConnection, m_useDestServerFailed, outStats))
 		return -1;
 	ScopeGuard destConnectionCleanup([this]() { delete m_destConnection; m_destConnection = nullptr; });
+
+	if (m_settings.threadCount > 0)
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
 	// Spawn worker threads that will copy the files
 	Vector<HANDLE> workerThreadList(m_settings.threadCount);
@@ -85,7 +88,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 	// Connect to source if no destination is set
 	if (!m_destConnection)
-		if (!connectToServer(m_settings.sourceDirectory.c_str(), m_sourceConnection, m_useSourceServerFailed, outStats))
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), true, m_sourceConnection, m_useSourceServerFailed, outStats))
 			return false;
 	ScopeGuard sourceConnectionGuard([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
 
@@ -105,6 +108,7 @@ Client::process(Log& log, ClientStats& outStats)
 				return true;
 			destDirCreated = true;
 
+			u64 startTime = getTimeMs();
 			int retryCount = m_settings.retryCount;
 			while (true)
 			{
@@ -121,6 +125,8 @@ Client::process(Log& log, ClientStats& outStats)
 
 				++outStats.retryCount;
 			}
+			outStats.createDirTimeMs += getTimeMs() - startTime;
+			++outStats.createDirCount;
 		};
 
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
@@ -133,12 +139,12 @@ Client::process(Log& log, ClientStats& outStats)
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-				if (!findFilesInDirectory(sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc))
+				if (!findFilesInDirectory(sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc, outStats))
 					break;
 		}
 	}
 
-	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs;
+	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs - outStats.createDirTimeMs;
 
 
 	// Process files (worker threads are doing the same right now)
@@ -228,7 +234,7 @@ Client::reportServerStatus(Log& log)
 	ClientStats stats;
 
 	// Create connection
-	Connection* connection = createConnection(m_settings.destDirectory.c_str(), stats, useServerFailed);
+	Connection* connection = createConnection(m_settings.destDirectory.c_str(), true, stats, useServerFailed);
 	if (!connection)
 	{
 		logErrorf(L"Failed to connect to server. Is path '%s' a proper smb path?", m_settings.destDirectory.c_str());
@@ -256,7 +262,7 @@ Client::reportServerStatus(Log& log)
 	buffer[dataSize] = 0;
 	
 	// Print report
-	logInfof(buffer.data());
+	logInfo(buffer.data());
 	return 0;
 }
 
@@ -312,7 +318,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			bool linked;
 
 			// Send file to server (might be skipped if server already has it).. returns false if it fails
-			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), size, written, linked, copyContext))
+			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, written, linked, copyContext))
 			{
 				if (written)
 				{
@@ -338,7 +344,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			u64 startTimeMs = getTimeMs();
 			u64 size;
 			u64 read;
-			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), size, read, copyContext))
+			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
 			{
 				if (read)
 				{
@@ -449,7 +455,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 }
 
 bool
-Client::connectToServer(const wchar_t* networkPath, Connection*& outConnection, bool& failedToConnect, ClientStats& stats)
+Client::connectToServer(const wchar_t* networkPath, bool isMainConnection, Connection*& outConnection, bool& failedToConnect, ClientStats& stats)
 {
 	outConnection = nullptr;
 	if (m_settings.useServer == UseServer_Disabled || failedToConnect)
@@ -460,7 +466,7 @@ Client::connectToServer(const wchar_t* networkPath, Connection*& outConnection, 
 
 	u64 startConnect = getTimeMs();
 	stats.serverAttempt = true;
-	outConnection = createConnection(networkPath, stats, failedToConnect);
+	outConnection = createConnection(networkPath, isMainConnection, stats, failedToConnect);
 	stats.connectTimeMs += getTimeMs() - startConnect;
 
 	if (failedToConnect && m_settings.useServer == UseServer_Required)
@@ -498,13 +504,13 @@ Client::workerThread(ClientStats& stats)
 {
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
 	Connection* destConnection;
-	if (!connectToServer(m_settings.destDirectory.c_str(), destConnection, m_useDestServerFailed, stats))
+	if (!connectToServer(m_settings.destDirectory.c_str(), false, destConnection, m_useDestServerFailed, stats))
 		return false;
 	ScopeGuard destConnectionGuard([&] { delete destConnection; });
 
 	Connection* sourceConnection = nullptr;
 	if (!destConnection)
-		if (!connectToServer(m_settings.sourceDirectory.c_str(), sourceConnection, m_useSourceServerFailed, stats))
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), false, sourceConnection, m_useSourceServerFailed, stats))
 			return false;
 	ScopeGuard sourcesConnectionGuard([&] { delete sourceConnection; });
 
@@ -557,7 +563,7 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 }
 
 bool
-Client::handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc)
+Client::handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
 	WString newSourceDirectory = sourcePath + directory + L'\\';
 	WString newDestDirectory = destPath;
@@ -581,8 +587,11 @@ Client::handleDirectory(const WString& sourcePath, const WString& destPath, cons
 		if (!m_handledFiles.insert(relDir).second)
 			return true;
 
+		u64 startTime = getTimeMs();
 		if (!ensureDirectory(newDestDirectory.c_str()))
 			return false;
+		stats.createDirTimeMs += getTimeMs() - startTime;
+		++stats.createDirCount;
 
 		if (m_settings.dirCopyFlags != 0)
 		{
@@ -598,7 +607,7 @@ Client::handleDirectory(const WString& sourcePath, const WString& destPath, cons
 			return false;
 
 	// Find files to copy
-	return findFilesInDirectory(newSourceDirectory, newDestDirectory, wildcard, depthLeft, createDirectoryFunc);
+	return findFilesInDirectory(newSourceDirectory, newDestDirectory, wildcard, depthLeft, createDirectoryFunc, stats);
 }
 
 bool
@@ -608,62 +617,79 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 	if (fileName[0])
 		fullFileName += fileName;
 
-	WIN32_FILE_ATTRIBUTE_DATA fd;
+	DWORD attributes = 0;
+	FileInfo fileInfo;
 
-	int retryCount = m_settings.retryCount;
-	while (true)
 	{
-		// Get file attributes (and allow retry if fails)
-		BOOL ret = GetFileAttributesExW(fullFileName.c_str(), GetFileExInfoStandard, &fd); 
-		if (ret != 0)
-			break;
-
-		wchar_t errorDesc[1024];
-
-		DWORD error = GetLastError();
-		if (ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error)
+		int retryCount = m_settings.retryCount;
+		while (true)
 		{
-			for (auto& optionalWildcard : m_settings.optionalWildcards)
-				if (PathMatchSpecW(fileName, optionalWildcard.c_str()))
+			DWORD error = 0;
+
+			// Get file attributes (and allow retry if fails)
+			if (m_sourceConnection)
+			{
+				if (!m_sourceConnection->sendGetFileAttributes(fileName, fileInfo, attributes, error))
+					return false;
+				if (!error)
+					break;
+			}
+			else
+			{
+				WIN32_FILE_ATTRIBUTE_DATA fd;
+				BOOL ret = GetFileAttributesExW(fullFileName.c_str(), GetFileExInfoStandard, &fd); 
+				if (ret != 0)
+				{
+					fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
+					fileInfo.lastWriteTime = fd.ftLastWriteTime;
+					fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+					attributes = fd.dwFileAttributes;
+					break;
+				}
+				error = GetLastError();
+			}
+
+			wchar_t errorDesc[1024];
+
+			if (ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error)
+			{
+				for (auto& optionalWildcard : m_settings.optionalWildcards)
+					if (PathMatchSpecW(fileName, optionalWildcard.c_str()))
+						return true;
+				for (auto& excludeWildcard : m_settings.excludeWildcards)
+					if (PathMatchSpecW(fileName, excludeWildcard.c_str()))
+						return true;
+				if (m_handledFiles.find(fileName) != m_handledFiles.end())
 					return true;
-			for (auto& excludeWildcard : m_settings.excludeWildcards)
-				if (PathMatchSpecW(fileName, excludeWildcard.c_str()))
-					return true;
-			if (m_handledFiles.find(fileName) != m_handledFiles.end())
+				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"Can't find file/directory %s", fullFileName.c_str());
+			}
+			else
+				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"%s getting attributes from file/directory %s", getErrorText(error).c_str(), fullFileName.c_str());
+
+			if (retryCount-- == 0)
+			{
+				++stats.failCount;
+				logErrorf(errorDesc);
 				return true;
-			StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"Can't find file/directory %s", fullFileName.c_str());
+			}
+
+			// Reset last error and try again!
+			logContext.resetLastError();
+			logInfoLinef(L"Warning - %s, retrying in %i seconds", errorDesc, m_settings.retryWaitTimeMs/1000);
+			Sleep(m_settings.retryWaitTimeMs);
+
+			++stats.retryCount;
 		}
-		else
-			StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"%s getting attributes from file/directory %s", getErrorText(error).c_str(), fullFileName.c_str());
-
-		if (retryCount-- == 0)
-		{
-			++stats.failCount;
-			logErrorf(errorDesc);
-			return true;
-		}
-
-		// Reset last error and try again!
-		logContext.resetLastError();
-		logInfoLinef(L"Warning - %s, retrying in %i seconds", errorDesc, m_settings.retryWaitTimeMs/1000);
-		Sleep(m_settings.retryWaitTimeMs);
-
-		++stats.retryCount;
 	}
 
 	// Handle directory
-	if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+	if (attributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
-		if (!handleDirectory(sourcePath, destPath, fileName, L"*.*", m_settings.copySubdirDepth, handleFileFunc))
+		if (!handleDirectory(sourcePath, destPath, fileName, L"*.*", m_settings.copySubdirDepth, handleFileFunc, stats))
 			return false;
 	}
-	else //if (fd.dwFileAttributes & FILE_ATTRIBUTE_NORMAL) // Handle file
+	else //if (attributes & FILE_ATTRIBUTE_NORMAL) // Handle file
 	{
-		FileInfo fileInfo;
-		fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-		fileInfo.lastWriteTime = fd.ftLastWriteTime;
-		fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-
 		// This can happen in certain scenarios when wildcard files are used. The file is actually part of the source path
 		if (!*fileName)
 		{
@@ -690,7 +716,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 }
 
 bool
-Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc)
+Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
 	if (m_sourceConnection)
 	{
@@ -712,14 +738,18 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 			}
 			else if (depthLeft)
 			{
-				if (!handleDirectory(sourcePath, destPath, file.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc))
+				if (!handleDirectory(sourcePath, destPath, file.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
 					return false;
 			}
 		}
 	}
 	else
 	{
-		WString searchStr = sourcePath + wildcard;
+		WString tempBuffer;
+		const wchar_t* validSourcePath = convertToShortPath(sourcePath.c_str(), tempBuffer);
+
+		WString searchStr = validSourcePath;
+		searchStr += wildcard;
 
 		WIN32_FIND_DATAW fd; 
 		HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
@@ -744,12 +774,19 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 			else if (depthLeft)
 			{
 				if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
-					if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc))
+					if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
 						return false;
 			}
 
 		}
 		while(FindNextFileW(hFind, &fd)); 
+
+		DWORD error = GetLastError();
+		if (error != ERROR_NO_MORE_FILES)
+		{
+			logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+			return false;
+		}
 	}
 	return true;
 }
@@ -759,23 +796,29 @@ Client::handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString&
 {
 	WString fullPath;
 	if (isAbsolutePath(fileName.c_str()))
-		fullPath = fileName;
-	else
-		fullPath = sourcePath + L'\\' + fileName;
-
-	HANDLE hFile = CreateFileW(fullPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (hFile == INVALID_HANDLE_VALUE)
 	{
-		DWORD error = GetLastError();
-		if (ERROR_FILE_NOT_FOUND == error)
-			logErrorf(L"Can't find input file %s", fullPath.c_str());
-		else
-			logErrorf(L"Error %s. Failed to open input file %s", getErrorText(fullPath.c_str(), error).c_str(), fullPath.c_str());
-		return false;
+		fullPath = fileName;
+	}
+	else
+	{
+		fullPath = sourcePath + fileName;
+
+		// If there is a source connection we can read the file to local drive first and then read that file using normal commands
+		if (m_sourceConnection)
+		{
+			ensureDirectory(destPath.c_str());
+			u64 fileSize;
+			u64 read;
+			if (!m_sourceConnection->sendReadFileCommand(fullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
+				return false;
+			fullPath = destPath + fileName;
+		}
 	}
 
-
-	ScopeGuard _([&]() { CloseHandle(hFile); });
+	HANDLE hFile;
+	if (!openFileRead(fullPath.c_str(), hFile, true))
+		return false;
+	ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile); });
 
 	char* buffer = (char*)m_copyContext.buffers[1]; // Important that we use '1'.. '0' is used by SendFindFiles command
 	uint left = 0;
@@ -899,7 +942,26 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 				destPath += argv[1];
 				destPath +=  L"\\";
-				ensureDirectory(destPath.c_str());
+
+				u64 startTime = getTimeMs();
+				int retryCount = m_settings.retryCount;
+				while (true)
+				{
+					if (ensureDirectory(destPath.c_str()))
+						break;
+
+					if (retryCount-- == 0)
+						return false;
+
+					// Reset last error and try again!
+					logContext.resetLastError();
+					logInfoLinef(L"Warning - Failed to create directory %s, retrying in %i seconds", destPath.c_str(), m_settings.retryWaitTimeMs/1000);
+					Sleep(m_settings.retryWaitTimeMs);
+
+					++stats.retryCount;
+				}
+				stats.createDirTimeMs += getTimeMs() - startTime;
+				++stats.createDirCount;
 			}
 		}
 
@@ -944,7 +1006,13 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 					WString relativePath(wpath.c_str(), lastSlash);
 					if (!m_handledFiles.insert(relativePath + L'\\').second)
 						return true;
-					return ensureDirectory((destPath + L'\\' + relativePath).c_str());
+
+					u64 startTime = getTimeMs();
+					if (!ensureDirectory((destPath + L'\\' + relativePath).c_str()))
+						return false;
+					stats.createDirTimeMs += getTimeMs() - startTime;
+					++stats.createDirCount;
+					return true;
 				};
 				overriddenHandleFileFunc = &tempHandleFileFunc;
 			}
@@ -1016,6 +1084,13 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 	}
 	while(FindNextFileW(hFind, &fd)); 
         
+	DWORD error = GetLastError();
+	if (error != ERROR_NO_MORE_FILES)
+	{
+		logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+		res = false;
+	}
+
 	return res;
 }
 
@@ -1044,15 +1119,18 @@ const wchar_t*
 Client::getRelativeSourceFile(const WString& sourcePath) const
 {
 	const wchar_t* logStr = sourcePath.c_str();
-	if (wcsstr(logStr, m_settings.sourceDirectory.c_str()))
-		logStr += m_settings.sourceDirectory.size();
+	const WString& baseDir = m_settings.sourceDirectory;
+	if (StrCmpNIW(logStr, baseDir.c_str(), baseDir.size()) == 0)
+		logStr += baseDir.size();
+	//if (wcsstr(logStr, baseDir.c_str()) == logStr)
+	//	logStr += baseDir.size();
 	return logStr;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 Client::Connection*
-Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& failedToConnect)
+Client::createConnection(const wchar_t* networkPath, bool isMainConnection, ClientStats& stats, bool& failedToConnect)
 {
 	u64 startTime = getTimeMs();
 
@@ -1098,7 +1176,17 @@ Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& f
 
 		// Set server name and net directory (this will enable all connections to try to connect)
 		m_networkServerName = networkServerName;
-		m_networkServerNetDirectory = serverNameEnd + 1;
+
+		const wchar_t* netDirectoryStart = serverNameEnd;
+		while (*netDirectoryStart == '\\' && *netDirectoryStart != 0)
+			++netDirectoryStart;
+		if (!*netDirectoryStart)
+		{
+			logErrorf(L"Need to provide a net directory after the network server name (minimum \\\\<server>\\<netdir>): %d", networkPath);
+			return nullptr;
+		}
+
+		m_networkServerNetDirectory = netDirectoryStart;
 	}
 	else if (m_networkServerName.empty())
 		return nullptr;
@@ -1206,6 +1294,7 @@ Client::createConnection(const wchar_t* networkPath, ClientStats& stats, bool& f
 		auto& cmd = *(EnvironmentCommand*)cmdBuf;
 		cmd.commandType = CommandType_Environment;
 		cmd.deltaCompressionThreshold = m_settings.deltaCompressionThreshold;
+		cmd.isMainConnection = isMainConnection;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);
 		
 		if (wcscpy_s(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
@@ -1269,7 +1358,7 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 }
 
 bool
-Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext)
+Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext)
 {
 	outSize = 0;
 	outWritten = 0;
@@ -1288,8 +1377,11 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		return false;
 	}
 	
-	if (getFileInfo(cmd.info, src) == 0)
-		return false;
+	if (srcInfo.fileSize)
+		cmd.info = srcInfo;
+	else
+		if (getFileInfo(cmd.info, src) == 0)
+			return false;
 
 	outSize = cmd.info.fileSize;
 
@@ -1374,7 +1466,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 }
 
 bool
-Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, u64& outSize, u64& outRead, NetworkCopyContext& copyContext)
+Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext)
 {
 	outSize = 0;
 	outRead = 0;
@@ -1402,12 +1494,24 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 			return false;
 		}
 
+	if (srcInfo.fileSize != 0 && equals(srcInfo, cmd.info))
+	{
+		outSize = cmd.info.fileSize;
+		return true;
+	}
+
 	if (!sendCommand(cmd))
 		return false;
 
 	ReadResponse readResponse;
 	if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))
 		return false;
+
+	if (readResponse == ReadResponse_BadSource)
+	{
+		logErrorf(L"Unknown server side error while asking for file %s: sendReadFileCommand failed", fullDest.c_str());
+		return false;
+	}
 
 	// Skip file, we already have the same file as source
 	if (readResponse == ReadResponse_Skip)
@@ -1582,8 +1686,36 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 		}
 	}
 
-
 	return false;
+}
+
+bool
+Client::Connection::sendGetFileAttributes(const wchar_t* path, FileInfo& outInfo, DWORD& outAttributes, DWORD& outError)
+{
+	char buffer[MaxPath*2 + sizeof(GetFileInfoCommand)+1];
+	auto& cmd = *(GetFileInfoCommand*)buffer;
+	cmd.commandType = CommandType_GetFileInfo;
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(path)*2);
+
+	if (wcscpy_s(cmd.path, MaxPath, path))
+	{
+		logErrorf(L"Failed to get file info %s: wcscpy_s in sendGetFileAttributes failed", path);
+		return false;
+	}
+
+	if (!sendCommand(cmd))
+		return false;
+
+	__declspec(align(8)) u8 recvBuffer[3*8+2*4];
+	static_assert(sizeof(recvBuffer) == sizeof(FileInfo) + sizeof(DWORD) + sizeof(DWORD), "");
+
+	if (!receiveData(m_socket, recvBuffer, sizeof(recvBuffer)))
+		return false;
+	outInfo = *(FileInfo*)recvBuffer;
+	outAttributes = *(DWORD*)(recvBuffer + sizeof(FileInfo));
+	outError = *(DWORD*)(recvBuffer + sizeof(FileInfo) + sizeof(DWORD));
+
+	return true;
 }
 
 bool

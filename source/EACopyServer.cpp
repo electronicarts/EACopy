@@ -259,6 +259,13 @@ Server::primeDirectoryRecursive(const WString& directory)
 	} 
 	while(FindNextFileW(hFind, &fd)); 
 
+	DWORD error = GetLastError();
+	if (error != ERROR_NO_MORE_FILES)
+	{
+		logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+		return false;
+	}
+
 	return true;
 }
 
@@ -351,6 +358,10 @@ Server::connectionThread(ConnectionInfo& info)
 					auto& cmd = *(const EnvironmentCommand*)recvBuffer;
 
 					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
+
+					// If this is the main connection from the client machine we bump priority (normally there are 1 main connection and 15 worker connections)
+					if (cmd.isMainConnection)
+						SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
 					if (!getLocalFromNet(localPath, cmd.netDirectory))
 						break;
@@ -583,7 +594,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
 						WString fullPath = localPath + cmd.path;
-						if (!deleteAllFiles(fullPath.c_str()))
+						if (!deleteAllFiles(fullPath.c_str(), false)) // No error on missing files
 							deleteFilesResponse = DeleteFilesResponse_Error;
 					}
 					else
@@ -645,11 +656,36 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 					while(FindNextFileW(hFind, &fd)); 
 
+					DWORD error = GetLastError();
+					if (error != ERROR_NO_MORE_FILES)
+					{
+						logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+						return -1;
+					}
+
 					if (!writeBlock()) // Flush block
 						return -1;
 
 					if (!writeBlock()) // Write empty block to tell client we're done
 						return -1;
+				}
+				break;
+
+			case CommandType_GetFileInfo:
+				{
+					auto& cmd = *(const GetFileInfoCommand*)recvBuffer;
+					WIN32_FIND_DATAW fd; 
+					WString fullPath = localPath + cmd.path;
+					__declspec(align(8)) u8 sendBuffer[3*8+2*4];
+					static_assert(sizeof(sendBuffer) == sizeof(FileInfo) + sizeof(DWORD) + sizeof(DWORD), "");
+					DWORD attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str());
+					*(DWORD*)(sendBuffer + sizeof(FileInfo)) = attributes;
+					DWORD error = 0;
+					if (!attributes)
+						error = GetLastError();
+					*(DWORD*)(sendBuffer + sizeof(FileInfo) + sizeof(DWORD)) = error;
+
+					sendData(info.socket, sendBuffer, sizeof(sendBuffer));
 				}
 				break;
 
@@ -671,8 +707,12 @@ Server::connectionThread(ConnectionInfo& info)
 
 					uint activeConnectionCount = m_activeConnectionCount - 1; // Skip the connection that is asking for this info
 
-					wchar_t buffer[4096];
-					StringCbPrintfW(buffer, sizeof(buffer),
+					// Reuse the thread buffer for report
+					auto buffer = (wchar_t*)copyContext.buffers[0];
+					auto bufferSize = CopyContextBufferSize;
+					auto elementCount = bufferSize/2;
+
+					StringCbPrintfW(buffer, CopyContextBufferSize,
 						L"   Server v%S  (c) Electronic Arts.  All Rights Reserved.\n"
 						L"\n"
 						L"   Protocol: v%u\n"
@@ -696,12 +736,12 @@ Server::connectionThread(ConnectionInfo& info)
 						{
 							if (isFirst)
 							{
-								wcscat_s(buffer, eacopy_sizeof_array(buffer), L"\n   Recent errors:\n");
+								wcscat_s(buffer, elementCount, L"\n   Recent errors:\n");
 								isFirst = false;
 							}
-							wcscat_s(buffer, L"      ");
-							wcscat_s(buffer, eacopy_sizeof_array(buffer), error.c_str());
-							wcscat_s(buffer, L"\n");
+							wcscat_s(buffer, elementCount, L"      ");
+							wcscat_s(buffer, elementCount, error.c_str());
+							wcscat_s(buffer, elementCount, L"\n");
 							return true;
 						});
 

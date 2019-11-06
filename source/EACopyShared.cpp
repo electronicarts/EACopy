@@ -12,6 +12,9 @@
 //#define EACOPY_USE_OUTPUTDEBUGSTRING
 #define EACOPY_IS_DEBUGGER_PRESENT false//::IsDebuggerPresent()
 
+// Use this to use symlinks as workaround to handle long paths... all cases have probably not been tested yet
+#define EACOPY_USE_SYMLINK_FOR_LONGPATHS
+
 namespace eacopy
 {
 
@@ -244,6 +247,11 @@ void logErrorf(const wchar_t* fmt, ...)
 		c->m_lastError = -1;
 }
 
+void logInfo(const wchar_t* str)
+{
+	logInternal(str, false, false, false);
+}
+
 void logInfof(const wchar_t* fmt, ...)
 {
     va_list arg; 
@@ -312,10 +320,123 @@ void logScopeLeave()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+CriticalSection g_temporarySymlinkCacheCs;
+Map<WString, WString> g_temporarySymlinkCache;
+ScopeGuard g_temporarySymlinkGuard([]()  // Will run at static dtor and remove all symlinks
+	{
+		for (auto& i : g_temporarySymlinkCache)
+			RemoveDirectoryW(i.second.c_str());
+	});
+
+bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
+{
+	wchar_t tempPath[MAX_PATH];
+	if (!GetTempPathW(MAX_PATH, tempPath))
+	{
+		logErrorf(L"Failed to get temp path. Reason: %s", getLastErrorText().c_str());
+		return false;
+	}
+
+	uint retryCount = 3;
+	while (true)
+	{
+		// Use time as unique id
+		uint64_t v;
+		if (!QueryPerformanceCounter((union _LARGE_INTEGER*)&v))
+		{
+			logErrorf(L"Failed to get performance counter value. Reason: %s", getLastErrorText().c_str());
+			return false;
+		}
+
+		auto str = std::to_wstring(v);
+		wcscat_s(tempPath, eacopy_sizeof_array(tempPath), str.c_str());
+
+		if (!CreateSymbolicLinkW(tempPath, dest, 0))
+		{
+			if (!retryCount--)
+			{
+				logErrorf(L"Failed to create symbolic link from %s to %s. Reason: %s", tempPath, dest, getLastErrorText().c_str());
+				return false;
+			}
+			Sleep(1);
+		}
+
+		outNewDest = tempPath;
+		return true;
+	}
+
+	return false;
+}
+
+const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
+{
+#if !defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
+	return path;
+#else
+	uint pathLen = wcslen(path);
+	if (pathLen < MAX_PATH - 12)
+		return path;
+
+	uint position = 220;// Use slightly less length than MAX_PATH to increase chances of reusing symlink for multiple files
+	while (path[position] != '\\')
+		--position;
+
+	enum { TempBufferCapacity = 1024 };
+	wchar_t tempBuffer[TempBufferCapacity];
+
+	wcsncpy_s(tempBuffer, TempBufferCapacity, path, position);
+
+	g_temporarySymlinkCacheCs.enter();
+	ScopeGuard csGuard([&]() { g_temporarySymlinkCacheCs.leave();; });
+
+	auto ins = g_temporarySymlinkCache.insert({tempBuffer, WString()});
+	if (ins.second)
+	{
+		if (!createTemporarySymlink(tempBuffer, ins.first->second))
+			return path;
+	}
+
+	wcscpy_s(tempBuffer, TempBufferCapacity, ins.first->second.c_str());
+	wcscat_s(tempBuffer, TempBufferCapacity, path + position);
+
+	outTempBuffer = tempBuffer;
+
+	return outTempBuffer.c_str();
+#endif
+}
+
+void removeTemporarySymlinks(const wchar_t* path)
+{
+#if defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
+	uint pathLen = wcslen(path);
+	if (pathLen < MAX_PATH - 12)
+		return;
+
+	g_temporarySymlinkCacheCs.enter();
+	ScopeGuard csGuard([&]() { g_temporarySymlinkCacheCs.leave();; });
+
+	auto it = g_temporarySymlinkCache.upper_bound(path);
+	while (it != g_temporarySymlinkCache.end())
+	{
+		if (StrCmpNIW(it->first.c_str(), path, pathLen) > 0)
+			break;
+		RemoveDirectoryW(it->second.c_str());
+		it = g_temporarySymlinkCache.erase(it);
+	}
+
+	g_temporarySymlinkCache.clear();
+#endif
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 DWORD getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
 {
+	WString tempBuffer;
+	const wchar_t* validFullFileName = convertToShortPath(fullFileName, tempBuffer);
+
 	WIN32_FILE_ATTRIBUTE_DATA fd;
-	BOOL ret = GetFileAttributesExW(fullFileName, GetFileExInfoStandard, &fd); 
+	BOOL ret = GetFileAttributesExW(validFullFileName, GetFileExInfoStandard, &fd); 
 	if (ret == 0)
 	{
 		outInfo = FileInfo();
@@ -430,7 +551,10 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 			return false;
 	}
 
-	if (CreateDirectoryW(directory, NULL) != 0)
+	WString tempBuffer;
+	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
+
+	if (CreateDirectoryW(validDirectory, NULL) != 0)
 		return true;
 
 	DWORD error = GetLastError();
@@ -441,11 +565,20 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	return false;
 }
 
-bool deleteAllFiles(const wchar_t* directory, bool& outPathFound)
+bool isError(DWORD error, bool errorOnMissingFile)
 {
+	return errorOnMissingFile || ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error;
+}
+
+bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMissingFile)
+{
+	WString tempBuffer;
+	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
+
+
 	outPathFound = true;
     WIN32_FIND_DATAW fd; 
-	WString dir(directory);
+	WString dir(validDirectory);
 	dir += L'\\';
     WString searchStr = dir + L"*.*";
     HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
@@ -471,9 +604,13 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound)
 			WString fullName(dir + fd.cFileName);
 			if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
 				if (!SetFileAttributesW(fullName.c_str(), FILE_ATTRIBUTE_NORMAL))
-					return false;
+					if (isError(GetLastError(), errorOnMissingFile))
+					{
+						logErrorf(L"Failed to set file attributes to writable for file %s", fullName.c_str());
+						return false;
+					}
 
-			if (!deleteFile(fullName.c_str()))
+			if (!deleteFile(fullName.c_str(), errorOnMissingFile))
 				return false;
 		}
 		else if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
@@ -485,44 +622,62 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound)
 				// Delete reparsepoint and treat path as not existing
 				if (!RemoveDirectoryW(fullName.c_str()))
 				{
-					logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getLastErrorText().c_str());
-					return false;
+					DWORD error = GetLastError();
+					if (isError(error, errorOnMissingFile))
+					{
+						logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getErrorText(error).c_str());
+						return false;
+					}
 				}
 			}
-			else if (!deleteDirectory(fullName.c_str()))
+			else if (!deleteDirectory(fullName.c_str(), errorOnMissingFile))
 				return false;
 		}
 
 	}
 	while(FindNextFileW(hFind, &fd)); 
 
+	DWORD error = GetLastError();
+
 	closeFindGuard.execute(); // Need to close find handle otherwise RemoveDirectory will fail now and then
 
-	return true;
+	if (error == ERROR_NO_MORE_FILES)
+		return true;
+
+	logErrorf(L"FindNextFile failed for path %s", directory);
+	return false;
 }
 
-bool deleteAllFiles(const wchar_t* directory)
+bool deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile)
 {
 	bool pathFound;
-	return deleteAllFiles(directory, pathFound);
+	return deleteAllFiles(directory, pathFound, errorOnMissingFile);
 }
 
-bool deleteDirectory(const wchar_t* directory)
+bool deleteDirectory(const wchar_t* directory, bool errorOnMissingFile)
 {
 	bool outPathFound;
-	if (!deleteAllFiles(directory, outPathFound))
+	if (!deleteAllFiles(directory, outPathFound, errorOnMissingFile))
 		return false;
 
 	if (!outPathFound)
 		return true;
 
-	if (!RemoveDirectoryW(directory))
-	{
-		logErrorf(L"Trying to remove directory  %s: %s", directory, getLastErrorText().c_str());
-		return false;
-	}
+	// Clear out temporary symlinks
+	removeTemporarySymlinks(directory);
 
-	return true;
+	WString tempBuffer;
+	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
+
+	if (RemoveDirectoryW(validDirectory))
+		return true;
+
+	DWORD error = GetLastError();
+	if (!isError(error, errorOnMissingFile))
+		return true;
+
+	logErrorf(L"Trying to remove directory  %s: %s", directory, getErrorText(error).c_str());
+	return false;
 }
 
 bool isAbsolutePath(const wchar_t* path)
@@ -715,6 +870,14 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 {
 	outExisted = false;
 
+
+	// This kind of sucks but since machines might not have long paths enabled we have to work around it by making a symlink and copy through that
+	WString tempBuffer1;
+	const wchar_t* validSource = convertToShortPath(source, tempBuffer1);
+
+	WString tempBuffer2;
+	const wchar_t* validDest = convertToShortPath(dest, tempBuffer2);
+
 	if (UseOwnCopyFunction)
 	{
 		enum { ReadChunkSize = 2 * 1024 * 1024 };
@@ -737,7 +900,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
 		u64 startCreateReadTimeMs = getTimeMs();
-		HANDLE sourceFile = CreateFileW(source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
+		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
 		copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
 
 		if (sourceFile == INVALID_HANDLE_VALUE)
@@ -754,7 +917,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 
 		u64 startCreateWriteTimeMs = getTimeMs();
-		HANDLE destFile = CreateFileW(dest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
+		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
 		copyStats.createWriteTimeMs += getTimeMs() - startCreateWriteTimeMs;
 
 		if (destFile == INVALID_HANDLE_VALUE)
@@ -895,7 +1058,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		DWORD flags = 0;
 		if (failIfExists)
 			flags |= COPY_FILE_FAIL_IF_EXISTS;
-		if (CopyFileExW(source, dest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
+		if (CopyFileExW(validSource, validDest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
 			return true;
 
 		DWORD error = GetLastError();
@@ -905,23 +1068,29 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			return false;
 		}
 
-		logErrorf(L"Failed to copy file %s to %s. Reason: %s", source, dest, getErrorText(error).c_str());
+		logErrorf(L"Failed to copy file %s to %s. Reason: %s%s", source, dest, getErrorText(error).c_str());
 		return false;
 	}
 }
 
-bool deleteFile(const wchar_t* fullPath)
+bool deleteFile(const wchar_t* fullPath, bool errorOnMissingFile)
 {
-	if (DeleteFileW(fullPath) != 0)
+	WString tempBuffer;
+	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer);
+
+	if (DeleteFileW(validFullPath) != 0)
 		return true;
 
 	DWORD error = GetLastError();
+	if (!isError(error, errorOnMissingFile))
+		return true;
+
 	if (ERROR_FILE_NOT_FOUND == error)
 	{
 		logErrorf(L"File not found. Failed to delete file %s", fullPath);
 		return false;
 	}
-	logErrorf(L"Failed to delete file %s. Reason: ", fullPath, getErrorText(error).c_str());
+	logErrorf(L"Failed to delete file %s. Reason: %s", fullPath, getErrorText(error).c_str());
 	return false;
 }
 
