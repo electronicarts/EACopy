@@ -533,12 +533,14 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 		if (const wchar_t* lastSlash = wcsrchr(fileName, L'\\'))
 			destFileName = lastSlash + 1;
 
+	WString destFullPath = destPath + destFileName;
+
 	// Chec if file should be excluded because of wild cards
 	for (auto& excludeWildcard : m_settings.excludeWildcards)
-		if (PathMatchSpecW(destFileName, excludeWildcard.c_str()))
+		if (PathMatchSpecW(destFullPath.c_str(), excludeWildcard.c_str()))
 			return true;
 
-	WString destFile = (destPath + destFileName).c_str() + m_settings.destDirectory.size();
+	WString destFile = destFullPath.c_str() + m_settings.destDirectory.size();
 
 	// Keep track of handled files so we don't do duplicated work
 	if (!m_handledFiles.insert(destFile).second)
