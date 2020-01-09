@@ -28,6 +28,7 @@ struct ClientSettings
 	StringList			filesOrWildcardsFiles;
 	StringList			filesExcludeFiles;
 	StringList			excludeWildcards;
+	StringList			excludeWildcardDirectories;
 	StringList			optionalWildcards; // Will not causes error if source file fulfill optionalWildcards
 	uint				threadCount					= 0;
 	uint				retryWaitTimeMs				= 30 * 1000;

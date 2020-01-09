@@ -567,6 +567,11 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 bool
 Client::handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
+	// Chec if dir should be excluded because of wild cards
+	for (auto& excludeWildcard : m_settings.excludeWildcardDirectories)
+		if (PathMatchSpecW(directory, excludeWildcard.c_str()))
+			return true;
+
 	WString newSourceDirectory = sourcePath + directory + L'\\';
 	WString newDestDirectory = destPath;
 	if (!m_settings.flattenDestination && *directory)
