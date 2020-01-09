@@ -39,6 +39,7 @@ void printHelp()
 	logInfoLinef(L"                      options to add additional params. /PURGE only supported");
 	logInfoLinef(L"/IX file [file]... :: same as /I but excluding files/directories instead.");
 	logInfoLinef();
+	logInfoLinef(L"/XD dir [dir]...   :: eXclude Directories matching given names/paths/wildcards.");
 	logInfoLinef(L"/XF file [file]... :: eXclude Files matching given names/paths/wildcards.");
 	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards.");
 	logInfoLinef();
@@ -202,6 +203,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			activeCommand = L"XF";
 		}
+		else if (startsWithIgnoreCase(arg, L"/XD"))
+		{
+			activeCommand = L"XD";
+		}
 		else if (startsWithIgnoreCase(arg, L"/OF"))
 		{
 			activeCommand = L"OF";
@@ -289,6 +294,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			else if (equalsIgnoreCase(activeCommand, L"XF"))
 			{
 				outSettings.excludeWildcards.push_back(arg);
+			}
+			else if (equalsIgnoreCase(activeCommand, L"XD"))
+			{
+				outSettings.excludeWildcardDirectories.push_back(arg);
 			}
 			else if (equalsIgnoreCase(activeCommand, L"OF"))
 			{
