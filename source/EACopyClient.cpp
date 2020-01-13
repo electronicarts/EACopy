@@ -1040,7 +1040,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 
 	// If there is a connection and no files were handled inside the directory we can just do a full delete on the server side
 	if (m_destConnection)
-		if ((relPath.empty() && m_handledFiles.empty()) || m_handledFiles.find(relPath) == m_handledFiles.end())
+		if ((relPath.empty() && m_handledFiles.empty()) || (!relPath.empty() && (m_handledFiles.find(relPath) == m_handledFiles.end())))
 			return m_destConnection->sendDeleteAllFiles(relPath.c_str());
 
 
