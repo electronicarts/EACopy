@@ -134,6 +134,7 @@ private:
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, bool isMainConnection, ClientStats& stats, bool& failedToConnect);
+	bool				isIgnoredDirectory(const wchar_t* directory);
 
 
 	// Settings
