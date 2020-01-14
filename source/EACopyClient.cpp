@@ -567,10 +567,8 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 bool
 Client::handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
-	// Chec if dir should be excluded because of wild cards
-	for (auto& excludeWildcard : m_settings.excludeWildcardDirectories)
-		if (PathMatchSpecW(directory, excludeWildcard.c_str()))
-			return true;
+	if (isIgnoredDirectory(directory))
+ 		return true;
 
 	WString newSourceDirectory = sourcePath + directory + L'\\';
 	WString newDestDirectory = destPath;
@@ -1070,6 +1068,8 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 
 		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
+			if (isIgnoredDirectory(fd.cFileName))
+				continue;
 			WString fullPath = (path + L'\\' + fd.cFileName);
 	        if(isDir)
 			{
@@ -1317,6 +1317,16 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 	connectionGuard.cancel();
 
 	return connection;
+}
+
+bool
+Client::isIgnoredDirectory(const wchar_t *directory)
+{
+	// Check if dir should be excluded because of wild cards
+	for (auto& excludeWildcard : m_settings.excludeWildcardDirectories)
+		if (PathMatchSpecW(directory, excludeWildcard.c_str()))
+			return true;
+	return false;
 }
 
 Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, SOCKET s)
