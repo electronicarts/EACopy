@@ -106,7 +106,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			}
 			copySubdirectories = true;
 			if (outSettings.copySubdirDepth == 0)
-				outSettings.copySubdirDepth = 1000000;
+				outSettings.copySubdirDepth = 10000;
 		}
 		else if (equalsIgnoreCase(arg, L"/E"))
 		{
@@ -118,7 +118,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			copySubdirectories = true;
 			outSettings.copyEmptySubdirectories = true;
 			if (outSettings.copySubdirDepth == 0)
-				outSettings.copySubdirDepth = 1000000;
+				outSettings.copySubdirDepth = 10000;
 		}
 		else if (startsWithIgnoreCase(arg, L"/LEV:"))
 		{
@@ -140,7 +140,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (equalsIgnoreCase(arg, L"/MIR"))
 		{
 			outSettings.purgeDestination = true;
-			outSettings.copySubdirDepth = 1000000;
+			outSettings.copySubdirDepth = 10000;
 			outSettings.copyEmptySubdirectories = true;
 			copySubdirectories = true;
 		}
