@@ -58,7 +58,7 @@ Your pull request should:
 EACopy uses the defacto standard CMake build system.
 
 As an example, look at the "build.bat" file in the scripts folder for how to build the library and build/run the unit tests.
-NOTE: to run ctest you need to run the CLI you use as Administrator!
+NOTE: to run ctest you need to run the CLI you use as Administrator! Also you must make the changes outlined in "Test Setup" and "Running the Tests" sections below.
 ```
 <start at the project root>
 
