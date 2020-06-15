@@ -4,6 +4,7 @@
 cmake_minimum_required(VERSION 3.1)
 project(EACopyTest CXX)
 
+include(CTest)
 
 #-------------------------------------------------------------------------------------------
 # Executable definition
@@ -32,5 +33,7 @@ target_link_libraries(EACopyTest zstd)
 # Run Unit tests and verify the results.
 #-------------------------------------------------------------------------------------------
 
-#include(CTest)
-#add_test(EACopyTestRuns EACopyTest)
+# Use CTest
+enable_testing()
+#Disabled on farm. Enable this for local testing
+#add_test(EACopyTestRun EACopyTest)

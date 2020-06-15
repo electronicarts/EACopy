@@ -741,10 +741,22 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 				if (!handleFile(sourcePath, destPath, file.name.c_str(), file.info, handleFileFunc))
 					return false;
 			}
-			else if (depthLeft)
+		}
+
+		//Handle Folders separately
+		Vector<NameAndFileInfo> folders;
+		WString dirSearchStr = relPath + L"*.*";
+		if (!m_sourceConnection->sendFindFiles(dirSearchStr.c_str(), folders, m_copyContext))
+			return false;
+		for (auto& folder : folders)
+		{
+			if ((folder.attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
-				if (!handleDirectory(sourcePath, destPath, file.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
-					return false;
+				if (depthLeft)
+				{
+					if (!handleDirectory(sourcePath, destPath, folder.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+						return false;
+				}
 			}
 		}
 	}
@@ -765,6 +777,7 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 		}
 		ScopeGuard _([&]() { FindClose(hFind); });
 
+		//Handle all the files first
 		do
 		{ 
 			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
@@ -776,15 +789,35 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 				if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
 					return false;
 			}
-			else if (depthLeft)
-			{
-				if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
-					if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
-						return false;
-			}
-
 		}
 		while(FindNextFileW(hFind, &fd)); 
+
+		//Handle going through directories (navigate through all directories for the wild cards we care about)
+		WString dirSearchStr = validSourcePath;
+		dirSearchStr += L"*.*";
+
+		WIN32_FIND_DATAW fd2;
+		HANDLE hfind2 = ::FindFirstFileExW(dirSearchStr.c_str(), FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
+
+		if (hfind2 == INVALID_HANDLE_VALUE)
+		{
+			logErrorf(L"Can't find %s", searchStr.c_str());
+			return false;
+		}
+		ScopeGuard _2([&]() { FindClose(hfind2); });
+
+		do
+		{
+			if ((fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			{
+				if (depthLeft)
+				{
+					if (wcscmp(fd2.cFileName, L".") != 0 && wcscmp(fd2.cFileName, L"..") != 0)
+						if (!handleDirectory(sourcePath, destPath, fd2.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+							return false;
+				}
+			}
+		} while (FindNextFileW(hfind2, &fd2));
 
 		DWORD error = GetLastError();
 		if (error != ERROR_NO_MORE_FILES)

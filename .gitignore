@@ -41,6 +41,7 @@
 #IDE settings
 .vscode/
 .vs/
+CMakeSettings.json
 
 #Exclude files in the config directories
 Release/
