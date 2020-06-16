@@ -28,7 +28,7 @@ Option | Description
 ```/I file [file]...``` | Use text file containing files/directories/wildcards. A line can also add dest to explicitly write dest and options to add additional params. /PURGE only supported  
 ```/IX file [file]...``` | Same as /I but excluding files/directories instead
 ```/XF file [file]...``` | Exclude Files matching given names/paths/wildcards  
-```/OF file [file]...``` | Optional Files matching given names/paths/wildcards  
+```/OF file [file]...``` | Optional Files matching given names/paths/wildcards  Only Used for FileList
 ```/MT[:n]``` | Do multi-threaded copies with n threads (default 8), n must be at least 1 and not greater than 128  
 ```/NOSERVER``` | Will not try to connect to Server  
 ```/SERVER``` | Must connect to Server. Fails copy if not succeed
