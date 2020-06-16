@@ -41,7 +41,7 @@ void printHelp()
 	logInfoLinef();
 	logInfoLinef(L"/XD dir [dir]...   :: eXclude Directories matching given names/paths/wildcards.");
 	logInfoLinef(L"/XF file [file]... :: eXclude Files matching given names/paths/wildcards.");
-	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards.");
+	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards. Only used for FileLists.");
 	logInfoLinef();
 	logInfoLinef(L"           /MT[:n] :: do multi-threaded copies with n threads (default 8).");
 	logInfoLinef(L"                      n must be at least 1 and not greater than 128.");
