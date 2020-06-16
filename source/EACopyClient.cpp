@@ -767,30 +767,46 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 
 		WString searchStr = validSourcePath;
 		searchStr += wildcard;
-
+		
 		WIN32_FIND_DATAW fd; 
 		HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-		if(hFind == INVALID_HANDLE_VALUE)
+		DWORD findFileCheck = GetLastError();
+		BOOL skipSection = FALSE;
+		if (hFind == INVALID_HANDLE_VALUE)
 		{
-			logErrorf(L"Can't find %s", searchStr.c_str());
-			return false;
+			//If file was just not found then its okay, but otherwise return false and error.
+			//If its not a wild card (actual explicit file), we should error
+			//
+			if (wildcard.find('*') == std::string::npos || findFileCheck != ERROR_FILE_NOT_FOUND)
+			{
+				logErrorf(L"Can't find %s", searchStr.c_str());
+				return false;
+			}
+			else
+			{
+				skipSection = TRUE;
+			}
 		}
+
 		ScopeGuard _([&]() { FindClose(hFind); });
 
 		//Handle all the files first
-		do
-		{ 
-			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		if (!skipSection)
+		{
+			do
 			{
-				FileInfo fileInfo;
-				fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-				fileInfo.lastWriteTime = fd.ftLastWriteTime;
-				fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-				if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
-					return false;
-			}
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					FileInfo fileInfo;
+					fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
+					fileInfo.lastWriteTime = fd.ftLastWriteTime;
+					fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+					if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
+						return false;
+				}
+			} while (FindNextFileW(hFind, &fd));
 		}
-		while(FindNextFileW(hFind, &fd)); 
+		skipSection = FALSE;
 
 		//Handle going through directories (navigate through all directories for the wild cards we care about)
 		WString dirSearchStr = validSourcePath;
@@ -798,26 +814,38 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 
 		WIN32_FIND_DATAW fd2;
 		HANDLE hfind2 = ::FindFirstFileExW(dirSearchStr.c_str(), FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
-
+		DWORD findFolderCheck = GetLastError();
 		if (hfind2 == INVALID_HANDLE_VALUE)
 		{
-			logErrorf(L"Can't find %s", searchStr.c_str());
-			return false;
+			//If folder was just not found then its okay, but otherwise return false and error.
+			if (findFolderCheck != ERROR_FILE_NOT_FOUND)
+			{
+				logErrorf(L"Can't find %s", searchStr.c_str());
+				return false;
+			}
+			else
+			{
+				skipSection = TRUE;
+			}
 		}
+
 		ScopeGuard _2([&]() { FindClose(hfind2); });
 
-		do
+		if (!skipSection)
 		{
-			if ((fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+			do
 			{
-				if (depthLeft)
+				if ((fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 				{
-					if (wcscmp(fd2.cFileName, L".") != 0 && wcscmp(fd2.cFileName, L"..") != 0)
-						if (!handleDirectory(sourcePath, destPath, fd2.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
-							return false;
+					if (depthLeft)
+					{
+						if (wcscmp(fd2.cFileName, L".") != 0 && wcscmp(fd2.cFileName, L"..") != 0)
+							if (!handleDirectory(sourcePath, destPath, fd2.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+								return false;
+					}
 				}
-			}
-		} while (FindNextFileW(hfind2, &fd2));
+			} while (FindNextFileW(hfind2, &fd2));
+		}
 
 		DWORD error = GetLastError();
 		if (error != ERROR_NO_MORE_FILES)

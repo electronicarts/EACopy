@@ -1413,6 +1413,8 @@ EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
 	createTestFile(L"Test\\Foo.txt", fileSize);
 	createTestFile(L"Bar.txt", 100);
 	createTestFile(L"Test2\\Foo2.txt", 1000);
+	//Verify files not matching wild card are just skipped when wild cards are used. Does not apply to using FileList
+	createTestFile(L"Test3\\NotFoo.xml", 100);
 
 	ClientSettings clientSettings(getDefaultClientSettings(L"*.txt"));
 	clientSettings.copySubdirDepth = 100;
@@ -1428,6 +1430,8 @@ EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
 
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test2\\Foo2.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == 1000);
+
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test3\\NotFoo.xml").c_str()) == 0);
 }
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
