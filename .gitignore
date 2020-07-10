@@ -42,6 +42,7 @@
 *.cmake
 CMakeFiles/
 CMakeCache.txt
+CMakeSettings.json
 
 #IDE settings
 .vscode/

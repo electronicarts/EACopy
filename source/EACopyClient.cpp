@@ -544,12 +544,14 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 		if (const wchar_t* lastSlash = wcsrchr(fileName, L'\\'))
 			destFileName = lastSlash + 1;
 
+	WString destFullPath = destPath + destFileName;
+
 	// Chec if file should be excluded because of wild cards
 	for (auto& excludeWildcard : m_settings.excludeWildcards)
-		if (PathMatchSpecW(destFileName, excludeWildcard.c_str()))
+		if (PathMatchSpecW(destFullPath.c_str(), excludeWildcard.c_str()))
 			return true;
 
-	WString destFile = (destPath + destFileName).c_str() + m_settings.destDirectory.size();
+	WString destFile = destFullPath.c_str() + m_settings.destDirectory.size();
 
 	// Keep track of handled files so we don't do duplicated work
 	if (!m_handledFiles.insert(destFile).second)
@@ -576,6 +578,9 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 bool
 Client::handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
+	if (isIgnoredDirectory(directory))
+ 		return true;
+
 	WString newSourceDirectory = sourcePath + directory + L'\\';
 	WString newDestDirectory = destPath;
 	if (!m_settings.flattenDestination && *directory)
@@ -747,10 +752,22 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 				if (!handleFile(sourcePath, destPath, file.name.c_str(), file.info, handleFileFunc))
 					return false;
 			}
-			else if (depthLeft)
+		}
+
+		//Handle Folders separately
+		Vector<NameAndFileInfo> folders;
+		WString dirSearchStr = relPath + L"*.*";
+		if (!m_sourceConnection->sendFindFiles(dirSearchStr.c_str(), folders, m_copyContext))
+			return false;
+		for (auto& folder : folders)
+		{
+			if ((folder.attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
-				if (!handleDirectory(sourcePath, destPath, file.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
-					return false;
+				if (depthLeft)
+				{
+					if (!handleDirectory(sourcePath, destPath, folder.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+						return false;
+				}
 			}
 		}
 	}
@@ -761,36 +778,85 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 
 		WString searchStr = validSourcePath;
 		searchStr += wildcard;
-
+		
 		WIN32_FIND_DATAW fd; 
 		HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-		if(hFind == INVALID_HANDLE_VALUE)
+		DWORD findFileCheck = GetLastError();
+		BOOL skipSection = FALSE;
+		if (hFind == INVALID_HANDLE_VALUE)
 		{
-			logErrorf(L"Can't find %s", searchStr.c_str());
-			return false;
+			//If file was just not found then its okay, but otherwise return false and error.
+			//If its not a wild card (actual explicit file), we should error
+			//
+			if (wildcard.find('*') == std::string::npos || findFileCheck != ERROR_FILE_NOT_FOUND)
+			{
+				logErrorf(L"Can't find %s", searchStr.c_str());
+				return false;
+			}
+			else
+			{
+				skipSection = TRUE;
+			}
 		}
+
 		ScopeGuard _([&]() { FindClose(hFind); });
 
-		do
-		{ 
-			if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		//Handle all the files first
+		if (!skipSection)
+		{
+			do
 			{
-				FileInfo fileInfo;
-				fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-				fileInfo.lastWriteTime = fd.ftLastWriteTime;
-				fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-				if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
-					return false;
-			}
-			else if (depthLeft)
-			{
-				if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
-					if (!handleDirectory(sourcePath, destPath, fd.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+				if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					FileInfo fileInfo;
+					fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
+					fileInfo.lastWriteTime = fd.ftLastWriteTime;
+					fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+					if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
 						return false;
-			}
-
+				}
+			} while (FindNextFileW(hFind, &fd));
 		}
-		while(FindNextFileW(hFind, &fd)); 
+		skipSection = FALSE;
+
+		//Handle going through directories (navigate through all directories for the wild cards we care about)
+		WString dirSearchStr = validSourcePath;
+		dirSearchStr += L"*.*";
+
+		WIN32_FIND_DATAW fd2;
+		HANDLE hfind2 = ::FindFirstFileExW(dirSearchStr.c_str(), FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
+		DWORD findFolderCheck = GetLastError();
+		if (hfind2 == INVALID_HANDLE_VALUE)
+		{
+			//If folder was just not found then its okay, but otherwise return false and error.
+			if (findFolderCheck != ERROR_FILE_NOT_FOUND)
+			{
+				logErrorf(L"Can't find %s", searchStr.c_str());
+				return false;
+			}
+			else
+			{
+				skipSection = TRUE;
+			}
+		}
+
+		ScopeGuard _2([&]() { FindClose(hfind2); });
+
+		if (!skipSection)
+		{
+			do
+			{
+				if ((fd2.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					if (depthLeft)
+					{
+						if (wcscmp(fd2.cFileName, L".") != 0 && wcscmp(fd2.cFileName, L"..") != 0)
+							if (!handleDirectory(sourcePath, destPath, fd2.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+								return false;
+					}
+				}
+			} while (FindNextFileW(hfind2, &fd2));
+		}
 
 		DWORD error = GetLastError();
 		if (error != ERROR_NO_MORE_FILES)
@@ -1044,7 +1110,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 
 	// If there is a connection and no files were handled inside the directory we can just do a full delete on the server side
 	if (m_destConnection)
-		if ((relPath.empty() && m_handledFiles.empty()) || m_handledFiles.find(relPath) == m_handledFiles.end())
+		if ((relPath.empty() && m_handledFiles.empty()) || (!relPath.empty() && (m_handledFiles.find(relPath) == m_handledFiles.end())))
 			return m_destConnection->sendDeleteAllFiles(relPath.c_str());
 
 
@@ -1075,6 +1141,8 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 		// File/folder was not part of source, delete
 		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
+			if (isIgnoredDirectory(fd.cFileName))
+				continue;
 			WString fullPath = (path + L'\\' + fd.cFileName);
 	        if(isDir)
 			{
@@ -1332,6 +1400,16 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 	connectionGuard.cancel();
 
 	return connection;
+}
+
+bool
+Client::isIgnoredDirectory(const wchar_t *directory)
+{
+	// Check if dir should be excluded because of wild cards
+	for (auto& excludeWildcard : m_settings.excludeWildcardDirectories)
+		if (PathMatchSpecW(directory, excludeWildcard.c_str()))
+			return true;
+	return false;
 }
 
 Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s)

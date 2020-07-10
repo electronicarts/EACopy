@@ -15,8 +15,15 @@ namespace eacopy
 	#define EACOPY_ASSERT(x) assert(x)
 #endif
 
-#define DEFAULT_SOURCE_DIR  L"" // L"C:\\temp\\EACopyTest\\source"
-#define DEFAULT_DEST_DIR  L"" // L"\\\\localhost\\EACopyTest\\dest" // local share to C:\temp\EACopyTest\dest
+//Set these Variables to run EACopyTest without having to specify the source/dest input parameters.
+//Examples are detailed:
+// L"C:\\temp\\EACopyTest\\source" OR L"I:\\MyLocalDrive"
+// This directory should exist.
+#define DEFAULT_SOURCE_DIR  L"" 
+// L"\\\\localhost\\EACopyTest\\dest" OR L"\\\\localhost\\MyShare"
+// Locally configured share to C:\temp\EACopyTest\dest OR I:\MyShare
+//The real directory should exist and the share setup to point to the directory.
+#define DEFAULT_DEST_DIR  L""
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -196,6 +203,13 @@ struct TestBase
 		CloseHandle(file);
 
 		m_setupTime += getTimeMs() - startSetupTime;
+	}
+
+	bool getGeneralFileExists(const wchar_t* fullFilePath)
+	{
+		WString str = L"";
+		str.append(fullFilePath);
+		return PathFileExistsW(str.c_str()) == TRUE;
 	}
 
 	bool getTestFileExists(const wchar_t* name, bool source = false)
@@ -918,6 +932,7 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
+	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
 	for (uint i=0;i!=30; ++i)
 		longPath.append(L"TestFolder\\");
@@ -1417,6 +1432,33 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath2)
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
 
+EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
+{
+	uint fileSize = 3 * 1024 * 1024 + 123;
+	createTestFile(L"Test\\Foo.txt", fileSize);
+	createTestFile(L"Bar.txt", 100);
+	createTestFile(L"Test2\\Foo2.txt", 1000);
+	//Verify files not matching wild card are just skipped when wild cards are used. Does not apply to using FileList
+	createTestFile(L"Test3\\NotFoo.xml", 100);
+
+	ClientSettings clientSettings(getDefaultClientSettings(L"*.txt"));
+	clientSettings.copySubdirDepth = 100;
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+
+	FileInfo destFile;
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == fileSize);
+
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Bar.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 100);
+
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test2\\Foo2.txt").c_str()) != 0);
+	EACOPY_ASSERT(destFile.fileSize == 1000);
+
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test3\\NotFoo.xml").c_str()) == 0);
+}
+
 #if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 {
@@ -1667,6 +1709,7 @@ EACOPY_TEST(ServerTestMemory)
 EACOPY_TEST(UsedByOtherProcessError)
 {
 	wchar_t buffer[1024];
+	wchar_t buffer2[1024];
 	DWORD size = GetCurrentDirectoryW(1024, buffer);
 
 	#if !defined(NDEBUG)
@@ -1674,6 +1717,13 @@ EACOPY_TEST(UsedByOtherProcessError)
 	#else
 	wcscat(buffer, L"\\..\\Release\\");
 	#endif
+	//Handle case for debugging in Visual Studio. Executable path is at ..\\ level (not under Debug or Release)
+	wcsncpy(buffer2, buffer, 1024);
+	wcscat(buffer2, L"eacopy.exe");
+	if (!(getGeneralFileExists(buffer2) == true))
+	{
+		wcscat(buffer, L"..\\");
+	}
 
 	ClientSettings clientSettings;
 	clientSettings.sourceDirectory += buffer;
@@ -1718,7 +1768,6 @@ EACOPY_TEST(PathGoingOverMaxPath)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(isEqual((testSourceDir + L"Foo.txt").c_str(), (clientSettings.destDirectory + L"Foo.txt").c_str()));
 }
-
 
 
 void printHelp()

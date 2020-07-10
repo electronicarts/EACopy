@@ -58,21 +58,38 @@ Your pull request should:
 EACopy uses the defacto standard CMake build system.
 
 As an example, look at the "build.bat" file in the scripts folder for how to build the library and build/run the unit tests.
-
+NOTE: to run ctest you need to run the CLI you use as Administrator! Also you must make the changes outlined in "Test Setup" and "Running the Tests" sections below.
 ```
 <start at the project root>
 
 @mkdir build
 @pushd build
 
-@call cmake .. -G "Visual Studio 15 2017 Win64" -DEACOPY_BUILD_TESTS:BOOL=ON 
+@call cmake .. -G "Visual Studio 15 2017 Win64" -DEACOPY_BUILD_TESTS:BOOL=ON
+rem @call cmake .. -G "Visual Studio 16 2019" -A x64 -DEACOPY_BUILD_TESTS:BOOL=ON
 @call cmake --build . --config Release
+@call cmake --build . --config Debug
 
 @pushd test
 @call ctest -C Release -V
+@call ctest -C Debug
 
 @popd
 @popd
+
+```
+
+#CI System
+Travis CI for EACopy: https://travis-ci.org/github/electronicarts/EACopy
+
+## Test Setup
+The test/CMakeLists.txt file might have its tests commented out. If so go to the file and uncomment the test line (as below):
+
+```
+# Use CTest
+enable_testing()
+#Disabled on farm. Enable this for local testing
+add_test(EACopyTestRun EACopyTest)
 ```
 
 ## Running the Tests
@@ -89,12 +106,30 @@ EACopyTest D:\EACopyTest\source \\localhost\EACopyTest\dest
 ```
 
 Another way to set this up for ease of local development is to set these defines in the top of EACopyTest.cpp to the source and dest folders you have setup:
+* Default setting for these values is L""; (Make sure you change the values or You will get an error that you didnt specify the source/dir arguments)
+
 ```
 #define DEFAULT_SOURCE_DIR  L"D:\\\\EACopyTest\\source"
 #define DEFAULT_DEST_DIR  L"\\\\localhost\\EACopyTest\\dest" // local share to D:\EACopyTest\dest
 ```
 
 You can then set EACopyTest as your startup project in Visual Studio and debug from there, or just run EACopyTest.exe from the cmdline without parameters and it will use those folders set in the code.
+
+## Setting up CMake with Visual Studio for Debugging
+Notes: 
+ - You need to run Visual Studio as Admin to properly run some tests
+ - Once set up make sure to set the CMake settings so EACOPY_BUILD_TESTS is set to true so the tests are generated also.
+Reference documentation for setting up CMake: https://docs.microsoft.com/en-us/cpp/build/cmake-projects-in-visual-studio?view=vs-2019
+Reference documenation for running ctests in VS: https://docs.microsoft.com/en-us/visualstudio/test/how-to-use-ctest-for-cpp?view=vs-2019
+
+
+##Reference links
+CMake main page: https://cmake.org/
+CTest documentation page: https://cmake.org/cmake/help/latest/manual/ctest.1.html
+Basic CMake intro: https://a4z.bitbucket.io/blog/2018/05/17/Speed-up-your-test-cycles-with-CMake.html
+CMake Tutorial 1: https://cliutils.gitlab.io/modern-cmake/chapters/testing.html
+CMake Tutorial 2: https://bastian.rieck.me/blog/posts/2017/simple_unit_tests/
+CMake File example: https://riptutorial.com/cmake/example/14698/basic-test-suite
 
 ## License
 

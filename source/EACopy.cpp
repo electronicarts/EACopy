@@ -39,8 +39,9 @@ void printHelp()
 	logInfoLinef(L"                      options to add additional params. /PURGE only supported");
 	logInfoLinef(L"/IX file [file]... :: same as /I but excluding files/directories instead.");
 	logInfoLinef();
+	logInfoLinef(L"/XD dir [dir]...   :: eXclude Directories matching given names/paths/wildcards.");
 	logInfoLinef(L"/XF file [file]... :: eXclude Files matching given names/paths/wildcards.");
-	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards.");
+	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards. Only used for FileLists.");
 	logInfoLinef();
 	logInfoLinef(L"           /MT[:n] :: do multi-threaded copies with n threads (default 8).");
 	logInfoLinef(L"                      n must be at least 1 and not greater than 128.");
@@ -105,7 +106,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			}
 			copySubdirectories = true;
 			if (outSettings.copySubdirDepth == 0)
-				outSettings.copySubdirDepth = 1000000;
+				outSettings.copySubdirDepth = 10000;
 		}
 		else if (equalsIgnoreCase(arg, L"/E"))
 		{
@@ -117,7 +118,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			copySubdirectories = true;
 			outSettings.copyEmptySubdirectories = true;
 			if (outSettings.copySubdirDepth == 0)
-				outSettings.copySubdirDepth = 1000000;
+				outSettings.copySubdirDepth = 10000;
 		}
 		else if (startsWithIgnoreCase(arg, L"/LEV:"))
 		{
@@ -139,7 +140,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (equalsIgnoreCase(arg, L"/MIR"))
 		{
 			outSettings.purgeDestination = true;
-			outSettings.copySubdirDepth = 1000000;
+			outSettings.copySubdirDepth = 10000;
 			outSettings.copyEmptySubdirectories = true;
 			copySubdirectories = true;
 		}
@@ -201,6 +202,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (startsWithIgnoreCase(arg, L"/XF"))
 		{
 			activeCommand = L"XF";
+		}
+		else if (startsWithIgnoreCase(arg, L"/XD"))
+		{
+			activeCommand = L"XD";
 		}
 		else if (startsWithIgnoreCase(arg, L"/OF"))
 		{
@@ -289,6 +294,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			else if (equalsIgnoreCase(activeCommand, L"XF"))
 			{
 				outSettings.excludeWildcards.push_back(arg);
+			}
+			else if (equalsIgnoreCase(activeCommand, L"XD"))
+			{
+				outSettings.excludeWildcardDirectories.push_back(arg);
 			}
 			else if (equalsIgnoreCase(activeCommand, L"OF"))
 			{

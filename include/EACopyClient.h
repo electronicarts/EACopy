@@ -28,6 +28,7 @@ struct ClientSettings
 	StringList			filesOrWildcardsFiles;
 	StringList			filesExcludeFiles;
 	StringList			excludeWildcards;
+	StringList			excludeWildcardDirectories;
 	StringList			optionalWildcards; // Will not causes error if source file fulfill optionalWildcards
 	uint				threadCount					= 0;
 	uint				retryWaitTimeMs				= 30 * 1000;
@@ -133,6 +134,7 @@ private:
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
+	bool				isIgnoredDirectory(const wchar_t* directory);
 
 
 	// Settings

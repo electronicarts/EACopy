@@ -51,5 +51,6 @@ target_link_libraries(EACopyService zstd)
 
 
 if(EACOPY_BUILD_TESTS)
+	include(CTest)
 	add_subdirectory(test)
 endif()
