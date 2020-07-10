@@ -1061,12 +1061,22 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 			filePath += L'\\';
 		}
 
+		// File/folder was not part of source, delete
 		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
 			WString fullPath = (path + L'\\' + fd.cFileName);
 	        if(isDir)
 			{
-				if (!deleteDirectory(fullPath.c_str()))
+				bool isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+				if (isSymlink)
+				{
+					if (!RemoveDirectoryW(fullPath.c_str()))
+					{
+						logErrorf(L"Trying to remove reparse point while purging destination %s: %s", fullPath.c_str(), getLastErrorText().c_str());
+						res = false;
+					}
+				}
+				else if (!deleteDirectory(fullPath.c_str()))
 					res = false;
 			}
 			else

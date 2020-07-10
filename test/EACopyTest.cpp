@@ -891,6 +891,31 @@ EACOPY_TEST(CopyFileTargetHasSymlink)
 	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
 }
 
+EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
+{
+	ensureDirectory((testSourceDir + L"Source").c_str());
+	ensureDirectory((testSourceDir + L"RealDir").c_str());
+	ensureDirectory((testDestDir + L"Dest").c_str());
+	createTestFile(L"RealDir\\Boo.txt", 10, true);
+
+	// Probably don't have privilege.. skip this test
+	if (!CreateSymbolicLinkW((testDestDir + L"Dest\\RealDir").c_str(), (testSourceDir + L"RealDir").c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY))
+		return;
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.sourceDirectory = testSourceDir + L"Source\\";
+	clientSettings.destDirectory = testDestDir + L"Dest\\";
+	clientSettings.copySubdirDepth = 3;
+	clientSettings.purgeDestination = true;
+	Client client(clientSettings);
+
+	FileInfo fi;
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(getTestFileExists(L"RealDir\\Boo.txt", true) == true);
+	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir", false) == false);
+	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+}
+
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
 	WString longPath;
