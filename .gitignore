@@ -38,9 +38,17 @@
 #User files
 *.user
 
+# CMake
+*.cmake
+CMakeFiles/
+CMakeCache.txt
+
 #IDE settings
 .vscode/
 .vs/
+*.vcxproj
+*.vcxproj.filters
+*.sln
 
 #Exclude files in the config directories
 Release/
