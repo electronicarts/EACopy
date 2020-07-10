@@ -65,16 +65,17 @@ Client::process(Log& log, ClientStats& outStats)
 
 	// Spawn worker threads that will copy the files
 	Vector<HANDLE> workerThreadList(m_settings.threadCount);
-	struct WorkerThreadData { ClientStats stats; Client* client; };
+	struct WorkerThreadData { ClientStats stats; Client* client; uint connectionIndex; };
 	Vector<WorkerThreadData> workerThreadDataList(m_settings.threadCount);
 	for (int i=0; i!=m_settings.threadCount; ++i)
 	{
 		auto& threadData = workerThreadDataList[i];
 		threadData.client = this;
+		threadData.connectionIndex = i + 1;
 		workerThreadList[i] = CreateThread(NULL, 0, [](LPVOID p) -> DWORD
 			{
 				auto& data = *(WorkerThreadData*)p;
-				return data.client->workerThread(data.stats);
+				return data.client->workerThread(data.connectionIndex, data.stats);
 			}, &threadData, 0, NULL);
 	}
 
@@ -82,7 +83,7 @@ Client::process(Log& log, ClientStats& outStats)
 	ScopeGuard waitThreadsGuard([&]()
 	{
 		// Wait for all threads to finish
-		m_workersActive = false;
+		m_workDone.set();
 		WaitForMultipleObjects((uint)workerThreadList.size(), workerThreadList.data(), TRUE, INFINITE);
 	});
 
@@ -234,7 +235,7 @@ Client::reportServerStatus(Log& log)
 	ClientStats stats;
 
 	// Create connection
-	Connection* connection = createConnection(m_settings.destDirectory.c_str(), true, stats, useServerFailed);
+	Connection* connection = createConnection(m_settings.destDirectory.c_str(), 0, stats, useServerFailed, false);
 	if (!connection)
 	{
 		logErrorf(L"Failed to connect to server. Is path '%s' a proper smb path?", m_settings.destDirectory.c_str());
@@ -272,7 +273,7 @@ Client::resetWorkState(Log& log)
 	m_log = &log;
 	m_useSourceServerFailed = false;
 	m_useDestServerFailed = false;
-	m_workersActive = true;
+	m_workDone.reset();
 	m_tryCopyFirst = true;
 	m_networkInitDone = false;
 	m_networkServerName.clear();
@@ -307,7 +308,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 
 	// Try to copy file
 	int retryCount = m_settings.retryCount;
-	while (m_workersActive)
+	while (true)
 	{
 		// Use connection to server if available
 		if (destConnection)
@@ -344,8 +345,9 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			u64 startTimeMs = getTimeMs();
 			u64 size;
 			u64 read;
-			if (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
+			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
 			{
+			case Connection::ReadFileResult_Success:
 				if (read)
 				{
 					if (m_settings.logProgress)
@@ -363,8 +365,17 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					stats.skipSize += size;
 				}
 				return true;
+
+			case Connection::ReadFileResult_Error:
+				return false;
+
+			case Connection::ReadFileResult_ServerBusy:	// Server was busy, return entry in to queue and take a long break (this should never happen on mainthread)
+				m_copyEntriesCs.enter();
+				m_copyEntries.push_front(entry);
+				m_copyEntriesCs.leave();
+				m_workDone.isSet(5*1000);
+				return true;
 			}
-			return false;
 		}
 		else
 		{
@@ -455,7 +466,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 }
 
 bool
-Client::connectToServer(const wchar_t* networkPath, bool isMainConnection, Connection*& outConnection, bool& failedToConnect, ClientStats& stats)
+Client::connectToServer(const wchar_t* networkPath, uint connectionIndex, Connection*& outConnection, bool& failedToConnect, ClientStats& stats)
 {
 	outConnection = nullptr;
 	if (m_settings.useServer == UseServer_Disabled || failedToConnect)
@@ -466,7 +477,7 @@ Client::connectToServer(const wchar_t* networkPath, bool isMainConnection, Conne
 
 	u64 startConnect = getTimeMs();
 	stats.serverAttempt = true;
-	outConnection = createConnection(networkPath, isMainConnection, stats, failedToConnect);
+	outConnection = createConnection(networkPath, connectionIndex, stats, failedToConnect, true);
 	stats.connectTimeMs += getTimeMs() - startConnect;
 
 	if (failedToConnect && m_settings.useServer == UseServer_Required)
@@ -486,7 +497,7 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 	uint filesProcessedCount = 0;
 
 	// Process file queue
-	while (m_workersActive)
+	while (!m_workDone.isSet(0))
 	{
 		if (processFile(logContext, sourceConnection, destConnection, copyContext, stats))
 			++filesProcessedCount;
@@ -500,17 +511,17 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 }
 
 int
-Client::workerThread(ClientStats& stats)
+Client::workerThread(uint connectionIndex, ClientStats& stats)
 {
 	// Try to connect to server (can fail to connect and still return true if settings allow it to fail)
 	Connection* destConnection;
-	if (!connectToServer(m_settings.destDirectory.c_str(), false, destConnection, m_useDestServerFailed, stats))
+	if (!connectToServer(m_settings.destDirectory.c_str(), connectionIndex, destConnection, m_useDestServerFailed, stats))
 		return false;
 	ScopeGuard destConnectionGuard([&] { delete destConnection; });
 
 	Connection* sourceConnection = nullptr;
 	if (!destConnection)
-		if (!connectToServer(m_settings.sourceDirectory.c_str(), false, sourceConnection, m_useSourceServerFailed, stats))
+		if (!connectToServer(m_settings.sourceDirectory.c_str(), connectionIndex, sourceConnection, m_useSourceServerFailed, stats))
 			return false;
 	ScopeGuard sourcesConnectionGuard([&] { delete sourceConnection; });
 
@@ -1140,7 +1151,7 @@ Client::getRelativeSourceFile(const WString& sourcePath) const
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 Client::Connection*
-Client::createConnection(const wchar_t* networkPath, bool isMainConnection, ClientStats& stats, bool& failedToConnect)
+Client::createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck)
 {
 	u64 startTime = getTimeMs();
 
@@ -1203,28 +1214,29 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 
 	leaveNetworkInitCs.execute();
 
-	SOCKET sock = INVALID_SOCKET;
+	Socket sock = {INVALID_SOCKET, false};
 
 	// Loop through and attempt to connect to an address until one succeeds
 	for(auto addrInfoIt=m_serverAddrInfo; addrInfoIt!=NULL; addrInfoIt=addrInfoIt->ai_next)
 	{
 		// Create a socket for connecting to server
-		sock = WSASocketW(addrInfoIt->ai_family, addrInfoIt->ai_socktype, addrInfoIt->ai_protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
-		if (sock == INVALID_SOCKET)
+		sock.socket = WSASocketW(addrInfoIt->ai_family, addrInfoIt->ai_socktype, addrInfoIt->ai_protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
+		if (sock.socket == INVALID_SOCKET)
 		{
 			logErrorf(L"socket failed with error: %ld", WSAGetLastError());
 			return nullptr;
 		}
+		sock.valid = true;
 
 		// Create guard in case we fail to connect (will be cancelled further down if we succeed)
-		ScopeGuard socketClose([&]() { closesocket(sock); sock = INVALID_SOCKET; });
+		ScopeGuard socketClose([&]() { closeSocket(sock); });
 
 		// Set to non-blocking just for the connect call (we want to control the connect timeout after connect using select instead)
 		if (!setBlocking(sock, false))
 			break;
 
 		// Connect to server.
-		int res = connect(sock, addrInfoIt->ai_addr, (int)addrInfoIt->ai_addrlen);
+		int res = connect(sock.socket, addrInfoIt->ai_addr, (int)addrInfoIt->ai_addrlen);
 		if (res == SOCKET_ERROR)
 		{
 			if (WSAGetLastError() != WSAEWOULDBLOCK)
@@ -1241,12 +1253,12 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 		fd_set write, err;
 		FD_ZERO(&write);
 		FD_ZERO(&err);
-		FD_SET(sock, &write);
-		FD_SET(sock, &err);
+		FD_SET(sock.socket, &write);
+		FD_SET(sock.socket, &err);
 
 		// check if the socket is ready
 		select(0,NULL,&write,&err,&timeval);			
-		if(!FD_ISSET(sock, &write)) 
+		if(!FD_ISSET(sock.socket, &write)) 
 			continue;
 
 		// Socket is good, cancel the socket close scope and break out of the loop.
@@ -1255,15 +1267,15 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 	}
 
 	u64 endTime = getTimeMs();
-	logDebugLinef(L"Connect to server %s. (%.1f seconds)", sock != INVALID_SOCKET ? L"SUCCESS" : L"FAILED", float(endTime - startTime)/1000.0f);
+	logDebugLinef(L"Connect to server %s. (%.1f seconds)", sock.socket != INVALID_SOCKET ? L"SUCCESS" : L"FAILED", float(endTime - startTime)/1000.0f);
 
-	if (sock == INVALID_SOCKET)
+	if (sock.socket == INVALID_SOCKET)
 	{
 		failedToConnect = true;
 		return nullptr;
 	}
 
-	ScopeGuard socketCleanup([&]() { closesocket(sock); });
+	ScopeGuard socketCleanup([&]() { closeSocket(sock); });
 
 	// Set send buffer size (makes some difference in the tests we've done)
 	if (!setSendBufferSize(sock, 4*1024*1024))
@@ -1280,7 +1292,7 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 		if (!receiveData(sock, cmdBuf, cmdBufLen))
 			return nullptr;
 		auto& cmd = *(const VersionCommand*)cmdBuf;
-		if (cmd.protocolVersion != ProtocolVersion)
+		if (doProtocolCheck && cmd.protocolVersion != ProtocolVersion)
 		{
 			static bool logOnce = true;
 			if (logOnce)
@@ -1304,7 +1316,7 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 		auto& cmd = *(EnvironmentCommand*)cmdBuf;
 		cmd.commandType = CommandType_Environment;
 		cmd.deltaCompressionThreshold = m_settings.deltaCompressionThreshold;
-		cmd.isMainConnection = isMainConnection;
+		cmd.connectionIndex = connectionIndex;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);
 		
 		if (wcscpy_s(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
@@ -1322,7 +1334,7 @@ Client::createConnection(const wchar_t* networkPath, bool isMainConnection, Clie
 	return connection;
 }
 
-Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, SOCKET s)
+Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s)
 :	m_settings(settings)
 ,	m_stats(stats)
 ,	m_socket(s)
@@ -1475,7 +1487,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	return false;
 }
 
-bool
+Client::Connection::ReadFileResult
 Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext)
 {
 	outSize = 0;
@@ -1492,7 +1504,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	if (wcscpy_s(cmd.path, MaxPath, src))
 	{
 		logErrorf(L"Failed to read file %s: wcscpy_s in sendReadFileCommand failed", src);
-		return false;
+		return ReadFileResult_Error;
 	}
 
 	WString fullDest = m_settings.destDirectory + dst;
@@ -1501,45 +1513,51 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		if (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			logErrorf(L"Trying to copy to file %s which is a directory", fullDest.c_str());
-			return false;
+			return ReadFileResult_Error;
 		}
 
 	if (srcInfo.fileSize != 0 && equals(srcInfo, cmd.info))
 	{
 		outSize = cmd.info.fileSize;
-		return true;
+		return ReadFileResult_Success;
 	}
 
 	if (!sendCommand(cmd))
-		return false;
+		return ReadFileResult_Error;
 
 	ReadResponse readResponse;
 	if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))
-		return false;
+		return ReadFileResult_Error;
+
+	if (readResponse == ReadResponse_ServerBusy)
+	{
+		// Server was busy and ask this worker to sleep for a while and come back later (this is under quite extreme conditions so sleep for five seconds or so)
+		return ReadFileResult_ServerBusy;
+	}
 
 	if (readResponse == ReadResponse_BadSource)
 	{
 		logErrorf(L"Unknown server side error while asking for file %s: sendReadFileCommand failed", fullDest.c_str());
-		return false;
+		return ReadFileResult_Error;
 	}
 
 	// Skip file, we already have the same file as source
 	if (readResponse == ReadResponse_Skip)
 	{
 		outSize = cmd.info.fileSize;
-		return true;
+		return ReadFileResult_Success;
 	}
 
 	FILETIME newFileLastWriteTime;
 	if (!receiveData(m_socket, &newFileLastWriteTime, sizeof(newFileLastWriteTime)))
-		return false;
+		return ReadFileResult_Error;
 
 	if (readResponse == ReadResponse_Copy)
 	{
 		// Read file size and lastwritetime for new file from server
 		u64 newFileSize;
 		if (!receiveData(m_socket, &newFileSize, sizeof(newFileSize)))
-			return false;
+			return ReadFileResult_Error;
 
 
 		bool success = true;
@@ -1550,24 +1568,24 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		// Read actual file from server
 		RecvFileStats recvStats;
 		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize, m_stats.copyStats, recvStats))
-			return false;
+			return ReadFileResult_Error;
 		m_stats.recvTimeMs += recvStats.recvTimeMs;
 		m_stats.recvSize += recvStats.recvSize;
 		m_stats.decompressTimeMs += recvStats.decompressTimeMs;
 
 		outRead = newFileSize;
 		outSize = newFileSize;
-		return success;
+		return success ? ReadFileResult_Success : ReadFileResult_Error;
 	}
 	else // ReadResponse_CopyDelta
 	{
 		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
 		if (!receiveZdelta(m_socket, fullDest.c_str(), fullDest.c_str(), newFileLastWriteTime, copyContext))
-			return false;
-		return true;
+			return ReadFileResult_Error;
+		return ReadFileResult_Success;
 		#endif
 	}
-	return false;
+	return ReadFileResult_Error;
 }
 
 bool
@@ -1731,10 +1749,10 @@ Client::Connection::sendGetFileAttributes(const wchar_t* path, FileInfo& outInfo
 bool
 Client::Connection::destroy()
 {
-	ScopeGuard socketCleanup([this]() { closesocket(m_socket); m_socket = INVALID_SOCKET; });
+	ScopeGuard socketCleanup([this]() { closeSocket(m_socket); });
 
 	// shutdown the connection since no more data will be sent
-	if (shutdown(m_socket, SD_SEND) == SOCKET_ERROR)
+	if (shutdown(m_socket.socket, SD_SEND) == SOCKET_ERROR)
 	{
 		logErrorf(L"shutdown failed with error: %d", WSAGetLastError());
 		return false;
@@ -1745,7 +1763,7 @@ Client::Connection::destroy()
 	{
 		char recvbuf[512];
 		int recvbuflen = sizeof(recvbuf);
-		int res = recv(m_socket, recvbuf, recvbuflen, 0);
+		int res = recv(m_socket.socket, recvbuf, recvbuflen, 0);
 
 		if (res == 0)
 		{

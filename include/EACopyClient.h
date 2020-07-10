@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.997" CFG_STR; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.998" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -120,8 +120,8 @@ private:
 	void				resetWorkState(Log& log);
 	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
 	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
-	bool				connectToServer(const wchar_t* networkPath, bool isMainConnection, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
-	int					workerThread(ClientStats& stats);
+	bool				connectToServer(const wchar_t* networkPath, uint connectionIndex, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
+	int					workerThread(uint connectionIndex, ClientStats& stats);
 	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
 	bool				handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
@@ -132,7 +132,7 @@ private:
 	bool				purgeFilesInDirectory(const WString& destPath, int depthLeft);
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
-	Connection*			createConnection(const wchar_t* networkPath, bool isMainConnection, ClientStats& stats, bool& failedToConnect);
+	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
 
 
 	// Settings
@@ -142,7 +142,7 @@ private:
 	Log*				m_log;
 	bool				m_useSourceServerFailed;
 	bool				m_useDestServerFailed;
-	bool				m_workersActive;
+	Event				m_workDone;
 	bool				m_tryCopyFirst;
 	NetworkCopyContext	m_copyContext;
 	Connection*			m_sourceConnection;
@@ -169,12 +169,16 @@ private:
 class Client::Connection
 {
 public:
-						Connection(const ClientSettings& settings, ClientStats& stats, SOCKET s);
+						Connection(const ClientSettings& settings, ClientStats& stats, Socket s);
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
 	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
-	bool				sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
+
+	enum				ReadFileResult { ReadFileResult_Error, ReadFileResult_Success, ReadFileResult_ServerBusy };
+	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
+
+
 	bool				sendCreateDirectoryCommand(const wchar_t* dst);
 	bool				sendDeleteAllFiles(const wchar_t* dir);
 	bool				sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext);
@@ -185,7 +189,7 @@ public:
 	const ClientSettings& m_settings;
 	ClientStats&		m_stats;
 
-	SOCKET				m_socket;
+	Socket				m_socket;
 	bool				m_compressionEnabled;
 	CompressionData		m_compressionData;
 

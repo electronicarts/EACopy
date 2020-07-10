@@ -117,14 +117,14 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 	return uncPath;
 }
 
-bool sendData(SOCKET socket, const void* buffer, uint size)
+bool sendData(Socket& socket, const void* buffer, uint size)
 {
 	uint left = size;
 	char* pos = (char*)buffer;
 
 	while (left)
 	{
-		int res = ::send(socket, (const char*)pos, left, 0);
+		int res = ::send(socket.socket, (const char*)pos, left, 0);
 		if (res == SOCKET_ERROR)
 		{
 			logErrorf(L"send failed with error: %d", getErrorText(WSAGetLastError()).c_str());
@@ -136,14 +136,14 @@ bool sendData(SOCKET socket, const void* buffer, uint size)
 	return true;
 }
 
-bool receiveData(SOCKET socket, void* buffer, uint size)
+bool receiveData(Socket& socket, void* buffer, uint size)
 {
 	uint left = size;
 	char* pos = (char*)buffer;
 
 	while (left)
 	{
-		int res = ::recv(socket, pos, left, MSG_WAITALL);
+		int res = ::recv(socket.socket, pos, left, MSG_WAITALL);
 		if (res < 0)
 		{
 			logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
@@ -161,42 +161,48 @@ bool receiveData(SOCKET socket, void* buffer, uint size)
 	return true;
 }
 
-bool setBlocking(SOCKET socket, bool blocking)
+bool setBlocking(Socket& socket, bool blocking)
 {
 	u_long value = blocking ? 0 : 1;
-	if (ioctlsocket(socket, FIONBIO, &value) != SOCKET_ERROR)
+	if (ioctlsocket(socket.socket, FIONBIO, &value) != SOCKET_ERROR)
 		return true;
 
 	logErrorf(L"Setting non blocking failed");
 	return false;
 }
 
-bool disableNagle(SOCKET socket)
+bool disableNagle(Socket& socket)
 {
 	DWORD value = 1;
-	if (setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&value, sizeof(value)) != SOCKET_ERROR)
+	if (setsockopt(socket.socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&value, sizeof(value)) != SOCKET_ERROR)
 		return true;
 
 	logErrorf(L"setsockopt TCP_NODELAY error");
 	return false;
 }
 
-bool setSendBufferSize(SOCKET socket, uint sendBufferSize)
+bool setSendBufferSize(Socket& socket, uint sendBufferSize)
 {
-	if (setsockopt(socket, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBufferSize, sizeof(sendBufferSize)) != SOCKET_ERROR)
+	if (setsockopt(socket.socket, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBufferSize, sizeof(sendBufferSize)) != SOCKET_ERROR)
 		return true;
 
 	logDebugf(L"setsockopt SO_SNDBUF error");
 	return false;
 }
 
-bool setRecvBufferSize(SOCKET socket, uint recvBufferSize)
+bool setRecvBufferSize(Socket& socket, uint recvBufferSize)
 {
-	if (setsockopt(socket, SOL_SOCKET, SO_RCVBUF, (const char*)&recvBufferSize, sizeof(recvBufferSize)) != SOCKET_ERROR)
+	if (setsockopt(socket.socket, SOL_SOCKET, SO_RCVBUF, (const char*)&recvBufferSize, sizeof(recvBufferSize)) != SOCKET_ERROR)
 		return true;
 
 	logDebugf(L"setsockopt SO_RCVBUF error");
 	return false;
+}
+
+void closeSocket(Socket& socket)
+{
+	closesocket(socket.socket);
+	socket.socket = INVALID_SOCKET;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -207,7 +213,7 @@ CompressionData::~CompressionData()
 		ZSTD_freeCCtx((ZSTD_CCtx*)context);
 }
 
-bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
+bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
 {
 	BOOL success = TRUE;
 	u64 startCreateReadTimeMs = getTimeMs();
@@ -233,7 +239,7 @@ bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType 
 			uint toWrite = (uint)min(left, u64(INT_MAX-1));
 
 			u64 startSendMs = getTimeMs();
-			if (!TransmitFile(socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
+			if (!TransmitFile(socket.socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
 			{
 				int error = WSAGetLastError();
 				if (error == ERROR_IO_PENDING)// or WSA_IO_PENDING
@@ -373,7 +379,7 @@ NetworkCopyContext::~NetworkCopyContext()
 	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
 }
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
+bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
 {
 	u64 totalReceivedSize = 0;
 
@@ -416,7 +422,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
 			DWORD recvBytes = 0;
 			DWORD flags = MSG_WAITALL;
-			int fileRes = WSARecv(socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
+			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
 				logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
@@ -497,7 +503,7 @@ bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_
 			wsabuf.buf = (char*)copyContext.buffers[2];
 			DWORD recvBytes = 0;
 			DWORD flags = MSG_WAITALL;
-			int fileRes = WSARecv(socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
+			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
 				logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());

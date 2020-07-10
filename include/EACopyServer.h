@@ -20,11 +20,12 @@ using ReportServerStatus = Function<BOOL(DWORD dwCurrentState, DWORD dwWin32Exit
 
 struct ServerSettings
 {
-	uint			listenPort		= DefaultPort;
-	uint			maxHistory		= DefaultHistorySize;
-	bool			logDebug		= false;
-	UseBufferedIO	useBufferedIO	= UseBufferedIO_Auto;
+	uint			listenPort					= DefaultPort;
+	uint			maxHistory					= DefaultHistorySize;
+	bool			logDebug					= false;
+	UseBufferedIO	useBufferedIO				= UseBufferedIO_Auto;
 	WString			primingDirectory;
+	uint			maxConcurrentDownloadCount	= 100;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -76,6 +77,13 @@ private:
 	uint			m_activeConnectionCount = 0;
 	uint			m_handledConnectionCount = 0;
 
+	// Working state for priority
+	using			Queue = std::vector<void*>;
+	enum			{ MaxPriorityQueueCount = 32 };
+	Queue			m_queues[MaxPriorityQueueCount];
+	CriticalSection	m_queuesCs;
+
+
 					Server(const Server&) = delete;
 	void			operator=(const Server&) = delete;
 };
@@ -84,12 +92,12 @@ private:
 
 struct Server::ConnectionInfo
 {
-	ConnectionInfo(Log& l, const ServerSettings& s, SOCKET so) : log(l), settings(s), socket(so) {}
+	ConnectionInfo(Log& l, const ServerSettings& s, Socket so) : log(l), settings(s), socket(so) {}
 
 	Log& log;
 	const ServerSettings& settings;
 	Thread* thread = nullptr;
-	SOCKET socket;
+	Socket socket;
 };
 
 struct Server::FileKey

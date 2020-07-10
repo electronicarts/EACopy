@@ -104,9 +104,10 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 
 	reportStatus(SERVICE_RUNNING, NO_ERROR, 0);
 
+	// 1ms timeout if console application.. otherwise 5 seconds (and 1ms) timeout
 	TIMEVAL timeval;
-	timeval.tv_sec = 0;
-	timeval.tv_usec = isConsole ? 1000 : 5*1000*1000; // 1ms timeout if console application.. otherwise 5 seconds timeout
+	timeval.tv_sec = isConsole ? 0 : 5;
+	timeval.tv_usec = 1000;
 
 	while (m_loopServer || !connections.empty())
 	{
@@ -144,7 +145,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 			for (auto i=connections.begin(); i!=connections.end();)
 			{
 				if (!m_loopServer) // If server is shutting down we need to close the connection sockets to prevent potential deadlocks
-					closesocket(i->socket);
+					closeSocket(i->socket);
 
 				DWORD exitCode;
 				if (!i->thread->getExitCode(exitCode))
@@ -154,7 +155,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 					++i;
 					continue;
 				}
-				assert(i->socket == INVALID_SOCKET);
+				assert(i->socket.socket == INVALID_SOCKET);
 				delete i->thread;
 				i = connections.erase(i);
 				--m_activeConnectionCount;
@@ -198,7 +199,8 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 			++m_handledConnectionCount;
 
 			logDebugLinef(L"Connection accepted");
-			connections.emplace_back(log, settings, clientSocket);
+			Socket sock = {clientSocket, true};
+			connections.emplace_back(log, settings, sock);
 			ConnectionInfo& info = connections.back();
 
 			info.thread = new Thread([this, &info]() { return connectionThread(info); });
@@ -278,7 +280,7 @@ Server::connectionThread(ConnectionInfo& info)
 	char* recvBuffer2 = new char[bufferSize];
 	char* recvBuffer = recvBuffer1;
 
-	ScopeGuard closeSocket([&]() { closesocket(info.socket); info.socket = INVALID_SOCKET; delete[] recvBuffer1; delete[] recvBuffer2; logDebugLinef(L"Connection closed..."); });
+	ScopeGuard closeSocket([&]() { closeSocket(info.socket); delete[] recvBuffer1; delete[] recvBuffer2; logDebugLinef(L"Connection closed..."); });
 
 	// Experimenting with speeding up network performance. This didn't make any difference
 	// setRecvBufferSize(info.socket, 16*1024*1024);
@@ -319,11 +321,22 @@ Server::connectionThread(ConnectionInfo& info)
 	bool isValidEnvironment = false;
 	bool isDone = false;
 	u64 deltaCompressionThreshold = ~0u;
+	uint clientConnectionIndex = ~0u; // Note that this is the connection index from the same client where 0 is the controlling connection and the rest are worker connections
+
+	ScopeGuard queueRemoveGuard([&]()
+		{
+			if (clientConnectionIndex == ~0u)
+				return;
+			m_queuesCs.enter();
+			Queue& q = m_queues[clientConnectionIndex];
+			q.erase(std::find(q.begin(), q.end(), &info));
+			m_queuesCs.leave();
+		});
 
 	// Receive until the peer shuts down the connection
 	while (!isDone && m_loopServer)
 	{
-		int res = recv(info.socket, recvBuffer + recvPos, bufferSize - recvPos, 0);
+		int res = recv(info.socket.socket, recvBuffer + recvPos, bufferSize - recvPos, 0);
 		if (res == 0)
 		{
 			logDebugLinef(L"Connection closing...");
@@ -358,10 +371,13 @@ Server::connectionThread(ConnectionInfo& info)
 					auto& cmd = *(const EnvironmentCommand*)recvBuffer;
 
 					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
+					clientConnectionIndex = min(cmd.connectionIndex, MaxPriorityQueueCount - 1);
+					
+					m_queuesCs.enter();
+					Queue& q = m_queues[clientConnectionIndex];
+					m_queues[clientConnectionIndex].push_back(&info);
+					m_queuesCs.leave();
 
-					// If this is the main connection from the client machine we bump priority (normally there are 1 main connection and 15 worker connections)
-					if (cmd.isMainConnection)
-						SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 
 					if (!getLocalFromNet(localPath, cmd.netDirectory))
 						break;
@@ -499,6 +515,51 @@ Server::connectionThread(ConnectionInfo& info)
 							return -1;
 						break;
 					}
+
+					bool tooBusy = false;
+
+					{
+						m_queuesCs.enter();
+
+						uint totalCountBeforeThis = 0;
+
+						// Count all connections with lower connection index
+						for (uint i=0, e=clientConnectionIndex; i!=e; ++i)
+							totalCountBeforeThis += m_queues[i].size();
+
+						// If there is still room after all connections with lower connection index we prioritize oldest connection
+						if (totalCountBeforeThis < info.settings.maxConcurrentDownloadCount)
+						{
+							Queue& q = m_queues[clientConnectionIndex];
+							uint spotsLeftForQueue = info.settings.maxConcurrentDownloadCount - totalCountBeforeThis;
+							if (spotsLeftForQueue < q.size())
+							{
+								for (auto i : q)
+								{
+									if (!spotsLeftForQueue--)
+									{
+										tooBusy = true;
+										break;
+									}
+									if (i == &info)
+										break;
+								}
+							}
+						}
+						else
+							tooBusy = true;
+
+						m_queuesCs.leave();
+					}
+
+					if (tooBusy)
+					{
+						ReadResponse readResponse = ReadResponse_ServerBusy;
+						if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
+							return -1;
+						break;
+					}
+
 
 					auto& cmd = *(const ReadFileCommand*)recvBuffer;
 					WString fullPath = localPath + cmd.path;
@@ -769,7 +830,7 @@ Server::connectionThread(ConnectionInfo& info)
 	}
 
 	// shutdown the connection since we're done
-	if (shutdown(info.socket, SD_BOTH) == SOCKET_ERROR)
+	if (shutdown(info.socket.socket, SD_BOTH) == SOCKET_ERROR)
 	{
 		logErrorf(L"shutdown failed with error: %s", getErrorText(WSAGetLastError()).c_str());
 		return -1;

@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 10 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 11 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -50,7 +50,7 @@ struct EnvironmentCommand : Command
 {
 	u64 deltaCompressionThreshold;
 	wchar_t netDirectory[1];
-	bool isMainConnection;
+	uint connectionIndex;
 };
 
 
@@ -96,7 +96,8 @@ enum ReadResponse : u8
 	ReadResponse_Copy,
 	ReadResponse_CopyDelta,
 	ReadResponse_Skip,
-	ReadResponse_BadSource
+	ReadResponse_BadSource,
+	ReadResponse_ServerBusy,
 };
 
 struct CreateDirCommand : Command
@@ -145,13 +146,20 @@ struct GetFileInfoCommand : Command
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Network utils
 
+struct Socket
+{
+	SOCKET socket;
+	bool valid;
+};
+
 const wchar_t*	optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allowLocal = true);
-bool			sendData(SOCKET socket, const void* buffer, uint size);
-bool			receiveData(SOCKET socket, void* buffer, uint size);
-bool			setBlocking(SOCKET socket, bool blocking);
-bool			disableNagle(SOCKET socket);
-bool			setSendBufferSize(SOCKET socket, uint sendBufferSize);
-bool			setRecvBufferSize(SOCKET socket, uint recvBufferSize);
+bool			sendData(Socket& socket, const void* buffer, uint size);
+bool			receiveData(Socket& socket, void* buffer, uint size);
+bool			setBlocking(Socket& socket, bool blocking);
+bool			disableNagle(Socket& socket);
+bool			setSendBufferSize(Socket& socket, uint sendBufferSize);
+bool			setRecvBufferSize(Socket& socket, uint recvBufferSize);
+void			closeSocket(Socket& socket);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -175,7 +183,7 @@ struct SendFileStats
 	u64			compressionLevelSum = 0;
 };
 
-bool sendFile(SOCKET socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats);
+bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -195,7 +203,7 @@ struct RecvFileStats
 	u64			decompressTimeMs = 0;
 };
 
-bool receiveFile(bool& outSuccess, SOCKET socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats);
+bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

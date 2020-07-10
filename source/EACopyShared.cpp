@@ -34,6 +34,36 @@ thread_local LogContext* t_logContext;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+Event::Event()
+{
+	ev = CreateEvent(NULL, TRUE, FALSE, NULL);
+}
+
+Event::~Event()
+{
+	CloseHandle(ev);
+}
+
+void
+Event::set()
+{
+	SetEvent(ev);
+}
+
+void
+Event::reset()
+{
+	ResetEvent(ev);
+}
+
+bool
+Event::isSet(uint timeOutMs)
+{
+	return WaitForSingleObject(ev, timeOutMs) == WAIT_OBJECT_0;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 Thread::Thread(Function<int()>&& f)
 :	func(std::move(f))
 {
