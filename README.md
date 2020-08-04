@@ -1,6 +1,6 @@
 # News for covid-19 times
 
-We have added support for having EACopyService sit on another machine than the network share to enable environments where the network share machine does not support running custom program (like NetApp etc). This means that anyone can spin up an EACopyService next to the network share and then use "EACopy.exe ... /SERVERADDR <machine-with-service> /C" to speed up transfers from the office to your home. Very simple setup.
+We have added support for having EACopyService sit on another machine than the network share to enable environments where the network share machine does not support running custom program (like NetApp etc). This means that anyone can spin up an EACopyService next to the network share and then use "EACopy.exe ... /SERVERADDR \<machine-with-service\> /C" to speed up transfers from the office to your home. Very simple setup.
 	
 # EACopy
 
