@@ -6,11 +6,11 @@ EACopy without using EACopyService is very simple and doesn't do anything magic 
 
 If /MT:x is being used copying will be concurrent. EACopy spawns x number of worker threads that waits for entries to show up in a queue in order to copy them from source to destination. The main thread will populate that queue by using wildcards or file lists containing wildcards. Using /MT usually makes a huge difference so experiment with the number x. The main thread will also create destination directories as it traverses wildcards/file lists so when the worker threads pick up files to be copied the destination folder already exists. When main thread has found all files to copy it turns itself in to a worker thread and help process queued up files.
 
-For some reason EACopy is slightly faster than RoboCopyin our test cases even in non EACopyService mode and I can only speculate in why but code is very straight forward and uses win32 API calls directly on most cases.
+For some reason EACopy is slightly faster than RoboCopy in our test cases even in non EACopyService mode and I can only speculate in why but code is very straight forward and uses win32 API calls directly on most cases.
 
 ## EACopyService
 
-EACopyService is a service which needs to run on the machine owning the network share and the network share needs to be backed by a local NTFS drive that EACopyService can create hard links on (https://docs.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions). EACopyService can both run as a command line application or a service.
+EACopyService is a service which to be optimal should run on the machine owning the network share and the network share needs to be backed by a drive that EACopyService can create hard links on (https://docs.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions). It is also possible to use EACopyService as an external accelerator where the process runs on another machine than the network share. In that case the EACopy.exe process needs to have /SERVERADDR <addr> provided in order to find the external EACopyService. EACopyService can both run as a command line application or a service.
 
 EACopyService is listening to connections from EACopy worker threads. Let's call EACopyService "Server" and EACopy worker thread "Client" from now on.
 
