@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 11 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 12 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -79,6 +79,7 @@ enum WriteResponse : u8
 {
 	WriteResponse_Copy,
 	WriteResponse_CopyDelta,
+	WriteResponse_CopyUsingSmb,
 	WriteResponse_Link,
 	WriteResponse_Skip,
 	WriteResponse_BadDestination
@@ -95,6 +96,7 @@ enum ReadResponse : u8
 {
 	ReadResponse_Copy,
 	ReadResponse_CopyDelta,
+	ReadResponse_CopyUsingSmb,
 	ReadResponse_Skip,
 	ReadResponse_BadSource,
 	ReadResponse_ServerBusy,
@@ -149,7 +151,7 @@ struct GetFileInfoCommand : Command
 struct Socket
 {
 	SOCKET socket;
-	bool valid;
+	uint index;
 };
 
 const wchar_t*	optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allowLocal = true);
@@ -160,6 +162,7 @@ bool			disableNagle(Socket& socket);
 bool			setSendBufferSize(Socket& socket, uint sendBufferSize);
 bool			setRecvBufferSize(Socket& socket, uint recvBufferSize);
 void			closeSocket(Socket& socket);
+bool			isValidSocket(Socket& socket);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

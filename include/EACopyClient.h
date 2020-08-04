@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.998" CFG_STR; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.9982" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -40,6 +40,7 @@ struct ClientSettings
 	bool				copyEmptySubdirectories		= false;
 	bool				purgeDestination			= false;
 	UseServer			useServer					= UseServer_Automatic;
+	WString				serverAddress;
 	uint				serverPort					= DefaultPort;
 	uint				serverConnectTimeoutMs		= 500;
 	u64					deltaCompressionThreshold	= ~u64(0);
@@ -127,14 +128,15 @@ private:
 	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
 	bool				handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc);
-	bool				handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
-	bool				excludeFilesFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath);
+	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
+	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileFunc& handleFileFunc);
 	bool				purgeFilesInDirectory(const WString& destPath, int depthLeft);
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
 	bool				isIgnoredDirectory(const wchar_t* directory);
+	bool				isValid(Connection* connection);
 
 
 	// Settings

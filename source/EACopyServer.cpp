@@ -196,10 +196,10 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 				break;
 			}
 
-			++m_handledConnectionCount;
+			uint socketIndex = m_handledConnectionCount++;
 
-			logDebugLinef(L"Connection accepted");
-			Socket sock = {clientSocket, true};
+			logDebugLinef(L"Connection %u accepted", socketIndex);
+			Socket sock = { clientSocket, socketIndex };
 			connections.emplace_back(log, settings, sock);
 			ConnectionInfo& info = connections.back();
 
@@ -222,14 +222,15 @@ Server::stop()
 bool
 Server::primeDirectory(const wchar_t* directory)
 {
-	WString localDir;
+	WString serverDir;
+	bool isExternalDir;
 	if (directory[1] == ':')
-		localDir = directory;
-	else if (!getLocalFromNet(localDir, directory))
+		serverDir = directory;
+	else if (!getLocalFromNet(serverDir, isExternalDir, directory))
 		return false;
-	if (*localDir.rbegin() != '\\')
-		localDir += '\\';
-	return primeDirectoryRecursive(localDir);
+	if (*serverDir.rbegin() != '\\')
+		serverDir += '\\';
+	return primeDirectoryRecursive(serverDir);
 }
 
 
@@ -280,7 +281,7 @@ Server::connectionThread(ConnectionInfo& info)
 	char* recvBuffer2 = new char[bufferSize];
 	char* recvBuffer = recvBuffer1;
 
-	ScopeGuard closeSocket([&]() { closeSocket(info.socket); delete[] recvBuffer1; delete[] recvBuffer2; logDebugLinef(L"Connection closed..."); });
+	ScopeGuard closeSocket([&]() { closeSocket(info.socket); delete[] recvBuffer1; delete[] recvBuffer2; logDebugLinef(L"Connection %u closed...", info.socket.index); });
 
 	// Experimenting with speeding up network performance. This didn't make any difference
 	// setRecvBufferSize(info.socket, 16*1024*1024);
@@ -300,17 +301,14 @@ Server::connectionThread(ConnectionInfo& info)
 			return -1;
 	}
 
-	uint recvPos = 0;
-	WString localPath;
-
 	// This is using writeReport
-	int entryCount[] = { 0, 0, 0, 0 };
+	int entryCount[] = { 0, 0, 0, 0, 0 };
 	ScopeGuard logDebugReport([&]()
 	{ 
 		logScopeEnter();
-		logDebugLinef(L"--------- Socket report ---------");
-		logDebugLinef(L"          Copy   CopyDelta Link   Skip");
-		logDebugLinef(L"Files   %6i %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[2]);
+		logDebugLinef(L"--------- Socket %u report ---------", info.socket.index);
+		logDebugLinef(L"          Copy   CopyDelta CopySmb   Link   Skip");
+		logDebugLinef(L"Files   %6i      %6i  %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[3], entryCount[4]);
 		logDebugLinef(L"---------------------------------");
 		logScopeLeave();
 	});
@@ -318,7 +316,10 @@ Server::connectionThread(ConnectionInfo& info)
 	NetworkCopyContext copyContext;
 	CompressionData	compressionData;
 
+	uint recvPos = 0;
+	WString serverPath;
 	bool isValidEnvironment = false;
+	bool isServerPathExternal = false; // Tells whether "local" directory is external or not (it could be pointing to a network share)
 	bool isDone = false;
 	u64 deltaCompressionThreshold = ~0u;
 	uint clientConnectionIndex = ~0u; // Note that this is the connection index from the same client where 0 is the controlling connection and the rest are worker connections
@@ -339,7 +340,7 @@ Server::connectionThread(ConnectionInfo& info)
 		int res = recv(info.socket.socket, recvBuffer + recvPos, bufferSize - recvPos, 0);
 		if (res == 0)
 		{
-			logDebugLinef(L"Connection closing...");
+			logDebugLinef(L"Connection %u closing...", info.socket.index);
 			break;
 		}
 		if (res < 0)
@@ -379,7 +380,7 @@ Server::connectionThread(ConnectionInfo& info)
 					m_queuesCs.leave();
 
 
-					if (!getLocalFromNet(localPath, cmd.netDirectory))
+					if (!getLocalFromNet(serverPath, isServerPathExternal, cmd.netDirectory))
 						break;
 					isValidEnvironment  = true;
 				}
@@ -401,7 +402,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					auto& cmd = *(const WriteFileCommand*)recvBuffer;
-					WString fullPath = localPath + cmd.path;
+					WString fullPath = serverPath + cmd.path;
 
 					//logDebugLinef("%s", fullPath.c_str());
 
@@ -420,7 +421,7 @@ Server::connectionThread(ConnectionInfo& info)
 						localFile = findIt->second;
 					m_localFilesCs.leave();
 
-					WriteResponse writeResponse = WriteResponse_Copy;
+					WriteResponse writeResponse = isServerPathExternal ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
 
 					if (!localFile.name.empty())
 					{
@@ -429,9 +430,27 @@ Server::connectionThread(ConnectionInfo& info)
 						DWORD attributes = getFileInfo(other, localFile.name.c_str());
 						if (attributes && equals(cmd.info, other))
 						{
-							bool skip;
-							if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip))
-								writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
+							FileInfo destInfo;
+
+							if (fullPath == localFile.name) // We are copying to the same place we've copied before and the file there is still up-to-date, skip
+							{
+								writeResponse = WriteResponse_Skip;
+							}
+							else
+							// For external shares CreateHardLink might return true even though it is a skip..
+							// So the correct thing would be to check the file first but it is too costly so
+							/*
+							else if (isServerPathExternal && getFileInfo(destInfo, fullPath.c_str()) && equals(cmd.info, destInfo))
+							{
+								writeResponse = WriteResponse_Skip;
+							}
+							else
+							*/
+							{
+								bool skip;
+								if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip))
+									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
+							}
 						}
 					}
 					else
@@ -474,6 +493,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					bool success = false;
+					bool sendSuccess = true;
 					u64 totalReceivedSize = 0;
 
 					if (writeResponse == WriteResponse_CopyDelta)
@@ -485,7 +505,15 @@ Server::connectionThread(ConnectionInfo& info)
 						success = true;
 						#endif
 					}
-					else
+					else if (writeResponse == WriteResponse_CopyUsingSmb)
+					{
+						u8 copyResult;
+						if (!receiveData(info.socket, &copyResult, sizeof(copyResult))) // Let client do the copying while we want for a success or not
+							return -1;
+						success = copyResult != 0;
+						sendSuccess = false;
+					}
+					else // WriteResponse_Copy
 					{
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize);
 						CopyStats copyStats;
@@ -500,9 +528,13 @@ Server::connectionThread(ConnectionInfo& info)
 						InterlockedAdd64((LONG64*)&m_bytesCopied, cmd.info.fileSize);
 						InterlockedAdd64((LONG64*)&m_bytesReceived, totalReceivedSize);
 					}
-					u8 copyResult = success ? 1 : 0;
-					if (!sendData(info.socket, &copyResult, sizeof(copyResult)))
-						return -1;
+
+					if (sendSuccess)
+					{
+						u8 copyResult = success ? 1 : 0;
+						if (!sendData(info.socket, &copyResult, sizeof(copyResult)))
+							return -1;
+					}
 				}
 				break;
 
@@ -562,7 +594,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 
 					auto& cmd = *(const ReadFileCommand*)recvBuffer;
-					WString fullPath = localPath + cmd.path;
+					WString fullPath = serverPath + cmd.path;
 
 					FileInfo fi;
 					DWORD attributes = getFileInfo(fi, fullPath.c_str());
@@ -574,7 +606,7 @@ Server::connectionThread(ConnectionInfo& info)
 						break;
 					}
 
-					ReadResponse readResponse = ReadResponse_Copy;
+					ReadResponse readResponse = (isServerPathExternal && !cmd.compressionEnabled) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
 					if (equals(fi, cmd.info))
 						readResponse = ReadResponse_Skip;
 
@@ -615,6 +647,10 @@ Server::connectionThread(ConnectionInfo& info)
 						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, copyStats, sendStats))
 							return -1;
 					}
+					else if (readResponse == ReadResponse_CopyUsingSmb)
+					{
+						// NOP, client got this
+					}
 					else // ReadResponse_CopyDelta
 					{
 						#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
@@ -634,7 +670,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (isValidEnvironment)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
-						WString fullPath = localPath + cmd.path;
+						WString fullPath = serverPath + cmd.path;
 						if (!ensureDirectory(fullPath.c_str()))
 							createDirResponse = CreateDirResponse_Error;
 					}
@@ -654,7 +690,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (isValidEnvironment)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
-						WString fullPath = localPath + cmd.path;
+						WString fullPath = serverPath + cmd.path;
 						if (!deleteAllFiles(fullPath.c_str(), false)) // No error on missing files
 							deleteFilesResponse = DeleteFilesResponse_Error;
 					}
@@ -670,7 +706,7 @@ Server::connectionThread(ConnectionInfo& info)
 				{
 					auto& cmd = *(const FindFilesCommand*)recvBuffer;
 					WIN32_FIND_DATAW fd; 
-					WString searchStr = localPath + cmd.pathAndWildcard;
+					WString searchStr = serverPath + cmd.pathAndWildcard;
 					HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
 					if(hFind == INVALID_HANDLE_VALUE)
 					{
@@ -736,7 +772,7 @@ Server::connectionThread(ConnectionInfo& info)
 				{
 					auto& cmd = *(const GetFileInfoCommand*)recvBuffer;
 					WIN32_FIND_DATAW fd; 
-					WString fullPath = localPath + cmd.path;
+					WString fullPath = serverPath + cmd.path;
 					__declspec(align(8)) u8 sendBuffer[3*8+2*4];
 					static_assert(sizeof(sendBuffer) == sizeof(FileInfo) + sizeof(DWORD) + sizeof(DWORD), "");
 					DWORD attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str());
@@ -763,7 +799,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					u64 freeVolumeSpace = 0;
 					ULARGE_INTEGER freeBytesAvailable;
-					if (GetDiskFreeSpaceExW(localPath.c_str(), nullptr, nullptr, &freeBytesAvailable))
+					if (GetDiskFreeSpaceExW(serverPath.c_str(), nullptr, nullptr, &freeBytesAvailable))
 						freeVolumeSpace = freeBytesAvailable.QuadPart;
 
 					uint activeConnectionCount = m_activeConnectionCount - 1; // Skip the connection that is asking for this info
@@ -853,29 +889,36 @@ Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
 }
 
 bool
-Server::getLocalFromNet(WString& localDirectory, const wchar_t* netDirectory)
+Server::getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory)
 {
-	localDirectory = netDirectory;
-	const wchar_t* localPath = wcschr(netDirectory, '\\');
-	if (!localPath)
-		localPath = netDirectory + wcslen(netDirectory);
+	outIsExternalDirectory = false;
+	outServerDirectory = netDirectory;
+	const wchar_t* serverPath = wcschr(netDirectory, '\\'); // Find first backslash.. 
+	if (!serverPath)
+		serverPath = netDirectory + wcslen(netDirectory);
 
-	WString netname(netDirectory, localPath);
+	WString netname(netDirectory, serverPath);
 
 	PSHARE_INFO_502 shareInfo;
 
 	NET_API_STATUS res = NetShareGetInfo(NULL, const_cast<LPWSTR>(netname.c_str()), 502, (LPBYTE*) &shareInfo);
 	if (res != NERR_Success)
 	{
+		if (netDirectory[0] == '\\' && netDirectory[1] == '\\') // This is another network share and EACopyServer is just a proxy to that place
+		{
+			outIsExternalDirectory = true;
+			return true;
+		}
+
 		logErrorf(L"Failed to find netshare '%s'", netname.c_str());
 		return false;
 	}
 
 	WString wpath(shareInfo->shi502_path);
-	localDirectory = WString(wpath.begin(), wpath.end());
-	if (*localPath)
-		localDirectory += localPath;
-	localDirectory += '\\';
+	outServerDirectory = WString(wpath.begin(), wpath.end());
+	if (*serverPath)
+		outServerDirectory += serverPath;
+	outServerDirectory += '\\';
 
 	NetApiBufferFree(shareInfo);
 	return true;

@@ -597,7 +597,7 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 
 bool isError(DWORD error, bool errorOnMissingFile)
 {
-	return errorOnMissingFile || ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error;
+	return errorOnMissingFile || (ERROR_FILE_NOT_FOUND != error && ERROR_PATH_NOT_FOUND != error);
 }
 
 bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMissingFile)

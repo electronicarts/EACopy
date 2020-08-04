@@ -10,7 +10,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr char ServerVersion[] = "0.92" CFG_STR; // Version of server
+constexpr char ServerVersion[] = "0.93" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -52,7 +52,7 @@ private:
 
 	DWORD			connectionThread(ConnectionInfo& info);
 	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
-	bool			getLocalFromNet(WString& localDirectory, const wchar_t* netDirectory);
+	bool			getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory);
 	bool			primeDirectoryRecursive(const WString& directory);
 	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 

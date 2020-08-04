@@ -24,6 +24,8 @@ namespace eacopy
 // Locally configured share to C:\temp\EACopyTest\dest OR I:\MyShare
 //The real directory should exist and the share setup to point to the directory.
 #define DEFAULT_DEST_DIR  L""
+// Some network share on another machine than where the EACopyService run
+#define DEFAULT_EXTERNAL_DEST_DIR L""
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -33,6 +35,8 @@ WString g_testSourceDir = DEFAULT_SOURCE_DIR;
 // Destination directory used by unit tests. Should be a network share on the local machine.
 WString g_testDestDir = DEFAULT_DEST_DIR;
 
+// Destination directory used by unit tests. Should be a network share on the local machine.
+WString g_testExternalDestDir = DEFAULT_EXTERNAL_DEST_DIR;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // TestServer
@@ -165,9 +169,14 @@ struct TestBase
 
 	void createTestFile(const wchar_t* name, u64 size, bool source = true)
 	{
+		const WString& dir = source ? testSourceDir : testDestDir;
+		createTestFile(dir.c_str(), name, size);
+	}
+	void createTestFile(const wchar_t* dir_, const wchar_t* name, u64 size, bool source = true)
+	{
 		u64 startSetupTime = getTimeMs();
-		WString dir = source ? testSourceDir : testDestDir;
 
+		WString dir(dir_);
 		const wchar_t* lastSlash = wcsrchr(name, L'\\');
 		if (lastSlash)
 		{
@@ -298,6 +307,14 @@ TestBase* TestBase::s_lastTest;
 
 
 #define EACOPY_TEST(name) EACOPY_TEST_LOOP(name, 1)
+
+
+#define EACOPY_REQUIRE_EXTERNAL_SHARE																\
+	if (g_testExternalDestDir.empty())																\
+	{																								\
+		logInfoLinef(L"No external dest dir provided. Test skipped");								\
+		return;																						\
+	}																								\
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1551,6 +1568,24 @@ EACOPY_TEST(CopyFileListDestIsLocal)
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
+EACOPY_TEST(CopyMultiFileListDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
+	createTestFile(L"Foo1.txt", 10);
+	createTestFile(L"Foo2.txt", 10);
+	createFileList(L"FileList1.txt", "Foo1.txt");
+	createFileList(L"FileList2.txt", "Foo2.txt");
+
+	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
+	clientSettings.filesOrWildcardsFiles.push_back(L"FileList1.txt");
+	clientSettings.filesOrWildcardsFiles.push_back(L"FileList2.txt");
+
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo1.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo2.txt"));
+}
+
 EACOPY_TEST(ServerCopyFileListDestIsLocal)
 {
 	std::swap(testDestDir, testSourceDir);
@@ -1602,13 +1637,13 @@ EACOPY_TEST(CopyLargeFile)
 		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
 
 		ClientSettings clientSettings(getDefaultClientSettings());
-		clientSettings.destDirectory = testDestDir+ L"\\" + iStr;
+		clientSettings.destDirectory = testDestDir+ iStr + L'\\';
 		Client client(clientSettings);
 
 		EACOPY_ASSERT(client.process(clientLog) == 0);
 
 		FileInfo destFile;
-		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\" + iStr + L"\\Foo.txt").c_str()) != 0);
+		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + iStr + L"\\Foo.txt").c_str()) != 0);
 		EACOPY_ASSERT(destFile.fileSize == fileSize);
 	}
 }
@@ -1629,7 +1664,7 @@ EACOPY_TEST(ServerCopyLargeFile)
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
-		clientSettings.destDirectory = testDestDir+ L"\\" + iStr;
+		clientSettings.destDirectory = testDestDir+ L"\\" + iStr + L'\\';
 
 		Client client(clientSettings);
 		EACOPY_ASSERT(client.process(clientLog) == 0);
@@ -1656,7 +1691,7 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
-		clientSettings.destDirectory = testDestDir+ L"\\" + iStr;
+		clientSettings.destDirectory = testDestDir+ L"\\" + iStr + L'\\';
 		clientSettings.compressionEnabled = true;
 		clientSettings.compressionLevel = 4;
 
@@ -1689,7 +1724,7 @@ EACOPY_TEST(ServerTestMemory)
 
 		ClientSettings clientSettings;
 		clientSettings.sourceDirectory = testSourceDir;
-		clientSettings.destDirectory = testDestDir + L"\\" + iStr;
+		clientSettings.destDirectory = testDestDir + L"\\" + iStr + L'\\';
 		clientSettings.filesOrWildcards.push_back(L"*.*");
 		clientSettings.copySubdirDepth = 100;
 		clientSettings.useServer = UseServer_Required;
@@ -1769,6 +1804,95 @@ EACOPY_TEST(PathGoingOverMaxPath)
 	EACOPY_ASSERT(isEqual((testSourceDir + L"Foo.txt").c_str(), (clientSettings.destDirectory + L"Foo.txt").c_str()));
 }
 
+EACOPY_TEST(ServerCopySmallFileExternalPath)
+{
+	EACOPY_REQUIRE_EXTERNAL_SHARE
+
+	const wchar_t* file = L"Foo.txt";
+	createTestFile(file, 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	WString externalDest = g_testExternalDestDir + L'\\';
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.serverAddress = L"localhost";
+	clientSettings.destDirectory = externalDest;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
+}
+
+EACOPY_TEST(FromServerCopySmallFileExternalPath)
+{
+	EACOPY_REQUIRE_EXTERNAL_SHARE
+
+	WString externalDest = g_testExternalDestDir + L'\\';
+	ensureDirectory(externalDest.c_str());
+	const wchar_t* file = L"Foo.txt";
+	createTestFile(externalDest.c_str(), file, 10);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.serverAddress = L"localhost";
+	clientSettings.sourceDirectory = externalDest;
+	clientSettings.destDirectory = testSourceDir;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
+}
+
+EACOPY_TEST(ServerCopySmallFileExternalPathUseHistory)
+{
+	EACOPY_REQUIRE_EXTERNAL_SHARE
+
+	const wchar_t* file = L"Foo.txt";
+	createTestFile(file, 1024*1024);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.serverAddress = L"localhost";
+
+	{
+		WString externalDest = g_testExternalDestDir + L"\\A\\";
+		deleteFile((externalDest + file).c_str(), false);
+		clientSettings.destDirectory = externalDest;
+		Client client(clientSettings);
+
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(clientStats.copyCount == 1);
+		EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
+	}
+	{
+		WString externalDest = g_testExternalDestDir + L"\\B\\";
+		deleteFile((externalDest + file).c_str(), false);
+		clientSettings.destDirectory = externalDest;
+		Client client(clientSettings);
+
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(clientStats.linkCount == 1);
+		EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
+	}
+}
 
 void printHelp()
 {

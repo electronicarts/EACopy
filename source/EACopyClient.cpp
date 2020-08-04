@@ -97,7 +97,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 	// Collect exclusions provided through file
 	for (auto& file : m_settings.filesExcludeFiles)
-		if (!excludeFilesFromFile(sourceDir, file, destDir))
+		if (!excludeFilesFromFile(logContext, outStats, sourceDir, file, destDir))
 			break;
 
 	{
@@ -304,14 +304,14 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 	}
 
 	// Get full destination path
-	WString fullDst = m_settings.destDirectory + L'\\' + entry.dst;
+	WString fullDst = m_settings.destDirectory + entry.dst;
 
 	// Try to copy file
-	int retryCount = m_settings.retryCount;
+	int retryCountLeft = m_settings.retryCount;
 	while (true)
 	{
 		// Use connection to server if available
-		if (destConnection)
+		if (isValid(destConnection))
 		{
 			u64 startTimeMs = getTimeMs();
 			u64 size;
@@ -340,7 +340,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				return true;
 			}
 		}
-		else if (sourceConnection)
+		else if (isValid(sourceConnection))
 		{
 			u64 startTimeMs = getTimeMs();
 			u64 size;
@@ -447,7 +447,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			}
 		}
 
-		if (retryCount-- == 0)
+		if (retryCountLeft-- == 0)
 		{
 			++stats.failCount;
 			logErrorf(L"failed to copy file (%s)", entry.src.c_str());
@@ -643,7 +643,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 			DWORD error = 0;
 
 			// Get file attributes (and allow retry if fails)
-			if (m_sourceConnection)
+			if (isValid(m_sourceConnection))
 			{
 				if (!m_sourceConnection->sendGetFileAttributes(fileName, fileInfo, attributes, error))
 					return false;
@@ -734,7 +734,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 bool
 Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
-	if (m_sourceConnection)
+	if (isValid(m_sourceConnection))
 	{
 		WString relPath;
 		if (sourcePath.size() > m_settings.sourceDirectory.size())
@@ -869,97 +869,135 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 }
 
 bool
-Client::handleFilesOrWildcardsFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func)
+Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func)
 {
-	WString fullPath;
+	int retryCount = m_settings.retryCount;
+	uint handledLineCount = 0;
+	bool isFirstRun = true;
+	bool tryUseSourceConnection = false;
+	WString originalFullPath;
 	if (isAbsolutePath(fileName.c_str()))
 	{
-		fullPath = fileName;
+		originalFullPath = fileName;
 	}
 	else
 	{
-		fullPath = sourcePath + fileName;
-
-		// If there is a source connection we can read the file to local drive first and then read that file using normal commands
-		if (m_sourceConnection)
-		{
-			ensureDirectory(destPath.c_str());
-			u64 fileSize;
-			u64 read;
-			if (!m_sourceConnection->sendReadFileCommand(fullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
-				return false;
-			fullPath = destPath + fileName;
-		}
+		originalFullPath = sourcePath + fileName;
+		tryUseSourceConnection = true;
 	}
 
-	HANDLE hFile;
-	if (!openFileRead(fullPath.c_str(), hFile, true))
-		return false;
-	ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile); });
-
-	char* buffer = (char*)m_copyContext.buffers[1]; // Important that we use '1'.. '0' is used by SendFindFiles command
-	uint left = 0;
 
 	while (true)
 	{
-		DWORD read = 0;
-		if (ReadFile(hFile, buffer + left, CopyContextBufferSize - left - 1, &read, NULL) == 0)
+		if (!isFirstRun)
 		{
-			logErrorf(L"Error %s. Failed reading input file %s", getLastErrorText().c_str(), fullPath.c_str());
-			return false;
+			if (retryCount-- == 0)
+				return false;
+
+			logContext.resetLastError();
+			logInfoLinef(L"Warning - Failed reading input file %s, retrying in %i seconds", originalFullPath.c_str(), m_settings.retryWaitTimeMs/1000);
+			Sleep(m_settings.retryWaitTimeMs);
+
+			++stats.retryCount;
+		}
+		isFirstRun = false;
+
+		WString fullPath = originalFullPath;
+		// If there is a source connection we can read the file to local drive first and then read that file using normal commands
+		if (tryUseSourceConnection && isValid(m_sourceConnection))
+		{
+			// TODO: Should this use a temporary file? This file will now be leaked at destination!
+			ensureDirectory(destPath.c_str());
+			u64 fileSize;
+			u64 read;
+			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
+				continue;
+			fullPath = destPath + fileName;
 		}
 
-		left += read;
 
-		if (left == 0)
-			break;
+		HANDLE hFile;
+		if (!openFileRead(fullPath.c_str(), hFile, true))
+			continue;
+		ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile); });
 
-		buffer[left] = 0;
-
-		uint consumePos = 0;
-
+		char* buffer = (char*)m_copyContext.buffers[1]; // Important that we use '1'.. '0' is used by SendFindFiles command
+		uint left = 0;
+		uint totalRead = 0;
+		uint lineIndex = 0;
 		while (true)
 		{
-			char* startPos = buffer + consumePos;
-			char* newLinePos = strchr(startPos, '\n');
-			if (newLinePos)
+			DWORD read = 0;
+			DWORD toRead = CopyContextBufferSize - left - 1;
+			if (ReadFile(hFile, buffer + left, toRead, &read, NULL) == 0)
 			{
-				if (newLinePos > startPos && newLinePos[-1] == '\r')
-					newLinePos[-1] = 0;
-
-				*newLinePos = 0;
-				if (*startPos)
-				{
-					if (!func(startPos))
-						return false;
-				}
-				consumePos = uint(newLinePos - buffer) + 1;
+				logErrorf(L"Failed reading input file %s: %s (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);
+				continue;
 			}
-			else
-			{
-				// Last line
-				if (read == 0 && left != 0)
-				{
-					if (!func(startPos))
-						return false;
-				}
+			totalRead += read;
 
-				// Copy the left overs to beginning of buffer and continue
-				left -= consumePos;
-				memmove(buffer, buffer + consumePos, left);
+			left += read;
+
+			if (left == 0)
 				break;
+
+			buffer[left] = 0;
+
+			uint consumePos = 0;
+
+			while (true)
+			{
+				char* startPos = buffer + consumePos;
+				char* newLinePos = strchr(startPos, '\n');
+				if (newLinePos)
+				{
+					if (newLinePos > startPos && newLinePos[-1] == '\r')
+						newLinePos[-1] = 0;
+
+					*newLinePos = 0;
+					if (*startPos)
+					{
+						if (lineIndex >= handledLineCount)
+						{
+							++handledLineCount;
+							if (!func(startPos))
+								return false; // These functions have built-in retry so we don't want to retry if these fails
+						}
+						++lineIndex;
+					}
+					consumePos = uint(newLinePos - buffer) + 1;
+				}
+				else
+				{
+					// Last line
+					if (read == 0 && left != 0)
+					{
+						if (lineIndex >= handledLineCount)
+						{
+							++handledLineCount;
+							if (!func(startPos))
+								return false; // These functions have built-in retry so we don't want to retry if these fails
+						}
+						++lineIndex;
+					}
+
+					// Copy the left overs to beginning of buffer and continue
+					left -= consumePos;
+					memmove(buffer, buffer + consumePos, left);
+					break;
+				}
 			}
+
+			if (read == 0)
+				break;
 		}
 
-		if (read == 0)
-			break;
+		return true;
 	}
-
-	return true;
 }
 
 bool
-Client::excludeFilesFromFile(const WString& sourcePath, const WString& fileName, const WString& destPath)
+Client::excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath)
 {
 	auto executeFunc = [&](char* str) -> bool
 	{
@@ -973,7 +1011,7 @@ Client::excludeFilesFromFile(const WString& sourcePath, const WString& fileName,
 		return true;
 	};
 
-	return handleFilesOrWildcardsFromFile(sourcePath, fileName, destPath, executeFunc);
+	return handleFilesOrWildcardsFromFile(logContext, stats, sourcePath, fileName, destPath, executeFunc);
 }
 
 bool
@@ -1098,7 +1136,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), *overriddenHandleFileFunc);
 	};
 
-	return handleFilesOrWildcardsFromFile(rootSourcePath, fileName, rootDestPath, executeFunc);
+	return handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc);
 }
 
 bool
@@ -1109,7 +1147,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 		relPath.append(path.c_str() + m_settings.destDirectory.size());
 
 	// If there is a connection and no files were handled inside the directory we can just do a full delete on the server side
-	if (m_destConnection)
+	if (isValid(m_destConnection))
 		if ((relPath.empty() && m_handledFiles.empty()) || (!relPath.empty() && (m_handledFiles.find(relPath) == m_handledFiles.end())))
 			return m_destConnection->sendDeleteAllFiles(relPath.c_str());
 
@@ -1186,7 +1224,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 bool
 Client::ensureDirectory(const wchar_t* directory)
 {
-	if (m_destConnection)
+	if (isValid(m_destConnection))
 	{
 		const wchar_t* relDir = directory + m_settings.destDirectory.size();
 
@@ -1229,11 +1267,6 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 	{
 		m_networkInitDone = true;
 
-		const wchar_t* serverNameStart = networkPath + 2;
-		const wchar_t* serverNameEnd = wcschr(serverNameStart, L'\\');
-		if (!serverNameEnd)
-			return nullptr;
-
 		// Initialize Winsock
 		WSADATA wsaData;
 		int res = WSAStartup(MAKEWORD(2,2), &wsaData);
@@ -1244,8 +1277,35 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		}
 		m_networkWsaInitDone = true;
 
-		WString networkServerName(serverNameStart, serverNameEnd);
-    
+		WString networkServerName;
+
+		if (m_settings.serverAddress.empty())
+		{
+			const wchar_t* serverNameStart = networkPath + 2;
+			const wchar_t* serverNameEnd = wcschr(serverNameStart, L'\\');
+			if (!serverNameEnd)
+				return nullptr;
+
+			const wchar_t* netDirectoryStart = serverNameEnd;
+			while (*netDirectoryStart == '\\' && *netDirectoryStart != 0)
+				++netDirectoryStart;
+			if (!*netDirectoryStart)
+			{
+				logErrorf(L"Need to provide a net directory after the network server name (minimum \\\\<server>\\<netdir>): %d", networkPath);
+				return nullptr;
+			}
+
+			networkServerName = WString(serverNameStart, serverNameEnd);
+
+			m_networkServerNetDirectory = netDirectoryStart;
+		}
+		else
+		{
+			networkServerName = m_settings.serverAddress;
+
+			m_networkServerNetDirectory = networkPath;
+		}
+   
 		addrinfoW hints;
 		ZeroMemory( &hints, sizeof(hints) );
 		hints.ai_family = AF_INET; //AF_UNSPEC; (Skip AF_INET6)
@@ -1266,23 +1326,13 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		// Set server name and net directory (this will enable all connections to try to connect)
 		m_networkServerName = networkServerName;
 
-		const wchar_t* netDirectoryStart = serverNameEnd;
-		while (*netDirectoryStart == '\\' && *netDirectoryStart != 0)
-			++netDirectoryStart;
-		if (!*netDirectoryStart)
-		{
-			logErrorf(L"Need to provide a net directory after the network server name (minimum \\\\<server>\\<netdir>): %d", networkPath);
-			return nullptr;
-		}
-
-		m_networkServerNetDirectory = netDirectoryStart;
 	}
 	else if (m_networkServerName.empty())
 		return nullptr;
 
 	leaveNetworkInitCs.execute();
 
-	Socket sock = {INVALID_SOCKET, false};
+	Socket sock = {INVALID_SOCKET, 0};
 
 	// Loop through and attempt to connect to an address until one succeeds
 	for(auto addrInfoIt=m_serverAddrInfo; addrInfoIt!=NULL; addrInfoIt=addrInfoIt->ai_next)
@@ -1294,7 +1344,6 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			logErrorf(L"socket failed with error: %ld", WSAGetLastError());
 			return nullptr;
 		}
-		sock.valid = true;
 
 		// Create guard in case we fail to connect (will be cancelled further down if we succeed)
 		ScopeGuard socketClose([&]() { closeSocket(sock); });
@@ -1412,6 +1461,12 @@ Client::isIgnoredDirectory(const wchar_t *directory)
 	return false;
 }
 
+bool
+Client::isValid(Connection* connection)
+{
+	return connection && isValidSocket(connection->m_socket);
+}
+
 Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s)
 :	m_settings(settings)
 ,	m_stats(stats)
@@ -1424,6 +1479,9 @@ Client::Connection::Connection(const ClientSettings& settings, ClientStats& stat
 
 Client::Connection::~Connection()
 {
+	if (!isValidSocket(m_socket))
+		return;
+
 	DoneCommand cmd;
 	cmd.commandType = CommandType_Done;
 	cmd.commandSize = sizeof(cmd);
@@ -1528,6 +1586,20 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		return true;
 	}
 	
+	if (writeResponse == WriteResponse_CopyUsingSmb) // It seems server is a proxy server and the server wants the client to copy the file directly to the share using smb
+	{
+		bool existed;
+		u64 written;
+		WString fullDst = m_settings.destDirectory + dst;
+		bool success = copyFile(src, fullDst.c_str(), false, existed, written, copyContext, m_stats.copyStats, m_settings.useBufferedIO);
+		u8 copyResult = success ? 1 : 0;
+		if (!sendData(m_socket, &copyResult, sizeof(copyResult)))
+			return false;
+		if (success)
+			outWritten = cmd.info.fileSize;
+		return success;
+	}
+
 	if (writeResponse == WriteResponse_CopyDelta)
 	{
 		#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
@@ -1654,6 +1726,17 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		outRead = newFileSize;
 		outSize = newFileSize;
 		return success ? ReadFileResult_Success : ReadFileResult_Error;
+	}
+	else if (readResponse == ReadResponse_CopyUsingSmb)
+	{
+		bool existed;
+		u64 written;
+		WString fullSrc = m_settings.sourceDirectory + src;
+		if (!copyFile(fullSrc.c_str(), fullDest.c_str(), false, existed, written, copyContext, m_stats.copyStats, m_settings.useBufferedIO))
+			return ReadFileResult_Error;
+		outRead = written;
+		outSize = written;
+		return ReadFileResult_Success;
 	}
 	else // ReadResponse_CopyDelta
 	{

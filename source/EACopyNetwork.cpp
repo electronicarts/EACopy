@@ -127,7 +127,10 @@ bool sendData(Socket& socket, const void* buffer, uint size)
 		int res = ::send(socket.socket, (const char*)pos, left, 0);
 		if (res == SOCKET_ERROR)
 		{
-			logErrorf(L"send failed with error: %d", getErrorText(WSAGetLastError()).c_str());
+			int lastError = WSAGetLastError();
+			if (lastError == WSAECONNABORTED)
+				closeSocket(socket);
+			logErrorf(L"send failed with error: %s", getErrorText(lastError).c_str());
 			return false;
 		}
 		pos += res;
@@ -146,7 +149,10 @@ bool receiveData(Socket& socket, void* buffer, uint size)
 		int res = ::recv(socket.socket, pos, left, MSG_WAITALL);
 		if (res < 0)
 		{
-			logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+			int lastError = WSAGetLastError();
+			if (lastError == WSAECONNABORTED)
+				closeSocket(socket);
+			logErrorf(L"recv failed with error: %s", getErrorText(lastError).c_str());
 			return false;
 		}
 		else if (res == 0)
@@ -203,6 +209,11 @@ void closeSocket(Socket& socket)
 {
 	closesocket(socket.socket);
 	socket.socket = INVALID_SOCKET;
+}
+
+bool isValidSocket(Socket& socket)
+{
+	return socket.socket != INVALID_SOCKET;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
