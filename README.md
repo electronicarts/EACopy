@@ -1,3 +1,7 @@
+# News for covid-19 times
+
+We have added support for having EACopyService sit on another machine than the network share to enable environments where the network share machine does not support running custom program (like NetApp etc). This means that anyone can spin up an EACopyService next to the network share and then use "EACopy.exe ... /SERVERADDR <machine-with-service> /C" to speed up transfers from the office to your home. Very simple setup.
+	
 # EACopy
 
 EACopy is an alternative to Robocopy for copying files from one location to another. The main reason EACopy was created was to be able to provide text files containing the files/directories to copy. The second reason was to improve performance when copying large amounts of data to network share where the same files are often copied over and over again but to different destinations on the network share. (example: \\myserver\builds\myapp\version1\, \\myserver\builds\myapp\version2\, \\myserver\builds\myapp\version3\)
