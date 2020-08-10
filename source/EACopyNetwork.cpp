@@ -48,29 +48,36 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 		return uncPath;
 
 	// Try to resolve Dfs to real server path
+	int retryCount = 0;
+	while (retryCount++ < 3)
 	{
 		WString uncPathStr(uncPath);
 		DFS_INFO_3* info;
 		int result = NetDfsGetClientInfo((LPWSTR)uncPathStr.c_str(), NULL, NULL, 3, (LPBYTE*)&info);
-		if (result == NERR_Success)
+		if (result != NERR_Success)
+			break;
+		ScopeGuard freeInfo([&]() { NetApiBufferFree(info); });
+
+		if (info->NumberOfStorages == 0)
+			break;
+
+		const wchar_t* localPath = uncPathStr.c_str() + wcslen(info->EntryPath) + 2; // +1 for single slash in beginning of EntryPath plus the slash after shareName
+		wchar_t* serverName = info->Storage->ServerName;
+		wchar_t* shareName = info->Storage->ShareName;
+
+		bool hasLocalPath = *localPath != '\0';
+
+		WString newPath = L"\\\\" + WString(serverName, serverName + wcslen(serverName)) + L'\\';
+		newPath += WString(shareName, shareName + wcslen(shareName));
+		if (hasLocalPath)
 		{
-			const wchar_t* localPath = uncPath + wcslen(info->EntryPath) + 2; // +1 for single slash in beginning of EntryPath plus the slash after shareName
-			wchar_t* serverName = info->Storage->ServerName;
-			wchar_t* shareName = info->Storage->ShareName;
-
-			bool hasLocalPath = *localPath != '\0';
-
-			temp = L"\\\\" + WString(serverName, serverName + wcslen(serverName)) + L'\\';
-			temp += WString(shareName, shareName + wcslen(shareName));
-			if (hasLocalPath)
-			{
-				temp += L"\\";
-				temp += localPath;
-			}
-			NetApiBufferFree(info);
-
-			uncPath = temp.c_str();
+			newPath += L"\\";
+			newPath += localPath;
 		}
+		if (newPath == uncPath)
+			break;
+		temp = std::move(newPath);
+		uncPath = temp.c_str();
 	}
 
 	// Try SMB to see if path is local

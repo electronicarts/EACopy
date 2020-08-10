@@ -665,14 +665,15 @@ Server::connectionThread(ConnectionInfo& info)
 			
 			case CommandType_CreateDir:
 				{
-					CreateDirResponse createDirResponse = CreateDirResponse_Success;
+					u8 createDirResponse = CreateDirResponse_Error;
 
 					if (isValidEnvironment)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
 						WString fullPath = serverPath + cmd.path;
-						if (!ensureDirectory(fullPath.c_str()))
-							createDirResponse = CreateDirResponse_Error;
+						FilesSet createdDirs;
+						if (ensureDirectory(fullPath.c_str(), false, true, &createdDirs))
+							createDirResponse = CreateDirResponse_SuccessExisted + (u8)min(createdDirs.size(), 200); // is not the end of the world if 201 was created but 200 was reported
 					}
 					else
 						createDirResponse = CreateDirResponse_BadDestination;
@@ -918,7 +919,8 @@ Server::getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirector
 	outServerDirectory = WString(wpath.begin(), wpath.end());
 	if (*serverPath)
 		outServerDirectory += serverPath;
-	outServerDirectory += '\\';
+	if (outServerDirectory[outServerDirectory.size()-1] != '\\')
+		outServerDirectory += '\\';
 
 	NetApiBufferFree(shareInfo);
 	return true;

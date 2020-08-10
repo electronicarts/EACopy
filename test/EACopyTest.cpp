@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <shlwapi.h>
 #include <strsafe.h>
+#include <Shlobj.h>
 
 namespace eacopy
 {
@@ -949,6 +950,9 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
+	if (!IsUserAnAdmin())
+		return;
+
 	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
 	for (uint i=0;i!=30; ++i)
@@ -1054,6 +1058,31 @@ EACOPY_TEST(ServerCopySmallFileDestIsLocal)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.skipCount == 1);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerCopyDirectories)
+{
+	testDestDir += L"ExtraDir\\ExtraDir2\\";
+	createTestFile(L"A\\D\\Bar.txt", 11);
+	createTestFile(L"B\\F\\Meh.txt", 12);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.copySubdirDepth = 2;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 2);
+	EACOPY_ASSERT(isSourceEqualDest(L"A\\D\\Bar.txt"));
+	EACOPY_ASSERT(isSourceEqualDest(L"B\\F\\Meh.txt"));
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.skipCount == 2);
 }
 
 EACOPY_TEST(ServerCopyDirectoriesDestIsLocal)
@@ -1777,6 +1806,9 @@ EACOPY_TEST(UsedByOtherProcessError)
 
 EACOPY_TEST(FileGoingOverMaxPath)
 {
+	if (!IsUserAnAdmin())
+		return;
+
 	createTestFile(L"FooLongLongName.txt", 100);
 	createTestFile(L"BarLongLongName.txt", 101);
 
@@ -1794,6 +1826,9 @@ EACOPY_TEST(FileGoingOverMaxPath)
 
 EACOPY_TEST(PathGoingOverMaxPath)
 {
+	if (!IsUserAnAdmin())
+		return;
+
 	createTestFile(L"Foo.txt", 100);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -1804,7 +1839,7 @@ EACOPY_TEST(PathGoingOverMaxPath)
 	EACOPY_ASSERT(isEqual((testSourceDir + L"Foo.txt").c_str(), (clientSettings.destDirectory + L"Foo.txt").c_str()));
 }
 
-EACOPY_TEST(ServerCopySmallFileExternalPath)
+EACOPY_TEST(ServerCopyFileExternalPath)
 {
 	EACOPY_REQUIRE_EXTERNAL_SHARE
 
@@ -1829,7 +1864,7 @@ EACOPY_TEST(ServerCopySmallFileExternalPath)
 	EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
 }
 
-EACOPY_TEST(FromServerCopySmallFileExternalPath)
+EACOPY_TEST(FromServerCopyFileExternalPath)
 {
 	EACOPY_REQUIRE_EXTERNAL_SHARE
 
@@ -1855,7 +1890,7 @@ EACOPY_TEST(FromServerCopySmallFileExternalPath)
 	EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
 }
 
-EACOPY_TEST(ServerCopySmallFileExternalPathUseHistory)
+EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 {
 	EACOPY_REQUIRE_EXTERNAL_SHARE
 

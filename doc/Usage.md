@@ -32,7 +32,8 @@ Option | Description
 ```/MT[:n]``` | Do multi-threaded copies with n threads (default 8), n must be at least 1 and not greater than 128  
 ```/NOSERVER``` | Will not try to connect to Server  
 ```/SERVER``` | Must connect to Server. Fails copy if not succeed
-```/PORT:n``` | Port used to connect to Server (default 18099).
+```/SERVERPORT:n``` | Port used to connect to Server (default 18099).
+```/SERVERADDR addr``` | Address used to connect to Server. This is only needed if using a proxy EACopyServer sitting on the side.
 ```/C[:n]``` | Compression Level. No value provided will auto adjust, n must be between 1=lowest, 22=highest. (zstd) 
 ```/DCOPY:copyflag[s]``` | What to COPY for directories (default is /DCOPY:DA) (copyflags : D=Data, A=Attributes, T=Timestamps)  
 ```/NODCOPY``` | COPY NO directory info (by default /DCOPY:DA is done)  

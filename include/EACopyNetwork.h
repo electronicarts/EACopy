@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 12 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 14 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -109,9 +109,11 @@ struct CreateDirCommand : Command
 
 enum CreateDirResponse : u8
 {
-	CreateDirResponse_Success,
 	CreateDirResponse_Error,
 	CreateDirResponse_BadDestination,
+	CreateDirResponse_SuccessExisted,
+	CreateDirResponse_SuccessCreated,
+	// DO NOT ADD HERE, add above SuccessCreated.. "value - CreateDirResponse_SuccessExisted" is used to figure out how many directories up created
 };
 
 struct DeleteFilesCommand : Command

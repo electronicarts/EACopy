@@ -171,15 +171,19 @@ Client::process(Log& log, ClientStats& outStats)
 		CloseHandle(wt);
 	}
 
+	u64 startPurgeTimeMs = getTimeMs();
 	// If purge feature is enabled.. traverse destination and remove unwanted files/folders
 	if (m_settings.purgeDestination)
-		if (!purgeFilesInDirectory(destDir, m_settings.copySubdirDepth))
-			return -1;
+		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
+			if (!purgeFilesInDirectory(destDir, m_settings.copySubdirDepth))
+				return -1;
 
 	// Purge individual directories (can be provided in filelist file)
 	for (auto& purgeDir : m_purgeDirs)
-		if (!purgeFilesInDirectory(purgeDir.c_str(), m_settings.copySubdirDepth))
-			return -1;
+		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
+			if (!purgeFilesInDirectory(purgeDir.c_str(), m_settings.copySubdirDepth))
+				return -1;
+	outStats.purgeTimeMs = getTimeMs() - startPurgeTimeMs;
 
 
 	// Merge stats from all threads
@@ -197,7 +201,10 @@ Client::process(Log& log, ClientStats& outStats)
 		//outStats.copyTimeMs += threadStats.copyTimeMs; // Only use main thread for time
 		//outStats.skipTimeMs += threadStats.skipTimeMs; // Only use main thread for time
 		//outStats.linkTimeMs += threadStats.linkTimeMs; // Only use main thread for time
+		//outStats.createDirTimeMs += threadStats.createDirTimeMs; // Only use main thread for time
+		//outStats.purgeTimeMs += threadStats.purgeTimeMs; // Only use main thread for time
 
+		outStats.createDirCount += threadStats.createDirCount;
 		outStats.compressTimeMs += threadStats.compressTimeMs;
 		outStats.deltaCompressionTimeMs += threadStats.deltaCompressionTimeMs;
 		outStats.sendTimeMs += threadStats.sendTimeMs;
@@ -279,6 +286,7 @@ Client::resetWorkState(Log& log)
 	m_networkServerName.clear();
 	m_copyEntries.clear();
 	m_handledFiles.clear();
+	m_createdDirs.clear();
 	m_sourceConnection = nullptr;
 	m_destConnection = nullptr;
 }
@@ -436,7 +444,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"New File    %s", entry.src.c_str());
+						logInfoLinef(L"New File    %s", getRelativeSourceFile(entry.src));
 
 					stats.copyTimeMs += getTimeMs() - startTimeMs;
 					++stats.copyCount;
@@ -1123,7 +1131,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 						return true;
 
 					u64 startTime = getTimeMs();
-					if (!ensureDirectory((destPath + L'\\' + relativePath).c_str()))
+					if (!ensureDirectory((destPath + relativePath).c_str()))
 						return false;
 					stats.createDirTimeMs += getTimeMs() - startTime;
 					++stats.createDirCount;
@@ -1162,6 +1170,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 	}
 	ScopeGuard _([&]() { FindClose(hFind); });
 
+	bool errorOnMissingFile = false;
 	bool res = true;
     do
 	{ 
@@ -1181,7 +1190,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 		{
 			if (isIgnoredDirectory(fd.cFileName))
 				continue;
-			WString fullPath = (path + L'\\' + fd.cFileName);
+			WString fullPath = (path + fd.cFileName);
 	        if(isDir)
 			{
 				bool isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
@@ -1193,12 +1202,12 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 						res = false;
 					}
 				}
-				else if (!deleteDirectory(fullPath.c_str()))
+				else if (!deleteDirectory(fullPath.c_str(), errorOnMissingFile))
 					res = false;
 			}
 			else
 			{
-				if (!deleteFile(fullPath.c_str()))
+				if (!deleteFile(fullPath.c_str(), errorOnMissingFile))
 					res = false;
 			}
 		}
@@ -1226,16 +1235,14 @@ Client::ensureDirectory(const wchar_t* directory)
 {
 	if (isValid(m_destConnection))
 	{
-		const wchar_t* relDir = directory + m_settings.destDirectory.size();
-
 		// Ask connection to create new directory.
-		if (!m_destConnection->sendCreateDirectoryCommand(relDir))
+		if (!m_destConnection->sendCreateDirectoryCommand(directory, m_createdDirs))
 			return false;
 	}
 	else
 	{
 		// Create directory through windows api
-		if (!eacopy::ensureDirectory(directory, true, m_settings.replaceSymLinksAtDestination))
+		if (!eacopy::ensureDirectory(directory, true, m_settings.replaceSymLinksAtDestination, &m_createdDirs))
 			return false;
 	}
 
@@ -1750,16 +1757,19 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 }
 
 bool
-Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
+Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs)
 {
+	const wchar_t* relDir = directory + m_settings.destDirectory.size();
+
 	char buffer[MaxPath*2 + sizeof(CreateDirCommand)+1];
 	auto& cmd = *(CreateDirCommand*)buffer;
 	cmd.commandType = CommandType_CreateDir;
-	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
+	uint relDirLen = wcslen(relDir);
+	cmd.commandSize = sizeof(cmd) + uint(relDirLen*2);
 	
-	if (wcscpy_s(cmd.path, MaxPath, dst))
+	if (wcscpy_s(cmd.path, MaxPath, relDir))
 	{
-		logErrorf(L"Failed to create folder %s: wcscpy_s in sendCreateDirectoryCommand failed", dst);
+		logErrorf(L"Failed to create folder %s: wcscpy_s in sendCreateDirectoryCommand failed", relDir);
 		return false;
 	}
 
@@ -1772,16 +1782,30 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* dst)
 
 	if (createDirResponse == CreateDirResponse_BadDestination)
 	{
-		logErrorf(L"Failed to create directory %s: Server reported Bad destination (check your destination path)", dst);
+		logErrorf(L"Failed to create directory %s: Server reported Bad destination (check your destination path)", relDir);
 		return false;
 	}
 
 	if (createDirResponse == CreateDirResponse_Error)
 	{
-		logErrorf(L"Failed to create directory %s: Server reported unknown error", dst);
+		logErrorf(L"Failed to create directory %s: Server reported unknown error", relDir);
 		return false;
 	}
 
+	if (createDirResponse > CreateDirResponse_SuccessExisted)
+	{
+		uint folderCreationCount = createDirResponse - CreateDirResponse_SuccessExisted;
+		WString tempDir(directory);
+		while (true)
+		{
+			outCreatedDirs.insert(tempDir);
+			if (!--folderCreationCount)
+				break;
+			tempDir.resize(tempDir.size()-1);
+			int index = tempDir.find_last_of(L'\\');
+			tempDir.resize(index+1);
+		}
+	}
 	return true;
 }
 

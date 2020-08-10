@@ -154,13 +154,15 @@ struct CopyStats
 	u64					setLastWriteTimeTimeMs = 0;
 };
 
+struct					NoCaseWStringLess { bool operator()(const WString& a, const WString& b) const { return _wcsicmp(a.c_str(), b.c_str()) < 0; } };
+using					FilesSet = Set<WString, NoCaseWStringLess>;
 
 enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedIO_Disabled };
 bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 
 DWORD					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
 bool					equals(const FileInfo& a, const FileInfo& b);
-bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true);
+bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
 bool					deleteDirectory(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);

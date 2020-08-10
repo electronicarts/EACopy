@@ -76,6 +76,7 @@ struct ClientStats
 	u64					sendSize					= 0;
 	u64					recvTimeMs					= 0;
 	u64					recvSize					= 0;
+	u64					purgeTimeMs					= 0;
 	u64					compressTimeMs				= 0;
 	u64					compressionLevelSum			= 0;
 	float				compressionAverageLevel		= 0;
@@ -112,8 +113,6 @@ private:
 	struct				CopyEntry { WString src; WString dst; FileInfo srcInfo; };
 	using				HandleFileFunc = Function<bool()>;
 	using				HandleFileOrWildcardFunc = Function<bool(char*)>;
-	struct				NoCaseWStringLess { bool operator()(const WString& a, const WString& b) const { return _wcsicmp(a.c_str(), b.c_str()) < 0; } };
-	using				FilesSet = Set<WString, NoCaseWStringLess>;
 	using				CopyEntries = List<CopyEntry>;
 	class				Connection;
 	struct				NameAndFileInfo { WString name; FileInfo info; DWORD attributes; };
@@ -154,6 +153,7 @@ private:
 	CriticalSection		m_copyEntriesCs;
 	CopyEntries			m_copyEntries;
 	FilesSet			m_handledFiles;
+	FilesSet			m_createdDirs;
 	FilesSet			m_purgeDirs;
 	CriticalSection		m_networkInitCs;
 	bool				m_networkWsaInitDone;
@@ -183,7 +183,7 @@ public:
 	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
 
 
-	bool				sendCreateDirectoryCommand(const wchar_t* dst);
+	bool				sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs);
 	bool				sendDeleteAllFiles(const wchar_t* dir);
 	bool				sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext);
 	bool				sendGetFileAttributes(const wchar_t* file, FileInfo& outInfo, DWORD& outAttributes, DWORD& outError);

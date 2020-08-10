@@ -511,13 +511,17 @@ bool replaceIfSymLink(const wchar_t* directory, DWORD attributes)
 	return false;
 }
 
-bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expectCreationAndParentExists)
+bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expectCreationAndParentExists, FilesSet* outCreatedDirs)
 {
 	// This is an optimization to reduce kernel calls
 	if (expectCreationAndParentExists)
 	{
 		if (CreateDirectoryW(directory, NULL) != 0)
+		{
+			if (outCreatedDirs)
+				outCreatedDirs->insert(directory);
 			return true;
+		}
 		if (GetLastError() == ERROR_ALREADY_EXISTS) 
 		{
 			FileInfo dirInfo;
@@ -577,7 +581,7 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	if (lastBackslash)
 	{
 		WString shorterDirectory(directory, 0, lastBackslash - directory);
-		if (!ensureDirectory(shorterDirectory.c_str(), false, false))
+		if (!ensureDirectory(shorterDirectory.c_str(), false, false, outCreatedDirs))
 			return false;
 	}
 
@@ -585,7 +589,11 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
 	if (CreateDirectoryW(validDirectory, NULL) != 0)
+	{
+		if (outCreatedDirs)
+			outCreatedDirs->insert(directory);
 		return true;
+	}
 
 	DWORD error = GetLastError();
 	if (error == ERROR_ALREADY_EXISTS) 
