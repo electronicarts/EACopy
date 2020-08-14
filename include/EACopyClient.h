@@ -49,7 +49,7 @@ struct ClientSettings
 	bool				logProgress					= true;
 	bool				logDebug					= false;
 	UseBufferedIO		useBufferedIO				= UseBufferedIO_Auto;
-	bool				replaceSymLinksAtDestination= true; // When writing to destination and a folder is a symlink we remove symlink and create real directory
+	bool				replaceSymLinksAtDestination= true; // When writing to destination and a directory is a symlink we remove symlink and create real directory
 };
 
 

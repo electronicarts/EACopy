@@ -101,7 +101,7 @@ Client::process(Log& log, ClientStats& outStats)
 			break;
 
 	{
-		// Lazily create destination root folder based on if it is needed
+		// Lazily create destination root directory based on if it is needed
 		bool destDirCreated = false;
 		auto createDirectoryFunc = [&]()
 		{
@@ -130,7 +130,7 @@ Client::process(Log& log, ClientStats& outStats)
 			++outStats.createDirCount;
 		};
 
-		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination folders needed.
+		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination directories needed.
 		if (!m_settings.filesOrWildcardsFiles.empty())
 		{
 			for (auto& file : m_settings.filesOrWildcardsFiles)
@@ -173,15 +173,15 @@ Client::process(Log& log, ClientStats& outStats)
 
 	u64 startPurgeTimeMs = getTimeMs();
 
-	// If purge feature is enabled.. traverse destination and remove unwanted files/folders
+	// If purge feature is enabled.. traverse destination and remove unwanted files/directories
 	if (m_settings.purgeDestination)
-		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
-			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth)) // use 0 for folder attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
+		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
+			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth)) // use 0 for directory attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
 				return -1;
 
 	// Purge individual directories (can be provided in filelist file)
 	for (auto& purgeDir : m_purgeDirs)
-		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
+		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 		{
 			FileInfo dirInfo;
 			DWORD dirAttributes = getFileInfo(dirInfo, purgeDir.c_str());
@@ -768,18 +768,18 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 			}
 		}
 
-		//Handle Folders separately
-		Vector<NameAndFileInfo> folders;
+		// Handle directories separately
+		Vector<NameAndFileInfo> directories;
 		WString dirSearchStr = relPath + L"*.*";
-		if (!m_sourceConnection->sendFindFiles(dirSearchStr.c_str(), folders, m_copyContext))
+		if (!m_sourceConnection->sendFindFiles(dirSearchStr.c_str(), directories, m_copyContext))
 			return false;
-		for (auto& folder : folders)
+		for (auto& directory : directories)
 		{
-			if ((folder.attributes & FILE_ATTRIBUTE_DIRECTORY))
+			if ((directory.attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
 				if (depthLeft)
 				{
-					if (!handleDirectory(sourcePath, destPath, folder.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+					if (!handleDirectory(sourcePath, destPath, directory.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
 						return false;
 				}
 			}
@@ -839,11 +839,11 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 
 		WIN32_FIND_DATAW fd2;
 		HANDLE hfind2 = ::FindFirstFileExW(dirSearchStr.c_str(), FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
-		DWORD findFolderCheck = GetLastError();
+		DWORD findDirectoryCheck = GetLastError();
 		if (hfind2 == INVALID_HANDLE_VALUE)
 		{
-			//If folder was just not found then its okay, but otherwise return false and error.
-			if (findFolderCheck != ERROR_FILE_NOT_FOUND)
+			//If directory was just not found then its okay, but otherwise return false and error.
+			if (findDirectoryCheck != ERROR_FILE_NOT_FOUND)
 			{
 				logErrorf(L"Can't find %s", searchStr.c_str());
 				return false;
@@ -1156,7 +1156,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 bool
 Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int depthLeft)
 {
-	// We don't enter symlinks for purging. Maybe this should be an command line option to treat symlinks just like folder
+	// We don't enter symlinks for purging. Maybe this should be an command line option to treat symlinks just like normal directories
 	// but in the use cases we have at ea we don't want to enter symlinks for purging
 	if ((destPathAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
 		return true;
@@ -1197,7 +1197,7 @@ Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int
 			filePath += L'\\';
 		}
 
-		// File/folder was not part of source, delete
+		// File/directory was not part of source, delete
 		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
 			if (isIgnoredDirectory(fd.cFileName))
@@ -1781,7 +1781,7 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSe
 	
 	if (wcscpy_s(cmd.path, MaxPath, relDir))
 	{
-		logErrorf(L"Failed to create folder %s: wcscpy_s in sendCreateDirectoryCommand failed", relDir);
+		logErrorf(L"Failed to create directory %s: wcscpy_s in sendCreateDirectoryCommand failed", relDir);
 		return false;
 	}
 
@@ -1806,12 +1806,12 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSe
 
 	if (createDirResponse > CreateDirResponse_SuccessExisted)
 	{
-		uint folderCreationCount = createDirResponse - CreateDirResponse_SuccessExisted;
+		uint directoryCreationCount = createDirResponse - CreateDirResponse_SuccessExisted;
 		WString tempDir(directory);
 		while (true)
 		{
 			outCreatedDirs.insert(tempDir);
-			if (!--folderCreationCount)
+			if (!--directoryCreationCount)
 				break;
 			tempDir.resize(tempDir.size()-1);
 			int index = tempDir.find_last_of(L'\\');

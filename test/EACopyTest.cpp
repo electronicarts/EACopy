@@ -412,7 +412,7 @@ EACOPY_TEST(OverwriteFirstCopySecondFile)
 
 EACOPY_TEST(CopyEmptyDir)
 {
-	ensureDirectory((testSourceDir + L"\\Folder").c_str());
+	ensureDirectory((testSourceDir + L"\\Directory").c_str());
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.copyEmptySubdirectories = true;
@@ -422,7 +422,7 @@ EACOPY_TEST(CopyEmptyDir)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"FOLDER").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"DIRECTORY").c_str()) != 0);
 }
 
 EACOPY_TEST(CopyFileToReadOnlyDest)
@@ -846,10 +846,10 @@ EACOPY_TEST(CopyFilePurge)
 	createTestFile(L"A\\B\\Foo.txt", 10);
 	createTestFile(L"Bar.txt", 10, false);
 	createTestFile(L"A\\B\\Bar.txt", 10, false);
-	createTestFile(L"DestFolder\\Boo.txt", 10, false);
-	ensureDirectory((testSourceDir + L"SourceFolder").c_str());
-	ensureDirectory((testSourceDir + L"SourceFolder2").c_str());
-	createTestFile(L"SourceFolder2\\Boo.txt", 10, false);
+	createTestFile(L"DestDir\\Boo.txt", 10, false);
+	ensureDirectory((testSourceDir + L"SourceDir").c_str());
+	ensureDirectory((testSourceDir + L"SourceDir2").c_str());
+	createTestFile(L"SourceDir2\\Boo.txt", 10, false);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.copySubdirDepth = 3;
@@ -861,16 +861,16 @@ EACOPY_TEST(CopyFilePurge)
 	EACOPY_ASSERT(getTestFileExists(L"Bar.txt") == false);
 	EACOPY_ASSERT(getTestFileExists(L"a\\b\\Foo.txt") == true);
 	EACOPY_ASSERT(getTestFileExists(L"a\\b\\Bar.txt") == false);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder") == false);
-	EACOPY_ASSERT(getTestFileExists(L"DestFolder") == false);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2") == false);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir") == false);
+	EACOPY_ASSERT(getTestFileExists(L"DestDir") == false);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir2") == false);
 }
 
 EACOPY_TEST(CopyFileMirror)
 {
-	ensureDirectory((testSourceDir + L"SourceFolder").c_str());
-	ensureDirectory((testSourceDir + L"SourceFolder2").c_str());
-	createTestFile(L"SourceFolder2\\Boo.txt", 10, false);
+	ensureDirectory((testSourceDir + L"SourceDir").c_str());
+	ensureDirectory((testSourceDir + L"SourceDir2").c_str());
+	createTestFile(L"SourceDir2\\Boo.txt", 10, false);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.copySubdirDepth = 3;
@@ -879,16 +879,16 @@ EACOPY_TEST(CopyFileMirror)
 	Client client(clientSettings);
 
 	EACOPY_ASSERT(client.process(clientLog) == 0);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder") == true);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2") == true);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2\\Boo.txt") == false);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir") == true);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir2") == true);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir2\\Boo.txt") == false);
 }
 
 EACOPY_TEST(CopyFileTargetDirectoryIsfile)
 {
-	ensureDirectory((testSourceDir + L"SourceFolder").c_str());
-	createTestFile(L"SourceFolder/Foo", 10, true);
-	createTestFile(L"SourceFolder", 10, false);
+	ensureDirectory((testSourceDir + L"SourceDir").c_str());
+	createTestFile(L"SourceDir/Foo", 10, true);
+	createTestFile(L"SourceDir", 10, false);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.copySubdirDepth = 1;
@@ -956,7 +956,7 @@ EACOPY_TEST(CopyFileWithVeryLongPath)
 	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
 	for (uint i=0;i!=30; ++i)
-		longPath.append(L"TestFolder\\");
+		longPath.append(L"TestDir\\");
 	longPath.append(L"Foo.txt");
 	createTestFile(longPath.c_str(), 100);
 
@@ -998,7 +998,7 @@ EACOPY_TEST(ServerCopyAttemptFail)
 	EACOPY_ASSERT(clientStats.copyCount == 0);
 }
 
-EACOPY_TEST(ServerCopyFolders)
+EACOPY_TEST(ServerCopyDirs)
 {
 	createTestFile(L"A\\Foo.txt", 10);
 	createTestFile(L"B\\Bar.txt", 10);
@@ -1357,8 +1357,8 @@ EACOPY_TEST(ServerCopyFileDestLockedAndThenUnlocked)
 EACOPY_TEST(ServerPurgeWithNoCopy)
 {
 	createTestFile(L"Foo.txt", 10, false);
-	createTestFile(L"DestFolder\\Boo.txt", 10, false);
-	createTestFile(L"SourceFolder2\\Boo.txt", 10, false);
+	createTestFile(L"DestDir\\Boo.txt", 10, false);
+	createTestFile(L"SourceDir2\\Boo.txt", 10, false);
 
 	ServerSettings serverSettings;
 	TestServer server(serverSettings, serverLog);
@@ -1371,8 +1371,8 @@ EACOPY_TEST(ServerPurgeWithNoCopy)
 
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(getTestFileExists(L"Foo.txt") == false);
-	EACOPY_ASSERT(getTestFileExists(L"DestFolder") == false);
-	EACOPY_ASSERT(getTestFileExists(L"SourceFolder2") == false);
+	EACOPY_ASSERT(getTestFileExists(L"DestDir") == false);
+	EACOPY_ASSERT(getTestFileExists(L"SourceDir2") == false);
 }
 
 EACOPY_TEST(ServerReport)
@@ -1814,7 +1814,7 @@ EACOPY_TEST(FileGoingOverMaxPath)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	while (clientSettings.destDirectory.size() <= MAX_PATH)
-		clientSettings.destDirectory += L"FolderName\\";
+		clientSettings.destDirectory += L"DirName\\";
 	clientSettings.destDirectory.resize(246);
 	clientSettings.destDirectory += L"\\";
 

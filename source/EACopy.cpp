@@ -33,7 +33,7 @@ void printHelp()
     logInfoLinef(L"              /MIR :: MIRror a directory tree (equivalent to /E plus /PURGE).");
 	logInfoLinef(L"              /KSY :: Keep SYmlinked subdirectories at destination.");
 	logInfoLinef();
-	logInfoLinef(L"                /F :: all files copied are Flattened in to destination folder.");
+	logInfoLinef(L"                /F :: all files copied are Flattened in to destination directory.");
 	logInfoLinef(L"/I file [file]...  :: use text file containing files/directories/wildcards.");
 	logInfoLinef(L"                      A line can also add dest to explicitly write dest and ");
 	logInfoLinef(L"                      options to add additional params. /PURGE only supported");
