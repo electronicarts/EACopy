@@ -172,17 +172,23 @@ Client::process(Log& log, ClientStats& outStats)
 	}
 
 	u64 startPurgeTimeMs = getTimeMs();
+
 	// If purge feature is enabled.. traverse destination and remove unwanted files/folders
 	if (m_settings.purgeDestination)
 		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
-			if (!purgeFilesInDirectory(destDir, m_settings.copySubdirDepth))
+			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth)) // use 0 for folder attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
 				return -1;
 
 	// Purge individual directories (can be provided in filelist file)
 	for (auto& purgeDir : m_purgeDirs)
 		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge folders we know we created
-			if (!purgeFilesInDirectory(purgeDir.c_str(), m_settings.copySubdirDepth))
+		{
+			FileInfo dirInfo;
+			DWORD dirAttributes = getFileInfo(dirInfo, purgeDir.c_str());
+			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth))
 				return -1;
+		}
+
 	outStats.purgeTimeMs = getTimeMs() - startPurgeTimeMs;
 
 
@@ -1148,8 +1154,14 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 }
 
 bool
-Client::purgeFilesInDirectory(const WString& path, int depthLeft)
+Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int depthLeft)
 {
+	// We don't enter symlinks for purging. Maybe this should be an command line option to treat symlinks just like folder
+	// but in the use cases we have at ea we don't want to enter symlinks for purging
+	if ((destPathAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+		return true;
+
+
 	WString relPath;
 	if (path.size() > m_settings.destDirectory.size())
 		relPath.append(path.c_str() + m_settings.destDirectory.size());
@@ -1213,7 +1225,7 @@ Client::purgeFilesInDirectory(const WString& path, int depthLeft)
 		}
         else if(isDir)
 		{
-			if (!purgeFilesInDirectory(path + fd.cFileName + L'\\', depthLeft - 1))
+			if (!purgeFilesInDirectory(path + fd.cFileName + L'\\', fd.dwFileAttributes, depthLeft - 1))
 				res = false;
 		}
 
