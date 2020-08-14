@@ -132,7 +132,15 @@ struct TestBase
 			u64 startTime = getTimeMs();
 			runImpl(loopIndex);
 			u64 endTime = getTimeMs();
-			wprintf(L"Done (%s)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
+			if (!skipped)
+			{
+				wprintf(L"Done (%s)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
+				++s_successCount;
+			}
+			else
+			{
+				++s_skipCount;
+			}
 			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
 			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
 			if (log)
@@ -284,14 +292,20 @@ struct TestBase
 	WString name;
 	WString testSourceDir;
 	WString testDestDir;
+	bool skipped = false;
 
 	static TestBase* s_firstTest;
 	static TestBase* s_lastTest;
 	TestBase* m_nextTest = nullptr;
+
+	static uint s_successCount;
+	static uint s_skipCount;
 };
 
 TestBase* TestBase::s_firstTest;
 TestBase* TestBase::s_lastTest;
+uint TestBase::s_successCount;
+uint TestBase::s_skipCount;
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -313,7 +327,16 @@ TestBase* TestBase::s_lastTest;
 #define EACOPY_REQUIRE_EXTERNAL_SHARE																\
 	if (g_testExternalDestDir.empty())																\
 	{																								\
-		logInfoLinef(L"No external dest dir provided. Test skipped");								\
+		skipped = true;																				\
+		logInfoLinef(L"Skipped (No external dest dir provided)");									\
+		return;																						\
+	}																								\
+
+#define EACOPY_REQUIRE_ADMIN																		\
+	if (!IsUserAnAdmin())																			\
+	{																								\
+		skipped = true;																				\
+		logInfoLinef(L"Skipped (Need admin rights for this test)");									\
 		return;																						\
 	}																								\
 
@@ -950,8 +973,7 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
-	if (!IsUserAnAdmin())
-		return;
+	EACOPY_REQUIRE_ADMIN
 
 	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
@@ -1806,8 +1828,7 @@ EACOPY_TEST(UsedByOtherProcessError)
 
 EACOPY_TEST(FileGoingOverMaxPath)
 {
-	if (!IsUserAnAdmin())
-		return;
+	EACOPY_REQUIRE_ADMIN
 
 	createTestFile(L"FooLongLongName.txt", 100);
 	createTestFile(L"BarLongLongName.txt", 101);
@@ -1826,8 +1847,7 @@ EACOPY_TEST(FileGoingOverMaxPath)
 
 EACOPY_TEST(PathGoingOverMaxPath)
 {
-	if (!IsUserAnAdmin())
-		return;
+	EACOPY_REQUIRE_ADMIN
 
 	createTestFile(L"Foo.txt", 100);
 
@@ -1973,6 +1993,11 @@ int wmain(int argc, wchar_t* argv[])
 
 	// Run all the tests
 	TestBase::runAll();
+
+
+	logInfoLinef();
+	logInfoLinef(L"  Tests finished. (%u succeeded and %u skipped)", TestBase::s_successCount, TestBase::s_skipCount);
+
 
 	return 0;
 }
