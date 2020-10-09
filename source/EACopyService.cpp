@@ -45,11 +45,14 @@ void printHelp()
 	logInfoLinef(L"               /NJ :: Disable unbuffered I/O for all files.");
 	logInfoLinef();
 	logInfoLinef(L"         /LOG:file :: output status to LOG file (overwrite existing log).");
-	logInfoLinef(L"         /VERBOSE  :: output debug logging.");
+	logInfoLinef(L"          /VERBOSE :: output debug logging.");
 	logInfoLinef();
-	logInfoLinef(L"         /INSTALL  :: Install and start as auto starting windows service.");
+	logInfoLinef(L"          /INSTALL :: Install and start as auto starting windows service.");
 	logInfoLinef(L"                      Will start with parameters provided with /INSTALL call");
-	logInfoLinef(L"         /REMOVE   :: Stop and remove service.");
+	logInfoLinef(L"           /REMOVE :: Stop and remove service.");
+	logInfoLinef();
+	logInfoLinef(L"           /USER:u :: User used when installing service. Defaults to LocalSystem account");
+	logInfoLinef(L"           /PASS:p :: Password used when installing service");
 	logInfoLinef();
 }
 
@@ -80,6 +83,14 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		else if(startsWithIgnoreCase(arg, L"/LOG:"))
 		{
 			outLogFileName = arg + 5;
+		}
+		else if(startsWithIgnoreCase(arg, L"/USER:"))
+		{
+			outSettings.user = arg + 6;
+		}
+		else if(startsWithIgnoreCase(arg, L"/PASS:"))
+		{
+			outSettings.password = arg + 6;
 		}
 		else if (equalsIgnoreCase(arg, L"/VERBOSE"))
 		{
@@ -271,6 +282,8 @@ int installService(int argc, wchar_t** argv)
 	{
 		for (int i = 1; i < argc; ++i)
 		{
+			if(startsWithIgnoreCase(argv[i], L"/USER") || startsWithIgnoreCase(argv[i], L"/PASS"))
+				continue;
 			wcscat_s(szPath, eacopy_sizeof_array(szPath), L" ");
 			wcscat_s(szPath, eacopy_sizeof_array(szPath), argv[i]);
 		}
@@ -284,9 +297,16 @@ int installService(int argc, wchar_t** argv)
 	}
 	ScopeGuard managerGuard([&]() { CloseServiceHandle(manager); });
 
+	const wchar_t* username = NULL;
+	const wchar_t* password = NULL;
+	if (!settings.user.empty())
+		username = settings.user.c_str();
+	if (!settings.password.empty())
+		password = settings.password.c_str();
+
 	SC_HANDLE service = CreateServiceW(manager, SERVICENAME, SERVICEDISPLAYNAME, 
 							SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
-							SERVICE_ERROR_NORMAL, szPath, NULL, NULL, L"", NULL, NULL);
+							SERVICE_ERROR_NORMAL, szPath, NULL, NULL, L"", username, password);
 
 	if (!service)
 		service = OpenServiceW(manager, SERVICENAME, SERVICE_ALL_ACCESS);
@@ -332,7 +352,16 @@ int installService(int argc, wchar_t** argv)
 	logInfoLinef(L"%s installed. commandline = %s", SERVICEDISPLAYNAME, szPath );
 
 	// Autostart server
-	StartServiceA(service, argc, (LPCSTR*)argv);
+	if (!StartServiceA(service, argc, (LPCSTR*)argv))
+	{
+		logInfoLinef();
+		DWORD error = GetLastError();
+		if (error == ERROR_SERVICE_LOGON_FAILED)
+			logErrorf(L"Failed to start service due to a logon failure. MAKE SURE USER IS ADDED TO \"Log on as a service\" policy.");
+		else
+			logErrorf(L"Failed to start service - %s", getErrorText(error).c_str());
+		return -1;
+	}
 
 	return 0;
 }
