@@ -541,10 +541,13 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 
 	WString temp;
 	size_t pathLen = wcslen(directory);
-	while (directory[pathLen-1] == '\\')
+	if (pathLen > 3) // If path is like "d:\" we don't want to remove the last slash
 	{
-		temp.assign(directory, directory + pathLen - 1);
-		directory = temp.c_str();
+		while (directory[pathLen-1] == '\\')
+		{
+			temp.assign(directory, directory + pathLen - 1);
+			directory = temp.c_str();
+		}
 	}
 
 	const wchar_t* lastBackslash = wcsrchr(directory, '\\');

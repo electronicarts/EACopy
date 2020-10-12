@@ -1338,7 +1338,19 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		res = GetAddrInfoW(networkServerName.c_str(), defaultPortStr, &hints, &m_serverAddrInfo);
 		if (res != 0)
 		{
-			logErrorf(L"GetAddrInfoW failed with error: %d", res);
+			if (res == WSAHOST_NOT_FOUND)
+			{
+				if (!failedToConnect) // Just to reduce chance of getting multiple log entries in multithreading scenarios (which doesnt matter)
+				{
+					logInfoLinef(L"   !!Invalid server address '%s'", networkServerName.c_str());
+					logInfoLinef();
+					failedToConnect = true;
+				}
+				return nullptr;
+			}
+			//logErrorf(L"GetAddrInfoW failed with error: %d", res);
+			logErrorf(L"GetAddrInfoW failed with error: %s", getErrorText(res).c_str());
+
 			return nullptr;
 		}
 
@@ -1435,6 +1447,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			{
 				logOnce = false;
 				logInfoLinef(L"   !!Protocol mismatch, will not use server. (Local: v%u, Server: v%u)", ProtocolVersion, cmd.protocolVersion);
+				logInfoLinef();
 			}
 			failedToConnect = true;
 			return nullptr;
