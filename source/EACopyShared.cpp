@@ -13,7 +13,7 @@
 #define EACOPY_IS_DEBUGGER_PRESENT false//::IsDebuggerPresent()
 
 // Use this to use symlinks as workaround to handle long paths... all cases have probably not been tested yet
-#define EACOPY_USE_SYMLINK_FOR_LONGPATHS
+//#define EACOPY_USE_SYMLINK_FOR_LONGPATHS
 
 namespace eacopy
 {
@@ -350,6 +350,8 @@ void logScopeLeave()
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#if defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
+
 CriticalSection g_temporarySymlinkCacheCs;
 Map<WString, WString> g_temporarySymlinkCache;
 ScopeGuard g_temporarySymlinkGuard([]()  // Will run at static dtor and remove all symlinks
@@ -389,6 +391,7 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 				return false;
 			}
 			Sleep(1);
+			continue;
 		}
 
 		outNewDest = tempPath;
@@ -397,16 +400,23 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 
 	return false;
 }
+#endif
 
 const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 {
-#if !defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
-	return path;
-#else
 	uint pathLen = wcslen(path);
 	if (pathLen < MAX_PATH - 12)
 		return path;
 
+#if !defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
+	outTempBuffer = L"\\\\?\\UNC\\";
+
+	if (path[0] == L'\\' && path[1] == L'\\')
+		outTempBuffer += path + 2;
+	else
+		outTempBuffer += path;
+	return outTempBuffer.c_str();
+#else
 	uint position = 220;// Use slightly less length than MAX_PATH to increase chances of reusing symlink for multiple files
 	while (path[position] != '\\')
 		--position;
@@ -526,6 +536,12 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 		{
 			FileInfo dirInfo;
 			DWORD destDirAttributes = getFileInfo(dirInfo, directory);
+			if (!destDirAttributes)
+			{
+				logErrorf(L"Trying to get info for %s: %s", directory, getLastErrorText().c_str());
+				return false;
+			}
+
 			if (!(destDirAttributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
 				logErrorf(L"Trying to treat file as directory %s", directory);
@@ -927,9 +943,16 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		FileInfo sourceInfo;
 		DWORD sourceAttributes = getFileInfo(sourceInfo, source);
 		if (!sourceAttributes)
+		{
+			logErrorf(L"Failed to get file info for source file %s: %s", source, getLastErrorText().c_str());
 			return false;
+		}
+
 		if ((sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+		{
+			logErrorf(L"Failed to copy source file %s: File is a directory", source);
 			return false;
+		}
 
 		DWORD overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
 		DWORD nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;

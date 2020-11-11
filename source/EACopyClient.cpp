@@ -787,14 +787,14 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 	}
 	else
 	{
-		WString tempBuffer;
-		const wchar_t* validSourcePath = convertToShortPath(sourcePath.c_str(), tempBuffer);
-
-		WString searchStr = validSourcePath;
+		WString searchStr = sourcePath;
 		searchStr += wildcard;
-		
+
+		WString tempBuffer;
+		const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
+
 		WIN32_FIND_DATAW fd; 
-		HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
+		HANDLE hFind = ::FindFirstFileW(validSearchStr, &fd); 
 		DWORD findFileCheck = GetLastError();
 		BOOL skipSection = FALSE;
 		if (hFind == INVALID_HANDLE_VALUE)
@@ -834,11 +834,13 @@ Client::findFilesInDirectory(const WString& sourcePath, const WString& destPath,
 		skipSection = FALSE;
 
 		//Handle going through directories (navigate through all directories for the wild cards we care about)
-		WString dirSearchStr = validSourcePath;
+		WString dirSearchStr = sourcePath;
 		dirSearchStr += L"*.*";
 
+		const wchar_t* validDirSearchStr = convertToShortPath(dirSearchStr.c_str(), tempBuffer);
+
 		WIN32_FIND_DATAW fd2;
-		HANDLE hfind2 = ::FindFirstFileExW(dirSearchStr.c_str(), FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
+		HANDLE hfind2 = ::FindFirstFileExW(validDirSearchStr, FindExInfoStandard, &fd2, FindExSearchLimitToDirectories, NULL, 0);
 		DWORD findDirectoryCheck = GetLastError();
 		if (hfind2 == INVALID_HANDLE_VALUE)
 		{
@@ -1348,7 +1350,6 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 				}
 				return nullptr;
 			}
-			//logErrorf(L"GetAddrInfoW failed with error: %d", res);
 			logErrorf(L"GetAddrInfoW failed with error: %s", getErrorText(res).c_str());
 
 			return nullptr;
