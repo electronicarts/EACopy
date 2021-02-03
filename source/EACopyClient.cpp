@@ -1049,6 +1049,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 		WString sourcePath = rootSourcePath;
 		WString destPath = rootDestPath;
+		convertSlashToBackslash(argv[0]);
 		WString wpath = argv[0];
 
 		int optionsStartIndex = 2;
