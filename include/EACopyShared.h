@@ -67,12 +67,22 @@ public:
 
 	void				enter() { EnterCriticalSection(&cs); }
 	void				leave() { LeaveCriticalSection(&cs); }
+	template<class Functor> void scoped(const Functor& f) { enter(); f(); leave(); }
 
 private:
 	CRITICAL_SECTION	cs;
 };
 
-
+class ScopedCriticalSection 
+{
+public:
+	ScopedCriticalSection(CriticalSection& cs) : m_cs(cs), m_active(true) { cs.enter(); }
+	~ScopedCriticalSection() { m_cs.leave(); }
+	void leave() { if (!m_active) return; m_cs.leave(); m_active = false; }
+private:
+	CriticalSection& m_cs;
+	bool m_active;
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Thread
@@ -167,12 +177,12 @@ bool					deleteDirectory(const wchar_t* directory, bool errorOnMissingFile = tru
 bool					deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
 bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true);
-bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr);
+bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool hidden = false);
 bool					writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 dataSize, OVERLAPPED* overlapped = nullptr);
 bool					setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWriteTime);
 bool					setFilePosition(const wchar_t* fullPath, HANDLE& file, u64 position);
 bool					closeFile(const wchar_t* fullPath, HANDLE& file);
-bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO);
+bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden = false);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO);
@@ -181,6 +191,7 @@ void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);
 void					convertSlashToBackslash(char* path);
 void					convertSlashToBackslash(char* path, size_t size);
+WString					getCleanedupPath(wchar_t* path, uint startIndex = 2, bool lastWasSlash = false);
 const wchar_t*			convertToShortPath(const wchar_t* path, WString& outTempBuffer);
 
 

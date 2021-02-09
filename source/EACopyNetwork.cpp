@@ -233,13 +233,16 @@ CompressionData::~CompressionData()
 
 bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
 {
+	WString tempBuffer1;
+	const wchar_t* validSrc = convertToShortPath(src, tempBuffer1);
+
 	BOOL success = TRUE;
 	u64 startCreateReadTimeMs = getTimeMs();
 	HANDLE sourceFile;
-	if (!openFileRead(src, sourceFile, useBufferedIO))
+	if (!openFileRead(validSrc, sourceFile, useBufferedIO))
 		return false;
 
-	ScopeGuard closeSourceFile([&]() { closeFile(src, sourceFile); });
+	ScopeGuard closeSourceFile([&]() { closeFile(validSrc, sourceFile); });
 	copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
 
 
@@ -265,13 +268,13 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
 					{
 						int error = WSAGetLastError();
-						logErrorf(L"Error while waiting on transmit of %s: %s", src, getErrorText(error).c_str());
+						logErrorf(L"Error while waiting on transmit of %s: %s", validSrc, getErrorText(error).c_str());
 						return false;
 					}
 				}
 				else
 				{
-					logErrorf(L"Error while transmitting %s: %s", src, getErrorText(error).c_str());
+					logErrorf(L"Error while transmitting %s: %s", validSrc, getErrorText(error).c_str());
 					return false;
 				}
 			}
@@ -296,7 +299,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %s: %s", validSrc, getLastErrorText().c_str());
 					return false;
 				}
 			}
@@ -328,7 +331,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %s: %s", src, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %s: %s", validSrc, getLastErrorText().c_str());
 					return false;
 				}
 			}
@@ -343,7 +346,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], toRead, compressionData.level);
 			if (ZSTD_isError(compressedSize))
 			{
-				logErrorf(L"Fail compressing file %s: %s", src, ZSTD_getErrorName(compressedSize));
+				logErrorf(L"Fail compressing file %s: %s", validSrc, ZSTD_getErrorName(compressedSize));
 				return false;
 			}
 
@@ -399,6 +402,9 @@ NetworkCopyContext::~NetworkCopyContext()
 
 bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
 {
+	WString tempBuffer1;
+	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer1);
+
 	u64 totalReceivedSize = 0;
 
 	if (writeType == WriteFileType_TransmitFile || writeType == WriteFileType_Send)
@@ -411,9 +417,9 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 		//copyStats.createWriteTimeMs 
 		u64 startCreateWriteTimeMs = getTimeMs();
-		outSuccess = openFileWrite(fullPath, file, useBufferedIO);
+		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
 		copyStats.createWriteTimeMs = getTimeMs() - startCreateWriteTimeMs;
-		ScopeGuard fileGuard([&]() { closeFile(fullPath, file); CloseHandle(osWrite.hEvent); });
+		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file); CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
 
@@ -422,7 +428,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		{
 			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
-			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
+			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
@@ -457,7 +463,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			recvStats.recvSize += recvBytes;
 
 			u64 startWriteTimeMs = getTimeMs();
-			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], recvBytes, &osWrite);
+			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], recvBytes, &osWrite);
 			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 
 			read += recvBytes;
@@ -468,8 +474,8 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime);
-		outSuccess = outSuccess && closeFile(fullPath, file);
+		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime);
+		outSuccess = outSuccess && closeFile(validFullPath, file);
 		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 	}
 	else if (writeType == WriteFileType_Compressed)
@@ -480,8 +486,8 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
-		outSuccess = openFileWrite(fullPath, file, useBufferedIO);
-		ScopeGuard fileGuard([&]() { closeFile(fullPath, file); CloseHandle(osWrite.hEvent); });
+		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
+		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file); CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
 
@@ -490,7 +496,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		{
 			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
-			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
+			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
@@ -529,7 +535,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			}
 			if (recvBytes == 0)
 			{
-				logErrorf(L"Socket closed before full file has been received (%s)", fullPath);
+				logErrorf(L"Socket closed before full file has been received (%s)", validFullPath);
 				return false;
 			}
 
@@ -556,7 +562,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 
 			u64 startWriteTimeMs = getTimeMs();
-			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, &osWrite);
+			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, &osWrite);
 			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 
 			read += decompressedSize;
@@ -565,8 +571,8 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime);
-		outSuccess = outSuccess && closeFile(fullPath, file);
+		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime);
+		outSuccess = outSuccess && closeFile(validFullPath, file);
 		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 	}
 

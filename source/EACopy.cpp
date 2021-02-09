@@ -275,19 +275,11 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			{
 				if (paramIndex == 0) // Source dir
 				{
-					outSettings.sourceDirectory = arg;
-					WString& dir = outSettings.sourceDirectory;
-					convertSlashToBackslash((wchar_t*)dir.c_str());
-					if (dir[dir.size()-1] != '\\')
-						dir += '\\';
+					outSettings.sourceDirectory = getCleanedupPath(arg);
 				}
 				else if (paramIndex == 1) // Dest dir
 				{
-					outSettings.destDirectory = arg;
-					WString& dir = outSettings.destDirectory;
-					convertSlashToBackslash((wchar_t*)dir.c_str());
-					if (dir[dir.size()-1] != '\\')
-						dir += '\\';
+					outSettings.destDirectory = getCleanedupPath(arg);
 				}
 				else // Wildcard(s)
 				{

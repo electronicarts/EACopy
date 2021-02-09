@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.9986" CFG_STR; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.999" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -123,9 +123,9 @@ private:
 	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
 	bool				connectToServer(const wchar_t* networkPath, uint connectionIndex, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(uint connectionIndex, ClientStats& stats);
-	bool				findFilesInDirectory(const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
+	bool				findFilesInDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
-	bool				handleDirectory(const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
+	bool				handleDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
 	bool				handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc);
 	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
@@ -161,6 +161,8 @@ private:
 	WString				m_networkServerName;
 	WString				m_networkServerNetDirectory;
 	addrinfoW*			m_serverAddrInfo;
+	GUID				m_secretGuid;
+	CriticalSection		m_secretGuidCs;
 
 						Client(const Client&) = delete;
 	void				operator=(const Client&) = delete;

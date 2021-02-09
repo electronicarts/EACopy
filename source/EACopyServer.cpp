@@ -5,9 +5,11 @@
 #include <ws2tcpip.h>
 #include <Lm.h>
 #include <assert.h>
+#include <combaseapi.h>
 #include <conio.h>
 #include <strsafe.h>
 #include <psapi.h>
+#include <Rpc.h>
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
 #include "EACopyZdelta.h"
@@ -164,7 +166,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 			// When there are no connections active we take the opportunity to shrink history if overflowed
 			if (connections.empty())
 			{
-				m_localFilesCs.enter();
+				ScopedCriticalSection cs(m_localFilesCs);
 				if (m_localFilesHistory.size() > settings.maxHistory)
 				{
 					uint removeCount = (uint)m_localFilesHistory.size() - settings.maxHistory;
@@ -177,7 +179,6 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 					logDebugLinef(L"History overflow. Removed %u entries", removeCount);
 
 				}
-				m_localFilesCs.leave();
 			}
 			continue;
 		}
@@ -248,6 +249,9 @@ Server::primeDirectoryRecursive(const WString& directory)
 	ScopeGuard _([&]() { FindClose(hFind); });
     do
 	{
+		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+			continue;
+
 		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
 		{
 			if ((wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
@@ -297,6 +301,9 @@ Server::connectionThread(ConnectionInfo& info)
 		cmd.commandType = CommandType_Version;
 		cmd.commandSize = sizeof(cmd);
 		cmd.protocolVersion = ProtocolVersion;
+		cmd.protocolFlags = 0;
+		if (info.settings.useSecurityFile)
+			cmd.protocolFlags |= UseSecurityFile;
 		if (!sendData(info.socket, &cmd, sizeof(VersionCommand)))
 			return -1;
 	}
@@ -328,10 +335,17 @@ Server::connectionThread(ConnectionInfo& info)
 		{
 			if (clientConnectionIndex == ~0u)
 				return;
-			m_queuesCs.enter();
+			ScopedCriticalSection cs(m_queuesCs);
 			Queue& q = m_queues[clientConnectionIndex];
 			q.erase(std::find(q.begin(), q.end(), &info));
-			m_queuesCs.leave();
+		});
+
+	GUID zeroGuid = {0};
+	GUID secretGuid = {0};
+	ScopeGuard removeSecretGuid([&]()
+		{
+			ScopedCriticalSection cs(m_validSecretGuidsCs);
+			m_validSecretGuids.erase(secretGuid);
 		});
 
 	// Receive until the peer shuts down the connection
@@ -374,14 +388,74 @@ Server::connectionThread(ConnectionInfo& info)
 					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
 					clientConnectionIndex = min(cmd.connectionIndex, MaxPriorityQueueCount - 1);
 					
-					m_queuesCs.enter();
-					Queue& q = m_queues[clientConnectionIndex];
-					m_queues[clientConnectionIndex].push_back(&info);
-					m_queuesCs.leave();
-
+					m_queuesCs.scoped([&]() { m_queues[clientConnectionIndex].push_back(&info); });
 
 					if (!getLocalFromNet(serverPath, isServerPathExternal, cmd.netDirectory))
 						break;
+
+					if (info.settings.useSecurityFile)
+					{
+						if (cmd.secretGuid != zeroGuid)
+						{
+							// Connection provided secretGuid, check against table of valid secretGuids
+
+							bool isValid;
+							m_validSecretGuidsCs.scoped([&]() { isValid = m_validSecretGuids.find(cmd.secretGuid) != m_validSecretGuids.end(); });
+							if (!isValid)
+							{
+								logInfoLinef(L"Connection is providing invalid secret guid.. disconnect");
+								break;
+							}
+						}
+						else
+						{
+							// No secretGuid provided, let's test the clients access to the network path
+							// by putting a hidden file there with a guid in it, if client can return that guid it means that client has access
+
+							GUID filenameGuid;
+							if (CoCreateGuid(&filenameGuid) != S_OK)
+							{
+								logErrorf(L"CoCreateGuid - Failed to create filename guid");
+								break;
+							}
+
+							wchar_t filename[128];
+							filename[0] = L'.';
+							StringFromGUID2(filenameGuid, filename + 1, 40);
+							filename[1] = L'f';
+							filename[41] = 0;
+
+							if (CoCreateGuid(&secretGuid) != S_OK)
+							{
+								logErrorf(L"CoCreateGuid - Failed to create secret guid");
+								break;
+							}
+
+							// Create hidden security file with code
+							FileInfo fileInfo;
+							fileInfo.fileSize = sizeof(secretGuid);
+							WString securityFilePath = serverPath + filename;
+							ScopeGuard deleteFileGuard([&]() { deleteFile(securityFilePath.c_str(), false); });
+							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, true, true))
+								break;
+
+							m_validSecretGuidsCs.scoped([&]() { m_validSecretGuids.insert(secretGuid); });
+
+							if (!sendData(info.socket, &filenameGuid, sizeof(GUID)))
+								break;
+
+							GUID returnedSecretGuid;
+							if (!receiveData(info.socket, &returnedSecretGuid, sizeof(returnedSecretGuid))) // Let client do the copying while we want for a success or not
+								break;
+
+							if (secretGuid != returnedSecretGuid)
+							{
+								logInfoLinef(L"Connection is providing invalid secret guid.. disconnect");
+								break;
+							}
+						}
+					}
+
 					isValidEnvironment  = true;
 				}
 				break;
@@ -414,12 +488,13 @@ Server::connectionThread(ConnectionInfo& info)
 					FileKey key { fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 
 					// Check if a file with the same key has already been copied at some point
-					m_localFilesCs.enter();
 					FileRec localFile;
-					auto findIt = m_localFiles.find(key);
-					if (findIt != m_localFiles.end())
-						localFile = findIt->second;
-					m_localFilesCs.leave();
+					m_localFilesCs.scoped([&]()
+						{
+							auto findIt = m_localFiles.find(key);
+							if (findIt != m_localFiles.end())
+								localFile = findIt->second;
+						});
 
 					WriteResponse writeResponse = isServerPathExternal ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
 
@@ -551,7 +626,7 @@ Server::connectionThread(ConnectionInfo& info)
 					bool tooBusy = false;
 
 					{
-						m_queuesCs.enter();
+						ScopedCriticalSection cs(m_queuesCs);
 
 						uint totalCountBeforeThis = 0;
 
@@ -580,8 +655,6 @@ Server::connectionThread(ConnectionInfo& info)
 						}
 						else
 							tooBusy = true;
-
-						m_queuesCs.leave();
 					}
 
 					if (tooBusy)
@@ -614,11 +687,12 @@ Server::connectionThread(ConnectionInfo& info)
 					#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
 					const wchar_t* referenceFileName = nullptr;
 					FileKey key { cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
-					m_localFilesCs.enter();
-					auto findIt = m_localFiles.find(key);
-					if (findIt != m_localFiles.end())
-						referenceFileName = findIt->second.name.c_str();
-					m_localFilesCs.leave();
+					m_localFilesCs.scoped([&]() 
+						{
+							auto findIt = m_localFiles.find(key);
+							if (findIt != m_localFiles.end())
+								referenceFileName = findIt->second.name.c_str();
+						});
 
 					if (referenceFileName != nullptr)
 						readResponse = ReadResponse_CopyDelta;
@@ -708,7 +782,10 @@ Server::connectionThread(ConnectionInfo& info)
 					auto& cmd = *(const FindFilesCommand*)recvBuffer;
 					WIN32_FIND_DATAW fd; 
 					WString searchStr = serverPath + cmd.pathAndWildcard;
-					HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
+
+					WString tempBuffer;
+					const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
+					HANDLE hFind = ::FindFirstFileW(validSearchStr, &fd); 
 					if(hFind == INVALID_HANDLE_VALUE)
 					{
 						uint blockSize = ~0u;
@@ -733,6 +810,9 @@ Server::connectionThread(ConnectionInfo& info)
 
 					do
 					{ 
+						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+							continue;
+
 						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
 							continue;
 
@@ -790,9 +870,8 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_RequestReport:
 				{
 					u64 uptimeMs = getTimeMs() - m_startTime;
-					m_localFilesCs.enter();
-					uint historySize = (uint)m_localFiles.size();
-					m_localFilesCs.leave();
+					uint historySize;
+					m_localFilesCs.scoped([&]() { historySize = (uint)m_localFiles.size(); });
 					
 					PROCESS_MEMORY_COUNTERS memCounters;
 					memCounters.cb = sizeof(memCounters);
@@ -879,14 +958,13 @@ Server::connectionThread(ConnectionInfo& info)
 void
 Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
 {
-	m_localFilesCs.enter();
+	ScopedCriticalSection cs(m_localFilesCs);
 	auto insres = m_localFiles.insert({key, FileRec()});
 	if (!insres.second)
 		m_localFilesHistory.erase(insres.first->second.historyIt);
 	m_localFilesHistory.push_back(key);
 	insres.first->second.name = fullFileName;
 	insres.first->second.historyIt = --m_localFilesHistory.end();
-	m_localFilesCs.leave();
 }
 
 bool

@@ -9,7 +9,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 14 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 16 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -39,18 +39,24 @@ struct Command
 	CommandType commandType;
 };
 
+enum ProtocolFlags : u8
+{
+	UseSecurityFile = 1,
+};
 
 struct VersionCommand : Command
 {
 	uint protocolVersion;
+	uint protocolFlags;
 };
 
 
 struct EnvironmentCommand : Command
 {
 	u64 deltaCompressionThreshold;
-	wchar_t netDirectory[1];
 	uint connectionIndex;
+	GUID secretGuid;
+	wchar_t netDirectory[1];
 };
 
 

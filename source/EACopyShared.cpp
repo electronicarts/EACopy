@@ -131,20 +131,18 @@ void Log::writeEntry(bool isDebuggerPresent, const LogEntry& entry)
 	}
 	else
 	{
-		g_logCs.enter();
+		ScopedCriticalSection cs(g_logCs);
 		fputws(entry.str.c_str(), stdout);
 		if (entry.linefeed)
 			fputws(L"\n", stdout);
-		g_logCs.leave();
 	}
 
 	if (entry.isError && m_cacheRecentErrors)
 	{
-		g_logCs.enter();
+		ScopedCriticalSection cs(g_logCs);
 		if (m_recentErrors.size() > 10)
 			m_recentErrors.pop_back();
 		m_recentErrors.push_front(entry.str.c_str());
-		g_logCs.leave();
 	}
 }
 
@@ -192,24 +190,21 @@ void Log::init(const wchar_t* logFile, bool logDebug, bool cacheRecentErrors)
 	m_logDebug = logDebug;
 	m_cacheRecentErrors = cacheRecentErrors;
 	m_logFileName = logFile ? logFile : L"";
-	m_logQueueCs.enter();
+	ScopedCriticalSection cs(m_logQueueCs);
 	m_logQueue = new List<LogEntry>();
 	m_logThreadActive = true;
 	m_logThread = new Thread([this]() { return logQueueThread(); });
-	m_logQueueCs.leave();
 }
 
 void Log::deinit(const Function<void()>& lastChanceLogging)
 {
 	bool isDebuggerPresent = EACOPY_IS_DEBUGGER_PRESENT;
 
-	m_logQueueCs.enter();
-	m_logThreadActive = false;
-	m_logQueueCs.leave();
+	m_logQueueCs.scoped([&]() { m_logThreadActive = false; });
 	
 	delete m_logThread;
 
-	m_logQueueCs.enter();
+	ScopedCriticalSection cs(m_logQueueCs);
 	processLogQueue(isDebuggerPresent);
 	if (lastChanceLogging)
 	{
@@ -220,15 +215,13 @@ void Log::deinit(const Function<void()>& lastChanceLogging)
 	m_logQueue = nullptr;
 	CloseHandle(m_logFile);
 	m_logFile = INVALID_HANDLE_VALUE;
-	m_logQueueCs.leave();
 }
 
 void Log::traverseRecentErrors(const Function<bool(const WString&)>& errorFunc)
 {
-		g_logCs.enter();
-		for (auto& err : m_recentErrors)
-			errorFunc(err);
-		g_logCs.leave();
+	ScopedCriticalSection cs(g_logCs);
+	for (auto& err : m_recentErrors)
+		errorFunc(err);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -238,17 +231,16 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 	if (LogContext* context = t_logContext)
 	{
 		Log& log = context->log;
-		log.m_logQueueCs.enter();
+		ScopedCriticalSection cs(log.m_logQueueCs);
 		if (log.m_logQueue)
 		{
 			log.m_logQueue->push_back({buffer, linefeed, isError});
 			log.m_logQueueFlush |= flush;
 		}
-		log.m_logQueueCs.leave();
 	}
 	else
 	{
-		g_logCs.enter();
+		ScopedCriticalSection cs(g_logCs);
 		fputws(buffer, stdout);
 		if (linefeed)
 			fputws(L"\n", stdout);
@@ -259,7 +251,6 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 		if (EACOPY_IS_DEBUGGER_PRESENT)
 			OutputDebugStringW(buffer);
 		#endif
-		g_logCs.leave();
 	}
 }
 
@@ -409,12 +400,24 @@ const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 		return path;
 
 #if !defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
-	outTempBuffer = L"\\\\?\\UNC\\";
 
 	if (path[0] == L'\\' && path[1] == L'\\')
+	{
+		if (path[2] == '?') // Already formatted
+			return path;
+		outTempBuffer = L"\\\\?\\UNC\\";
 		outTempBuffer += path + 2;
+	}
 	else
+	{
+		outTempBuffer = L"\\\\?\\";
 		outTempBuffer += path;
+
+		//outTempBuffer += L"localhost\\";
+		//outTempBuffer += path[0];
+		//outTempBuffer += L'$';
+		//outTempBuffer += path + 2;
+	}
 	return outTempBuffer.c_str();
 #else
 	uint position = 220;// Use slightly less length than MAX_PATH to increase chances of reusing symlink for multiple files
@@ -426,8 +429,7 @@ const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 
 	wcsncpy_s(tempBuffer, TempBufferCapacity, path, position);
 
-	g_temporarySymlinkCacheCs.enter();
-	ScopeGuard csGuard([&]() { g_temporarySymlinkCacheCs.leave();; });
+	ScopedCriticalSection cs(g_temporarySymlinkCacheCs);
 
 	auto ins = g_temporarySymlinkCache.insert({tempBuffer, WString()});
 	if (ins.second)
@@ -443,6 +445,39 @@ const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 
 	return outTempBuffer.c_str();
 #endif
+}
+
+WString getCleanedupPath(wchar_t* path, uint startIndex, bool lastWasSlash)
+{
+	// Change all slash to backslash
+	// Remove double backslashes after <startIndex> character..
+	// Add backslash at the end if missing
+
+	wchar_t tempBuffer[4096];
+	wcscpy_s(tempBuffer, eacopy_sizeof_array(tempBuffer), path);
+	wchar_t* readIt = tempBuffer + startIndex;
+	wchar_t* writeIt = tempBuffer + startIndex;
+	while (*readIt)
+	{
+		wchar_t c = *readIt;
+		bool isSlash = c == '/' || c == '\\';
+		++readIt;
+
+		if (isSlash && lastWasSlash)
+			continue;
+		lastWasSlash = isSlash;
+
+		*writeIt = isSlash ? L'\\' : c;
+		++writeIt;
+	}
+	if (!lastWasSlash)
+	{
+		*writeIt = L'\\';
+		++writeIt;
+	}
+	*writeIt = 0;
+
+	return tempBuffer;
 }
 
 void removeTemporarySymlinks(const wchar_t* path)
@@ -632,11 +667,11 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 	WString tempBuffer;
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
-
 	outPathFound = true;
     WIN32_FIND_DATAW fd; 
 	WString dir(validDirectory);
-	dir += L'\\';
+	if (dir[dir.length()-1] != L'\\')
+		dir += L'\\';
     WString searchStr = dir + L"*.*";
     HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
     if(hFind == INVALID_HANDLE_VALUE)
@@ -648,7 +683,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 			return true;
 		}
 
-		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %s: %s", directory, getErrorText(error).c_str());
+		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %s: %s", validDirectory, getErrorText(error).c_str());
 		return false;
 	}
 
@@ -733,7 +768,7 @@ bool deleteDirectory(const wchar_t* directory, bool errorOnMissingFile)
 	if (!isError(error, errorOnMissingFile))
 		return true;
 
-	logErrorf(L"Trying to remove directory  %s: %s", directory, getErrorText(error).c_str());
+	logErrorf(L"Trying to remove directory  %s: %s", validDirectory, getErrorText(error).c_str());
 	return false;
 }
 
@@ -771,7 +806,7 @@ bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, 
 
 }
 
-bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped)
+bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped, bool hidden)
 {
 	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
@@ -779,6 +814,8 @@ bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO,
 	DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | nobufferingFlag | writeThroughFlag;
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
+	if (hidden)
+		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
 
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != INVALID_HANDLE_VALUE)
@@ -862,17 +899,18 @@ bool closeFile(const wchar_t* fullPath, HANDLE& file)
 	return success;
 }
 
-bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO)
+bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden)
 {
 	HANDLE file;
-	if (!openFileWrite(fullPath, file, useBufferedIO))
+	if (!openFileWrite(fullPath, file, useBufferedIO, nullptr, hidden))
 		return false;
 
 	if (!writeFile(fullPath, file, data, info.fileSize))
 		return false;
 
-	if (!setFileLastWriteTime(fullPath, file, info.lastWriteTime))
-		return false;
+	if (info.lastWriteTime.dwLowDateTime || info.lastWriteTime.dwHighDateTime)
+		if (!setFileLastWriteTime(fullPath, file, info.lastWriteTime))
+			return false;
 
 	return closeFile(fullPath, file);
 }

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "EACopyNetwork.h"
+#include <guiddef.h>
 
 namespace eacopy
 {
@@ -10,7 +11,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr char ServerVersion[] = "0.932" CFG_STR; // Version of server
+constexpr char ServerVersion[] = "0.934" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -22,6 +23,7 @@ struct ServerSettings
 {
 	uint			listenPort					= DefaultPort;
 	uint			maxHistory					= DefaultHistorySize;
+	bool			useSecurityFile				= false;
 	bool			logDebug					= false;
 	UseBufferedIO	useBufferedIO				= UseBufferedIO_Auto;
 	WString			primingDirectory;
@@ -65,6 +67,12 @@ private:
 	FilesMap		m_localFiles;
 	FilesHistory	m_localFilesHistory;
 	CriticalSection	m_localFilesCs;
+
+	struct			GuidLess { bool operator()(const GUID& a, const GUID& b) const { return memcmp(&a, &b, sizeof(GUID)) < 0; } };
+	using			GuidSet = Set<GUID, GuidLess>;
+
+	GuidSet			m_validSecretGuids;
+	CriticalSection m_validSecretGuidsCs;
 
 	u64				m_startTime;
 	bool			m_isConsole = false;

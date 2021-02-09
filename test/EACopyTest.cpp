@@ -20,11 +20,11 @@ namespace eacopy
 //Examples are detailed:
 // L"C:\\temp\\EACopyTest\\source" OR L"I:\\MyLocalDrive"
 // This directory should exist.
-#define DEFAULT_SOURCE_DIR  L"" 
+#define DEFAULT_SOURCE_DIR  L"C:\\temp\\EACopyTest\\source"
 // L"\\\\localhost\\EACopyTest\\dest" OR L"\\\\localhost\\MyShare"
 // Locally configured share to C:\temp\EACopyTest\dest OR I:\MyShare
 //The real directory should exist and the share setup to point to the directory.
-#define DEFAULT_DEST_DIR  L""
+#define DEFAULT_DEST_DIR  L"\\\\localhost\\EACopyTest\\dest"
 // Some network share on another machine than where the EACopyService run
 #define DEFAULT_EXTERNAL_DEST_DIR L""
 
@@ -598,6 +598,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 EACOPY_TEST(CopyWildcardMissing)
 {
 	ClientSettings clientSettings = getDefaultClientSettings(L"Test.txt");
+	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
@@ -917,6 +918,7 @@ EACOPY_TEST(CopyFileTargetDirectoryIsfile)
 	clientSettings.copySubdirDepth = 1;
 	clientSettings.copyEmptySubdirectories = true;
 	clientSettings.purgeDestination = true;
+	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 
 	EACOPY_ASSERT(client.process(clientLog) != 0);
@@ -973,7 +975,7 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
-	EACOPY_REQUIRE_ADMIN
+	//EACOPY_REQUIRE_ADMIN
 
 	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
@@ -1677,6 +1679,30 @@ EACOPY_TEST(ServerCopyMissingFileListDestIsLocal)
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
 
+EACOPY_TEST(CopyFileWithVeryLongPathDestIsLocal)
+{
+	std::swap(testDestDir, testSourceDir);
+
+	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
+	WString longPath;
+	for (uint i=0;i!=30; ++i)
+		longPath.append(L"TestDir\\");
+	longPath.append(L"Foo.txt");
+	createTestFile(longPath.c_str(), 100);
+
+	ServerSettings serverSettings;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.copySubdirDepth = 1000;
+	clientSettings.retryCount = 0;
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
+}
+
 EACOPY_TEST(CopyLargeFile)
 {
 	u64 fileSize = u64(INT_MAX) + 2*1024*1024 + 123;
@@ -1828,7 +1854,7 @@ EACOPY_TEST(UsedByOtherProcessError)
 
 EACOPY_TEST(FileGoingOverMaxPath)
 {
-	EACOPY_REQUIRE_ADMIN
+	//EACOPY_REQUIRE_ADMIN
 
 	createTestFile(L"FooLongLongName.txt", 100);
 	createTestFile(L"BarLongLongName.txt", 101);
@@ -1847,7 +1873,7 @@ EACOPY_TEST(FileGoingOverMaxPath)
 
 EACOPY_TEST(PathGoingOverMaxPath)
 {
-	EACOPY_REQUIRE_ADMIN
+	//EACOPY_REQUIRE_ADMIN
 
 	createTestFile(L"Foo.txt", 100);
 
@@ -1948,6 +1974,48 @@ EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 		EACOPY_ASSERT(isEqual((testSourceDir + file).c_str(), (externalDest + file).c_str()));
 	}
 }
+
+EACOPY_TEST(ServerTestSecurityFile)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings;
+	serverSettings.useSecurityFile = true;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerTestSecurityFileMultiThreadedClient)
+{
+	createTestFile(L"Foo1.txt", 10);
+	createTestFile(L"Foo2.txt", 10);
+	createTestFile(L"Foo3.txt", 10);
+	createTestFile(L"Foo4.txt", 10);
+
+	ServerSettings serverSettings;
+	serverSettings.useSecurityFile = true;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.threadCount = 2;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 4);
+}
+
 
 void printHelp()
 {
