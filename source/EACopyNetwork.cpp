@@ -1,15 +1,48 @@
 // (c) Electronic Arts. All Rights Reserved.
 
 #include "EACopyNetwork.h"
+#include <utility>
+#include <assert.h>
+#if defined(_WIN32)
+#define NOMINMAX
+#include <winsock2.h>
 #include <Mswsock.h>
 #include <Lm.h>
 #include <LmDfs.h>
 #include <ws2tcpip.h>
-#include "zstd/zstd.h"
 #pragma comment (lib, "Ws2_32.lib")
 #pragma comment (lib, "Netapi32.lib")
 #pragma comment (lib, "Mpr.lib")
 #pragma comment (lib, "Mswsock.lib") // TransmitFile
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
+#include <unistd.h>
+#endif
+
+#include "zstd/zstd.h"
+
+#if defined(_WIN32)
+#else
+typedef void* HANDLE;
+struct _OVERLAPPED { uint Offset; uint OffsetHigh; HANDLE hEvent; };
+namespace eacopy {
+#define WSAECONNABORTED                  10053L
+#define ioctlsocket ioctl
+#define closesocket close
+#define ERROR_IO_PENDING                 997L    // dderror
+HANDLE CreateEvent(void*, bool, bool, void*) { EACOPY_NOT_IMPLEMENTED return nullptr; }
+void CloseHandle(HANDLE h) { EACOPY_NOT_IMPLEMENTED }
+struct WSABUF { uint len; char* buf; };
+int WSARecv(SOCKET s, WSABUF* lpBuffers, uint dwBufferCount, uint* lpNumberOfBytesRecvd, uint* lpFlags, void* lpOverlapped, void* lpCompletionRoutine) { EACOPY_NOT_IMPLEMENTED return 0; }
+#define INFINITE            0xFFFFFFFF  // Infinite timeout
+#define WAIT_OBJECT_0 0
+uint WaitForSingleObject(HANDLE hHandle, uint dwMilliseconds) { EACOPY_NOT_IMPLEMENTED return 0; }
+}
+#endif
 
 namespace eacopy
 {
@@ -18,32 +51,38 @@ namespace eacopy
 
 bool isLocalHost(const wchar_t* hostname)
 {
+	#if defined(_WIN32)
 	WSADATA wsaData;
 	int res = WSAStartup(MAKEWORD(2,2), &wsaData);
 	if (res != 0)
 		return false;
+	#endif
 
-	struct addrinfoW hints;
+	struct AddrInfo hints;
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_UNSPEC; /*either IPV4 or IPV6*/
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_flags = AI_CANONNAME;
 
-	struct addrinfoW* hostaddr = NULL;
-	struct addrinfoW* localaddr = NULL;
-	int res1 = GetAddrInfoW(hostname, NULL, &hints, &hostaddr);
-	int res2 = GetAddrInfoW(L"localhost", NULL, &hints, &localaddr);
-	bool isLocal = res1 == 0 && res2 == 0 && wcscmp(hostaddr->ai_canonname, localaddr->ai_canonname) == 0;
+	struct AddrInfo* hostaddr = NULL;
+	struct AddrInfo* localaddr = NULL;
+	int res1 = getAddrInfoW(hostname, NULL, &hints, &hostaddr);
+	int res2 = getAddrInfoW(L"localhost", NULL, &hints, &localaddr);
+	bool isLocal = res1 == 0 && res2 == 0 && stringEquals(hostaddr->ai_canonname, localaddr->ai_canonname);
 
-	FreeAddrInfoW(hostaddr);
-	FreeAddrInfoW(localaddr);
+	freeAddrInfo(hostaddr);
+	freeAddrInfo(localaddr);
+	
+	#if defined(_WIN32)
 	WSACleanup();
+	#endif
 	
 	return isLocal;
 }
 
 const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allowLocal)
 {
+#if defined(_WIN32)
 	if (uncPath[0] != '\\' || uncPath[1] != '\\')
 		return uncPath;
 
@@ -103,7 +142,7 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 			return uncPath;
 
 		wchar_t wserverName[MaxPath] = { 0 };
-		if (wcscpy_s(wserverName, eacopy_sizeof_array(wserverName), serverName.c_str()))
+		if (!stringCopy(wserverName, eacopy_sizeof_array(wserverName), serverName.c_str()))
 			return uncPath;
 
 		PSHARE_INFO_502 shareInfo;
@@ -120,6 +159,7 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 			temp += localPath;
 		uncPath = temp.c_str();
 	}
+#endif
 
 	return uncPath;
 }
@@ -134,10 +174,10 @@ bool sendData(Socket& socket, const void* buffer, uint size)
 		int res = ::send(socket.socket, (const char*)pos, left, 0);
 		if (res == SOCKET_ERROR)
 		{
-			int lastError = WSAGetLastError();
+			int lastError = getLastNetworkError();
 			if (lastError == WSAECONNABORTED)
 				closeSocket(socket);
-			logErrorf(L"send failed with error: %s", getErrorText(lastError).c_str());
+			logErrorf(L"send failed with error: %ls", getErrorText(lastError).c_str());
 			return false;
 		}
 		pos += res;
@@ -156,10 +196,10 @@ bool receiveData(Socket& socket, void* buffer, uint size)
 		int res = ::recv(socket.socket, pos, left, MSG_WAITALL);
 		if (res < 0)
 		{
-			int lastError = WSAGetLastError();
+			int lastError = getLastNetworkError();
 			if (lastError == WSAECONNABORTED)
 				closeSocket(socket);
-			logErrorf(L"recv failed with error: %s", getErrorText(lastError).c_str());
+			logErrorf(L"recv failed with error: %ls", getErrorText(lastError).c_str());
 			return false;
 		}
 		else if (res == 0)
@@ -186,7 +226,7 @@ bool setBlocking(Socket& socket, bool blocking)
 
 bool disableNagle(Socket& socket)
 {
-	DWORD value = 1;
+	uint value = 1;
 	if (setsockopt(socket.socket, IPPROTO_TCP, TCP_NODELAY, (const char*)&value, sizeof(value)) != SOCKET_ERROR)
 		return true;
 
@@ -236,9 +276,8 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 	WString tempBuffer1;
 	const wchar_t* validSrc = convertToShortPath(src, tempBuffer1);
 
-	BOOL success = TRUE;
 	u64 startCreateReadTimeMs = getTimeMs();
-	HANDLE sourceFile;
+	FileHandle sourceFile;
 	if (!openFileRead(validSrc, sourceFile, useBufferedIO))
 		return false;
 
@@ -248,8 +287,9 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 
 	if (writeType == WriteFileType_TransmitFile)
 	{
+		#if defined(_WIN32)
 		_OVERLAPPED overlapped;
-		ZeroMemory(&overlapped, sizeof(overlapped));
+		memset(&overlapped, 0, sizeof(overlapped));
 		overlapped.hEvent = WSACreateEvent();
 		ScopeGuard closeEvent([&]() { WSACloseEvent(overlapped.hEvent); });
 
@@ -257,24 +297,24 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 		while (pos != fileSize)
 		{
 			u64 left = fileSize - pos;
-			uint toWrite = (uint)min(left, u64(INT_MAX-1));
+			uint toWrite = (uint)std::min(left, u64(INT_MAX-1));
 
 			u64 startSendMs = getTimeMs();
 			if (!TransmitFile(socket.socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
 			{
-				int error = WSAGetLastError();
+				int error = getLastNetworkError();
 				if (error == ERROR_IO_PENDING)// or WSA_IO_PENDING
 				{
 					if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
 					{
-						int error = WSAGetLastError();
-						logErrorf(L"Error while waiting on transmit of %s: %s", validSrc, getErrorText(error).c_str());
+						int error = getLastNetworkError();
+						logErrorf(L"Error while waiting on transmit of %ls: %ls", validSrc, getErrorText(error).c_str());
 						return false;
 					}
 				}
 				else
 				{
-					logErrorf(L"Error while transmitting %s: %s", validSrc, getErrorText(error).c_str());
+					logErrorf(L"Error while transmitting %ls: %ls", validSrc, getErrorText(error).c_str());
 					return false;
 				}
 			}
@@ -282,9 +322,13 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			sendStats.sendSize += toWrite;
 
 			pos += toWrite;
-			overlapped.Offset = static_cast<DWORD>(pos);
-			overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
+			overlapped.Offset = static_cast<uint>(pos);
+			overlapped.OffsetHigh = static_cast<uint>(pos >> 32);
 		}
+		#else
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+		#endif
 	}
 	else if (writeType == WriteFileType_Send)
 	{
@@ -292,26 +336,27 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 		while (left)
 		{
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize);
+			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
-			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
+			u64 read;
+			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %s: %s", validSrc, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %ls: %ls", validSrc, getLastErrorText().c_str());
 					return false;
 				}
 			}
 			copyStats.readTimeMs += getTimeMs() - startReadMs;
 
 			u64 startSendMs = getTimeMs();
-			if (!sendData(socket, copyContext.buffers[0], toRead))
+			if (!sendData(socket, copyContext.buffers[0], read))
 				return false;
 			sendStats.sendTimeMs += getTimeMs() - startSendMs;
-			sendStats.sendSize += toRead;
+			sendStats.sendSize += read;
 
-			left -= toRead;
+			left -= read;
 		}
 	}
 	else if (writeType == WriteFileType_Compressed)
@@ -324,14 +369,14 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			static_assert(ZSTD_COMPRESSBOUND(NetworkTransferChunkSize - CompressBoundReservation) <= NetworkTransferChunkSize - 4, "");
 
 			u64 startReadMs = getTimeMs();
-			DWORD toRead = (DWORD)min(left, NetworkTransferChunkSize - CompressBoundReservation);
+			uint toRead = std::min(left, u64(NetworkTransferChunkSize - CompressBoundReservation));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
-
-			if (!ReadFile(sourceFile, copyContext.buffers[0], toReadAligned, NULL, NULL))
+			u64 read;
+			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %s: %s", validSrc, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %ls: %ls", validSrc, getLastErrorText().c_str());
 					return false;
 				}
 			}
@@ -343,10 +388,10 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressMs = getTimeMs();
-			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], toRead, compressionData.level);
+			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], read, compressionData.level);
 			if (ZSTD_isError(compressedSize))
 			{
-				logErrorf(L"Fail compressing file %s: %s", validSrc, ZSTD_getErrorName(compressedSize));
+				logErrorf(L"Fail compressing file %ls: %ls", validSrc, ZSTD_getErrorName(compressedSize));
 				return false;
 			}
 
@@ -359,7 +404,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				return false;
 			u64 sendTimeMs = getTimeMs() - startSendMs;
 
-			sendStats.compressionLevelSum += toRead * compressionData.level;
+			sendStats.compressionLevelSum += read * compressionData.level;
 
 			if (!compressionData.fixedLevel)
 			{
@@ -367,7 +412,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				// We then look at if we compressed more or less last time and if time went up or down.
 				// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
 
-				u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / toRead;
+				u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / read;
 
 				u64 lastCompressWeight = compressionData.lastWeight;
 				compressionData.lastWeight = compressWeight;
@@ -379,16 +424,16 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 											compressWeight >= lastCompressWeight && lastCompressionLevel > compressionData.level;
 
 				if (increaseCompression)
-					compressionData.level = min(22, compressionData.level + 1);
+					compressionData.level = std::min(22, compressionData.level + 1);
 				else
-					compressionData.level = max(1, compressionData.level - 1);
+					compressionData.level = std::max(1, compressionData.level - 1);
 			}
 
 			sendStats.compressTimeMs += compressTimeMs;
 			sendStats.sendTimeMs += sendTimeMs;
 			sendStats.sendSize += compressedSize + 4;
 
-			left -= toRead;
+			left -= read;
 		}
 	}
 
@@ -400,7 +445,7 @@ NetworkCopyContext::~NetworkCopyContext()
 	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
 }
 
-bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
+bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
 {
 	WString tempBuffer1;
 	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer1);
@@ -409,12 +454,13 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 	if (writeType == WriteFileType_TransmitFile || writeType == WriteFileType_Send)
 	{
-		HANDLE file;
-		OVERLAPPED osWrite      = { 0, 0 };
+		FileHandle file;
+		_OVERLAPPED osWrite;
+		memset(&osWrite, 0, sizeof(osWrite));
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
-		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
+		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
 		//copyStats.createWriteTimeMs 
 		u64 startCreateWriteTimeMs = getTimeMs();
 		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
@@ -427,7 +473,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 startWriteTimeMs = getTimeMs();
-			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
+			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
 			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
@@ -440,21 +486,21 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		{
 			u64 startRecvTimeMs = getTimeMs();
 			u64 left = fileSize - read;
-			uint toRead = (uint)min(left, NetworkTransferChunkSize);
+			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
-			DWORD recvBytes = 0;
-			DWORD flags = MSG_WAITALL;
+			uint recvBytes = 0;
+			uint flags = MSG_WAITALL;
 			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
-				logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+				logErrorf(L"recv failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 				return false;
 			}
 			if (recvBytes == 0)
 			{
-				logErrorf(L"Socket closed before full file has been received (%s)", fullPath);
+				logErrorf(L"Socket closed before full file has been received (%ls)", fullPath);
 				return false;
 			}
 
@@ -480,12 +526,13 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
-		HANDLE file;
-		OVERLAPPED osWrite      = { 0, 0 };
+		FileHandle file;
+		_OVERLAPPED osWrite;
+		memset(&osWrite, 0, sizeof(osWrite));
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
-		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
+		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
 		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
 		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file); CloseHandle(osWrite.hEvent); });
 
@@ -495,7 +542,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 startWriteTimeMs = getTimeMs();
-			u64 toCopy = min(u64(recvPos - commandSize), fileSize);
+			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
 			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
@@ -525,17 +572,17 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[2];
-			DWORD recvBytes = 0;
-			DWORD flags = MSG_WAITALL;
+			uint recvBytes = 0;
+			uint flags = MSG_WAITALL;
 			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
-				logErrorf(L"recv failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+				logErrorf(L"recv failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 				return false;
 			}
 			if (recvBytes == 0)
 			{
-				logErrorf(L"Socket closed before full file has been received (%s)", validFullPath);
+				logErrorf(L"Socket closed before full file has been received (%ls)", validFullPath);
 				return false;
 			}
 
@@ -552,7 +599,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				outSuccess &= ZSTD_isError(decompressedSize) == 0;
 				if (!outSuccess)
 				{
-					logErrorf(L"Decompression error: %s", ZSTD_getErrorName(decompressedSize));
+					logErrorf(L"Decompression error: %hs", ZSTD_getErrorName(decompressedSize));
 					// Don't return false since we can still continue copying other files after getting this error
 				}
 			}
@@ -583,3 +630,25 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace eacopy
+
+int getAddrInfoW(const wchar_t* name, const wchar_t* service, const AddrInfo* hints, AddrInfo** result)
+{
+	#if defined(_WIN32)
+	return GetAddrInfoW(name, service, hints, result);
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return 0;
+	#endif
+}
+
+int getLastNetworkError()
+{
+	#if defined(_WIN32)
+	return WSAGetLastError();
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return 0;
+	#endif
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

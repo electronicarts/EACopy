@@ -3,7 +3,6 @@
 #pragma once
 
 #include "EACopyNetwork.h"
-#include <guiddef.h>
 
 namespace eacopy
 {
@@ -15,7 +14,7 @@ constexpr char ServerVersion[] = "0.934" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-using ReportServerStatus = Function<BOOL(DWORD dwCurrentState, DWORD dwWin32ExitCode, DWORD dwWaitHint)>;
+using ReportServerStatus = Function<bool(uint dwCurrentState, uint dwWin32ExitCode, uint dwWaitHint)>;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -54,7 +53,7 @@ private:
 	struct			ConnectionInfo;
 	struct			FileKey;
 
-	DWORD			connectionThread(ConnectionInfo& info);
+	uint			connectionThread(ConnectionInfo& info);
 	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
 	bool			getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory);
 	bool			primeDirectoryRecursive(const WString& directory);
@@ -68,8 +67,8 @@ private:
 	FilesHistory	m_localFilesHistory;
 	CriticalSection	m_localFilesCs;
 
-	struct			GuidLess { bool operator()(const GUID& a, const GUID& b) const { return memcmp(&a, &b, sizeof(GUID)) < 0; } };
-	using			GuidSet = Set<GUID, GuidLess>;
+	struct			GuidLess { bool operator()(const Guid& a, const Guid& b) const { return memcmp(&a, &b, sizeof(Guid)) < 0; } };
+	using			GuidSet = Set<Guid, GuidLess>;
 
 	GuidSet			m_validSecretGuids;
 	CriticalSection m_validSecretGuidsCs;
@@ -113,23 +112,10 @@ struct Server::ConnectionInfo
 struct Server::FileKey
 {
 	WString name;
-	FILETIME lastWriteTime;
+	FileTime lastWriteTime;
 	u64 fileSize;
 
-	bool operator<(const FileKey& o) const
-	{
-		// Sort by name first (we need this for delta-copy)
-		int cmp = wcscmp(name.c_str(), o.name.c_str());
-		if (cmp != 0)
-			return cmp < 0;
-
-		// Sort by write time first (we need this for delta-copy)
-		LONG timeDiff = CompareFileTime(&lastWriteTime, &o.lastWriteTime);
-		if (timeDiff != 0)
-			return timeDiff < 0;
-
-		return fileSize < o.fileSize;
-	}
+	bool operator<(const FileKey& o) const;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

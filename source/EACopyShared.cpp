@@ -1,19 +1,94 @@
 // (c) Electronic Arts. All Rights Reserved.
 
 #include "EACopyShared.h"
-#include <assert.h>
+#include <utility>
 #include <codecvt>
+#include <assert.h>
+#if defined(_WIN32)
+#define NOMINMAX
 #include <shlwapi.h>
 #include <strsafe.h>
+#include <windows.h>
 #include "RestartManager.h"
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Rstrtmgr.lib")
+#else
+#include <algorithm>
+#include <dirent.h>
+#include <fcntl.h>   // open
+#include <limits.h>
+#include <locale>
+#include <stdarg.h>
+#include <string.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <utime.h>
+#include <pthread.h>
+#endif
 
 //#define EACOPY_USE_OUTPUTDEBUGSTRING
 #define EACOPY_IS_DEBUGGER_PRESENT false//::IsDebuggerPresent()
 
 // Use this to use symlinks as workaround to handle long paths... all cases have probably not been tested yet
 //#define EACOPY_USE_SYMLINK_FOR_LONGPATHS
+
+#if defined(_WIN32)
+#else
+namespace eacopy {
+void Sleep(uint milliseconds)
+{
+    struct timespec ts;
+    ts.tv_sec = milliseconds / 1000;
+    ts.tv_nsec = (milliseconds % 1000) * 1000000;
+    int res;
+    do { res = nanosleep(&ts, &ts); } while (res && errno == EINTR);
+}
+thread_local uint t_lastError;
+uint GetLastError() { return t_lastError; }
+String toLinuxPath(const wchar_t* path)
+{
+	String str = toString(path);
+	std::replace(str.begin(), str.end(), '\\', '/');
+	return std::move(str);
+}
+int CreateDirectoryW(const wchar_t* path, void* lpSecurityAttributes)
+{
+	String str = toLinuxPath(path);
+	if (str[str.size()-1] == '/')
+		str.resize(str.size()-1);
+	if (mkdir(str.c_str(), 0777) == 0)
+		return 1;
+	if (errno == EEXIST)
+	{
+		t_lastError = ERROR_ALREADY_EXISTS;
+		return 0;
+	}
+	if (errno == ENOENT)
+	{
+		t_lastError = ERROR_PATH_NOT_FOUND;
+		return 0;
+	}
+	EACOPY_NOT_IMPLEMENTED 	// TODO: Set error code
+	return 0;
+}
+bool RemoveDirectoryW(const wchar_t* lpPathName)
+{
+	String file = toLinuxPath(lpPathName);
+	if (remove(file.c_str()) == 0)
+		return true;
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+}
+struct FindFileDataLinux
+{
+	dirent* entry;
+	wchar_t name[128];
+	char path[1024];
+};
+}
+#endif
 
 namespace eacopy
 {
@@ -34,59 +109,191 @@ thread_local LogContext* t_logContext;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+CriticalSection::CriticalSection()
+{
+	#if defined(_WIN32)
+	static_assert(sizeof(CRITICAL_SECTION) == sizeof(data), "Need to change size of data to match CRITICAL_SECTION");
+	InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION*)&data, 0x00000400);
+	#else
+	static_assert(sizeof(pthread_mutex_t) <= sizeof(data), "Need to change size of data to match pthread_mutex_t");
+	new (data) pthread_mutex_t(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP);
+	#endif
+}
+
+CriticalSection::~CriticalSection()
+{
+	#if defined(_WIN32)
+	DeleteCriticalSection((CRITICAL_SECTION*)&data);
+	#else
+	((pthread_mutex_t*)&data)->~pthread_mutex_t();
+	#endif
+}
+
+void
+CriticalSection::enter()
+{
+	#if defined(_WIN32)
+	EnterCriticalSection((CRITICAL_SECTION*)&data);
+	#else
+	pthread_mutex_lock((pthread_mutex_t*)&data);
+	#endif
+}
+
+void
+CriticalSection::leave()
+{
+	#if defined(_WIN32)
+	LeaveCriticalSection((CRITICAL_SECTION*)&data);
+	#else
+	pthread_mutex_unlock((pthread_mutex_t*)&data);
+	#endif
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 Event::Event()
 {
-	ev = CreateEvent(NULL, TRUE, FALSE, NULL);
+	#if defined(_WIN32)
+	ev = CreateEvent(nullptr, true, false, nullptr);
+	#else
+	ev = nullptr;
+	#endif
 }
 
 Event::~Event()
 {
+	#if defined(_WIN32)
 	CloseHandle(ev);
+	#else
+	#endif
 }
 
 void
 Event::set()
 {
+	#if defined(_WIN32)
 	SetEvent(ev);
+	#else
+	ScopedCriticalSection c(cs);
+	ev = (void*)(uintptr_t)1;
+	#endif
 }
 
 void
 Event::reset()
 {
+	#if defined(_WIN32)
 	ResetEvent(ev);
+	#else
+	ScopedCriticalSection c(cs);
+	ev = nullptr;
+	#endif
 }
 
 bool
 Event::isSet(uint timeOutMs)
 {
+	#if defined(_WIN32)
 	return WaitForSingleObject(ev, timeOutMs) == WAIT_OBJECT_0;
+	#else
+	if (timeOutMs == 0)
+	{
+		uintptr_t v;
+		cs.scoped([&]() { v = (uintptr_t)ev; });
+		return v == 1;
+	}
+
+	u64 startMs = getTimeMs();
+	u64 lastMs = startMs;
+	while (true)
+	{
+		uintptr_t v;
+		cs.scoped([&]() { v = (uintptr_t)ev; });
+		if (v)
+			return true;
+		if (lastMs - startMs >= timeOutMs)
+			break;
+		Sleep(1);
+		lastMs = getTimeMs();
+	}
+	return false;
+	#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-Thread::Thread(Function<int()>&& f)
-:	func(std::move(f))
+Thread::Thread()
+:	handle(nullptr)
+,	exitCode(0)
+,	joined(false)
 {
-	handle = CreateThread(NULL, 0, [](LPVOID p) -> DWORD { return ((Thread*)p)->func(); }, this, 0, NULL);
+}
+
+Thread::Thread(Function<int()>&& f)
+:	exitCode(0)
+,	joined(false)
+{
+	start(std::move(f));
 }
 
 Thread::~Thread()
 {
+	if (!handle)
+		return;
 	wait();
+	#if defined(_WIN32)
 	CloseHandle(handle);
+	#else
+	#endif
+}
+
+void
+Thread::start(Function<int()>&& f)
+{
+	func = std::move(f);
+	#if defined(_WIN32)
+	handle = CreateThread(NULL, 0, [](LPVOID p) -> uint { return ((Thread*)p)->func(); }, this, 0, NULL);
+	#else
+	static_assert(sizeof(pthread_t) <= sizeof(handle), "");
+	auto& tid = *(pthread_t*)&handle;
+	int err = pthread_create(&tid, NULL, [](void* p) -> void* { int res = ((Thread*)p)->func(); return (void*)(uintptr_t)res; }, this);
+    if (err != 0)
+        logErrorf(L"can't create thread :[%hs]", strerror(err));
+	#endif
 }
 
 void
 Thread::wait()
 {
+	if (!handle)
+		return;
+	if (joined)
+		return;
+	joined = true;
+	#if defined(_WIN32)
 	WaitForSingleObject(handle, INFINITE);
+	#else
+	int* ptr = 0;
+	pthread_join(*(pthread_t*)&handle, (void**)&ptr);
+	exitCode = (uint)(uintptr_t)ptr;
+	#endif
 }
 
 bool
-Thread::getExitCode(DWORD& outExitCode)
+Thread::getExitCode(uint& outExitCode)
 {
-	if (GetExitCodeThread(handle, &outExitCode))
+	if (!handle)
+		return false;
+	#if defined(_WIN32)
+	if (GetExitCodeThread(handle, (uint*)&outExitCode))
 		return true;
+	#else
+	if (joined)
+	{
+		outExitCode = exitCode;
+		return true;
+	}
+	#endif
 
 	logErrorf(L"Failed to get exit code from thread");
 	return false;
@@ -115,19 +322,12 @@ void Log::writeEntry(bool isDebuggerPresent, const LogEntry& entry)
 		OutputDebugStringW(entry.c_str());
 	#endif
 
-	if (m_logFile != INVALID_HANDLE_VALUE)
+	if (m_logFile != InvalidFileHandle)
 	{
-		char buffer[2048];
-		BOOL usedDefaultChar = FALSE;
-		int bufferWritten = WideCharToMultiByte(CP_ACP, 0, entry.str.c_str(), (int)entry.str.size(), buffer, sizeof(buffer), NULL, &usedDefaultChar);
-		buffer[bufferWritten] = 0;
-		DWORD written;
+		auto temp = toString(entry.str.c_str());
+		writeFile(m_logFileName.c_str(), m_logFile, temp.c_str(), temp.size());
 		if (entry.linefeed)
-		{
-			if (strcat_s(buffer + bufferWritten, sizeof(buffer)-bufferWritten, "\r\n") == 0)
-				bufferWritten += 2;
-		}
-		WriteFile(m_logFile, buffer, (DWORD)bufferWritten, &written, nullptr);
+			writeFile(m_logFileName.c_str(), m_logFile, "\r\n", 2);
 	}
 	else
 	{
@@ -163,20 +363,26 @@ uint Log::processLogQueue(bool isDebuggerPresent)
 	if (!flush)
 		return (uint)temp.size();
 
-	if (m_logFile != INVALID_HANDLE_VALUE)
+	if (m_logFile != InvalidFileHandle)
+	{
+		#if defined(_WIN32)
 		FlushFileBuffers(m_logFile);
+		#else
+		fsync((int)(uintptr_t)m_logFile);
+		#endif
+	}
 	else
 		fflush(stdout);
 
 	return (uint)temp.size();
 }
 
-DWORD Log::logQueueThread()
+uint Log::logQueueThread()
 {
 	bool isDebuggerPresent = EACOPY_IS_DEBUGGER_PRESENT;
 
 	if (!m_logFileName.empty())
-		m_logFile = CreateFileW(m_logFileName.c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		openFileWrite(m_logFileName.c_str(), m_logFile, true);
 
 	while (m_logThreadActive)
 		if (!processLogQueue(isDebuggerPresent))
@@ -213,8 +419,8 @@ void Log::deinit(const Function<void()>& lastChanceLogging)
 	}
 	delete m_logQueue;
 	m_logQueue = nullptr;
-	CloseHandle(m_logFile);
-	m_logFile = INVALID_HANDLE_VALUE;
+	if (m_logFile != InvalidFileHandle)
+		closeFile(m_logFileName.c_str(), m_logFile);
 }
 
 void Log::traverseRecentErrors(const Function<bool(const WString&)>& errorFunc)
@@ -259,7 +465,7 @@ void logErrorf(const wchar_t* fmt, ...)
     va_list arg; 
     va_start(arg, fmt);
 	wchar_t buffer[4096];
-	wcscpy_s(buffer, eacopy_sizeof_array(buffer), L"!!ERROR - ");
+	stringCopy(buffer, eacopy_sizeof_array(buffer), L"!!ERROR - ");
 	auto len = wcslen(buffer);
 	int written = vswprintf_s(buffer + len, eacopy_sizeof_array(buffer) - len, fmt, arg);
 	logInternal(buffer, true, true, true);
@@ -356,7 +562,7 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 	wchar_t tempPath[MAX_PATH];
 	if (!GetTempPathW(MAX_PATH, tempPath))
 	{
-		logErrorf(L"Failed to get temp path. Reason: %s", getLastErrorText().c_str());
+		logErrorf(L"Failed to get temp path. Reason: %ls", getLastErrorText().c_str());
 		return false;
 	}
 
@@ -367,7 +573,7 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 		uint64_t v;
 		if (!QueryPerformanceCounter((union _LARGE_INTEGER*)&v))
 		{
-			logErrorf(L"Failed to get performance counter value. Reason: %s", getLastErrorText().c_str());
+			logErrorf(L"Failed to get performance counter value. Reason: %ls", getLastErrorText().c_str());
 			return false;
 		}
 
@@ -378,7 +584,7 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 		{
 			if (!retryCount--)
 			{
-				logErrorf(L"Failed to create symbolic link from %s to %s. Reason: %s", tempPath, dest, getLastErrorText().c_str());
+				logErrorf(L"Failed to create symbolic link from %ls to %ls. Reason: %ls", tempPath, dest, getLastErrorText().c_str());
 				return false;
 			}
 			Sleep(1);
@@ -395,6 +601,7 @@ bool createTemporarySymlink(const wchar_t* dest, WString& outNewDest)
 
 const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 {
+#if defined(_WIN32)
 	uint pathLen = wcslen(path);
 	if (pathLen < MAX_PATH - 12)
 		return path;
@@ -438,12 +645,158 @@ const wchar_t* convertToShortPath(const wchar_t* path, WString& outTempBuffer)
 			return path;
 	}
 
-	wcscpy_s(tempBuffer, TempBufferCapacity, ins.first->second.c_str());
+	stringCopy(tempBuffer, TempBufferCapacity, ins.first->second.c_str());
 	wcscat_s(tempBuffer, TempBufferCapacity, path + position);
 
 	outTempBuffer = tempBuffer;
 
 	return outTempBuffer.c_str();
+#endif
+#else
+	return path;
+#endif
+}
+
+bool isDotOrDotDot(const wchar_t* str)
+{
+	return stringEquals(str, L".") || stringEquals(str, L"..");
+}
+
+FindFileHandle
+findFirstFile(const wchar_t* searchStr, FindFileData& findFileData)
+{
+#if defined(_WIN32)
+	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
+	return FindFirstFileW(searchStr, (WIN32_FIND_DATAW*)&findFileData);
+#else
+	static_assert(sizeof(FindFileDataLinux) <= sizeof(FindFileData), "");
+	String str = toLinuxPath(searchStr);
+	
+	// TODO: BAAAAAAD
+	size_t starPos = str.find_first_of("*");
+	if (starPos != String::npos)
+		str.resize(starPos);
+	
+	DIR* dir = opendir(str.c_str());
+	if (!dir)
+	{
+		if (errno == ENOENT)
+		{
+			t_lastError = ERROR_PATH_NOT_FOUND;
+			return InvalidFindFileHandle;
+		}
+		EACOPY_NOT_IMPLEMENTED
+		return InvalidFindFileHandle;
+	}
+	auto& fd = *(FindFileDataLinux*)&findFileData;
+
+	strcpy(fd.path, str.c_str());
+	fd.entry = readdir(dir);
+	if (fd.entry)
+		return dir;
+	EACOPY_NOT_IMPLEMENTED //  Need to set error codes
+	closedir(dir);
+	return InvalidFindFileHandle;
+#endif
+}
+
+FindFileHandle
+findFirstFile2(const wchar_t* searchStr, FindFileData& findFileData)
+{
+#if defined(_WIN32)
+	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
+	return FindFirstFileExW(searchStr, FindExInfoStandard, (WIN32_FIND_DATAW*)&findFileData, FindExSearchNameMatch, NULL, 0);
+#else
+	return findFirstFile(searchStr, findFileData); // TODO Revisit this
+#endif
+}
+
+bool
+findNextFile(FindFileHandle handle, FindFileData& findFileData)
+{
+#if defined(_WIN32)
+	return FindNextFileW(handle, (WIN32_FIND_DATAW*)&findFileData);
+#else
+	auto dir = (DIR*)handle;
+	auto& fd = *(FindFileDataLinux*)&findFileData;
+	errno = 0;
+	fd.entry = readdir(dir);
+	if (fd.entry)
+		return true;
+	if (errno == 0)
+	{
+		t_lastError = ERROR_NO_MORE_FILES;
+		return false;
+	}
+
+	EACOPY_NOT_IMPLEMENTED //  Need to set error codes
+	t_lastError = ERROR_INVALID_HANDLE;
+	return false;
+#endif
+}
+
+void
+findClose(FindFileHandle handle)
+{
+#if defined(_WIN32)
+	FindClose(handle);
+#else
+	auto dir = (DIR*)handle;
+	closedir(dir);
+#endif
+}
+
+uint
+getFileInfo(FileInfo& outInfo, FindFileData& findFileData)
+{
+#if defined(_WIN32)
+	auto& fd = *(WIN32_FIND_DATAW*)&findFileData;
+	outInfo.creationTime = { 0, 0 };
+	outInfo.lastWriteTime = *(FileTime*)&fd.ftLastWriteTime;
+	outInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+	return fd.dwFileAttributes;
+#else
+	auto& fd = *(FindFileDataLinux*)&findFileData;
+	struct stat st;
+	char fullPath[1024];
+	strcpy(fullPath, fd.path);
+	strcat(fullPath, fd.entry->d_name);
+	if (stat(fullPath, &st) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return 0;
+	}
+
+	outInfo.creationTime = { 0, 0 };
+	outInfo.lastWriteTime = { uint(st.st_mtim.tv_sec >> 32), uint(st.st_mtim.tv_sec) };
+	outInfo.fileSize = st.st_size;
+
+	uint attr = 0;
+	if ((st.st_mode & S_IWUSR) == 0)
+		attr |= FILE_ATTRIBUTE_READONLY;
+
+
+	if (fd.entry->d_type == DT_REG)
+		attr |= FILE_ATTRIBUTE_NORMAL;
+	else if (fd.entry->d_type == DT_DIR)
+		attr |= FILE_ATTRIBUTE_DIRECTORY;
+	else
+		EACOPY_NOT_IMPLEMENTED;
+	return attr;
+#endif
+}
+
+wchar_t*
+getFileName(FindFileData& findFileData)
+{
+#if defined(_WIN32)
+	auto& fd = *(WIN32_FIND_DATAW*)&findFileData;
+	return fd.cFileName;
+#else
+	auto& fd = *(FindFileDataLinux*)&findFileData;
+	WString temp(fd.entry->d_name, fd.entry->d_name + strlen(fd.entry->d_name));
+	stringCopy(fd.name, 512, temp.c_str());
+	return fd.name;
 #endif
 }
 
@@ -453,8 +806,11 @@ WString getCleanedupPath(wchar_t* path, uint startIndex, bool lastWasSlash)
 	// Remove double backslashes after <startIndex> character..
 	// Add backslash at the end if missing
 
+	uint pathLen = wcslen(path);
+	if (pathLen < startIndex)
+		startIndex = pathLen;
 	wchar_t tempBuffer[4096];
-	wcscpy_s(tempBuffer, eacopy_sizeof_array(tempBuffer), path);
+	stringCopy(tempBuffer, eacopy_sizeof_array(tempBuffer), path);
 	wchar_t* readIt = tempBuffer + startIndex;
 	wchar_t* writeIt = tempBuffer + startIndex;
 	while (*readIt)
@@ -505,8 +861,9 @@ void removeTemporarySymlinks(const wchar_t* path)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-DWORD getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
+uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
 {
+	#if defined(_WIN32)
 	WString tempBuffer;
 	const wchar_t* validFullFileName = convertToShortPath(fullFileName, tempBuffer);
 
@@ -519,9 +876,42 @@ DWORD getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
 	}
 
 	outInfo.creationTime = { 0, 0 }; //fd.ftCreationTime;
-	outInfo.lastWriteTime = fd.ftLastWriteTime;
+	outInfo.lastWriteTime = *(FileTime*)&fd.ftLastWriteTime;
 	outInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
 	return fd.dwFileAttributes;
+	#else
+	String str = toLinuxPath(fullFileName);
+	if (str[str.size()-1] == '/')
+		str.resize(str.size()-1);
+
+	struct stat st;
+	if (stat(str.c_str(), &st) == -1)
+	{
+		if (errno == ENOENT)
+		{
+			t_lastError = ERROR_FILE_NOT_FOUND;
+			return 0;
+		}
+		EACOPY_NOT_IMPLEMENTED
+		return 0;
+	}
+
+	outInfo.creationTime = { 0, 0 };
+	outInfo.lastWriteTime = { uint(st.st_mtim.tv_sec >> 32), uint(st.st_mtim.tv_sec) };
+	outInfo.fileSize = st.st_size;
+
+	uint attr = 0;
+	if ((st.st_mode & S_IWUSR) == 0)
+		attr |= FILE_ATTRIBUTE_READONLY;
+
+	if ((st.st_mode & S_IFREG) != 0)
+		attr |= FILE_ATTRIBUTE_NORMAL;
+	else if ((st.st_mode & S_IFDIR) != 0)
+		attr |= FILE_ATTRIBUTE_DIRECTORY;
+	else
+		EACOPY_NOT_IMPLEMENTED
+	return attr;
+	#endif
 }
 
 bool equals(const FileInfo& a, const FileInfo& b)
@@ -529,12 +919,12 @@ bool equals(const FileInfo& a, const FileInfo& b)
 	return memcmp(&a, &b, sizeof(FileInfo)) == 0;
 }
 
-bool replaceIfSymLink(const wchar_t* directory, DWORD attributes)
+bool replaceIfSymLink(const wchar_t* directory, uint attributes)
 {
 	bool isDir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 	if (!isDir)
 	{
-		logErrorf(L"Trying to treat file as directory %s: %s", directory, getLastErrorText().c_str());
+		logErrorf(L"Trying to treat file as directory %ls: %ls", directory, getLastErrorText().c_str());
 		return false;
 	}
 
@@ -545,14 +935,14 @@ bool replaceIfSymLink(const wchar_t* directory, DWORD attributes)
 	// Delete reparsepoint and treat path as not existing
 	if (!RemoveDirectoryW(directory))
 	{
-		logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getLastErrorText().c_str());
+		logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getLastErrorText().c_str());
 		return false;
 	}
 
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
 
-	logErrorf(L"Error creating directory %s: %s", directory, getLastErrorText().c_str());
+	logErrorf(L"Error creating directory %ls: %ls", directory, getLastErrorText().c_str());
 	return false;
 }
 
@@ -570,16 +960,16 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 		if (GetLastError() == ERROR_ALREADY_EXISTS) 
 		{
 			FileInfo dirInfo;
-			DWORD destDirAttributes = getFileInfo(dirInfo, directory);
+			uint destDirAttributes = getFileInfo(dirInfo, directory);
 			if (!destDirAttributes)
 			{
-				logErrorf(L"Trying to get info for %s: %s", directory, getLastErrorText().c_str());
+				logErrorf(L"Trying to get info for %ls: %ls", directory, getLastErrorText().c_str());
 				return false;
 			}
 
 			if (!(destDirAttributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
-				logErrorf(L"Trying to treat file as directory %s", directory);
+				logErrorf(L"Trying to treat file as directory %ls", directory);
 				return false;
 			}
 
@@ -604,12 +994,12 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	const wchar_t* lastBackslash = wcsrchr(directory, '\\');
 	if (!lastBackslash)
 	{
-		logErrorf(L"Error validating directory %s: Bad format.. must contain a slash", directory);
+		logErrorf(L"Error validating directory %ls: Bad format.. must contain a slash", directory);
 		return false;
 	}
 
 	FileInfo dirInfo;
-	DWORD destDirAttributes = getFileInfo(dirInfo, directory);
+	uint destDirAttributes = getFileInfo(dirInfo, directory);
 	if (destDirAttributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
 		if (replaceIfSymlink)
@@ -621,13 +1011,13 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	{
 		if (destDirAttributes != 0)
 		{
-			logErrorf(L"Trying to treat file as directory %s", directory);
+			logErrorf(L"Trying to treat file as directory %ls", directory);
 			return false;
 		}
-		DWORD error = GetLastError();
+		uint error = GetLastError();
 		if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
 		{
-			logErrorf(L"Error getting attributes from directory %s: %s", directory, getErrorText(error).c_str());
+			logErrorf(L"Error getting attributes from directory %ls: %ls", directory, getErrorText(error).c_str());
 			return false;
 		}
 	}
@@ -649,15 +1039,15 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 		return true;
 	}
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (error == ERROR_ALREADY_EXISTS) 
 		return true;
 
-	logErrorf(L"Error creating directory %s: %s", directory, getErrorText(error).c_str());
+	logErrorf(L"Error creating directory %ls: %ls", directory, getErrorText(error).c_str());
 	return false;
 }
 
-bool isError(DWORD error, bool errorOnMissingFile)
+bool isError(uint error, bool errorOnMissingFile)
 {
 	return errorOnMissingFile || (ERROR_FILE_NOT_FOUND != error && ERROR_PATH_NOT_FOUND != error);
 }
@@ -668,56 +1058,59 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
 	outPathFound = true;
-    WIN32_FIND_DATAW fd; 
+	FindFileData fd;
 	WString dir(validDirectory);
 	if (dir[dir.length()-1] != L'\\')
 		dir += L'\\';
     WString searchStr = dir + L"*.*";
-    HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-    if(hFind == INVALID_HANDLE_VALUE)
+    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd); 
+    if(findHandle == InvalidFileHandle)
 	{
-		DWORD error = GetLastError();
+		uint error = GetLastError();
 		if (ERROR_PATH_NOT_FOUND == error)
 		{
 			outPathFound = false;
 			return true;
 		}
 
-		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %s: %s", validDirectory, getErrorText(error).c_str());
+		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %ls: %ls", validDirectory, getErrorText(error).c_str());
 		return false;
 	}
 
-	ScopeGuard closeFindGuard([&]() { FindClose(hFind); });
+	ScopeGuard closeFindGuard([&]() { findClose(findHandle); });
 
     do
 	{ 
-        if(!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+		FileInfo fileInfo;
+		uint fileAttr = getFileInfo(fileInfo, fd);
+		const wchar_t* fileName = getFileName(fd);
+        if(!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
 		{
-			WString fullName(dir + fd.cFileName);
-			if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
-				if (!SetFileAttributesW(fullName.c_str(), FILE_ATTRIBUTE_NORMAL))
+			WString fullName(dir + fileName);
+			if (fileAttr & FILE_ATTRIBUTE_READONLY)
+				if (!setFileWritable(fullName.c_str(), true))
 					if (isError(GetLastError(), errorOnMissingFile))
 					{
-						logErrorf(L"Failed to set file attributes to writable for file %s", fullName.c_str());
+						logErrorf(L"Failed to set file attributes to writable for file %ls", fullName.c_str());
 						return false;
 					}
 
 			if (!deleteFile(fullName.c_str(), errorOnMissingFile))
 				return false;
 		}
-		else if (wcscmp(fd.cFileName, L".") != 0 && wcscmp(fd.cFileName, L"..") != 0)
+		else if (!isDotOrDotDot(fileName))
 		{
-			WString fullName(dir + fd.cFileName);
-			bool isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+			WString fullName(dir + fileName);
+			bool isSymlink = (fileAttr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 			if (isSymlink)
 			{
 				// Delete reparsepoint and treat path as not existing
 				if (!RemoveDirectoryW(fullName.c_str()))
 				{
-					DWORD error = GetLastError();
+					uint error = GetLastError();
 					if (isError(error, errorOnMissingFile))
 					{
-						logErrorf(L"Trying to remove reparse point while ensuring directory %s: %s", directory, getErrorText(error).c_str());
+						logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getErrorText(error).c_str());
 						return false;
 					}
 				}
@@ -727,16 +1120,16 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 		}
 
 	}
-	while(FindNextFileW(hFind, &fd)); 
+	while(findNextFile(findHandle, fd)); 
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 
 	closeFindGuard.execute(); // Need to close find handle otherwise RemoveDirectory will fail now and then
 
 	if (error == ERROR_NO_MORE_FILES)
 		return true;
 
-	logErrorf(L"FindNextFile failed for path %s", directory);
+	logErrorf(L"FindNextFile failed for path %ls", directory);
 	return false;
 }
 
@@ -764,19 +1157,24 @@ bool deleteDirectory(const wchar_t* directory, bool errorOnMissingFile)
 	if (RemoveDirectoryW(validDirectory))
 		return true;
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (!isError(error, errorOnMissingFile))
 		return true;
 
-	logErrorf(L"Trying to remove directory  %s: %s", validDirectory, getErrorText(error).c_str());
+	logErrorf(L"Trying to remove directory  %ls: %ls", validDirectory, getErrorText(error).c_str());
 	return false;
 }
 
 bool isAbsolutePath(const wchar_t* path)
 {
-	if (wcslen(path) < 3)
+	uint pathLen = wcslen(path);
+	if (pathLen < 3)
 		return false;
+	#if defined(_WIN32)
 	return path[1] == ':' || (path[0] == '\\' && path[1] == '\\');
+	#else
+	return path[0] == '\\';
+	#endif
 }
 
 bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
@@ -792,44 +1190,77 @@ bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 	}
 }
 
-bool openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped, bool isSequentialScan)
+bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped, bool isSequentialScan, bool sharedRead)
 {
-	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
-	DWORD sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
-
-	outFile = CreateFileW(fullPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, sequentialScanFlag | nobufferingFlag, overlapped);
-	if (outFile != INVALID_HANDLE_VALUE)
+	#if defined(_WIN32)
+	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
+	uint sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
+	DWORD shareMode = sharedRead ? FILE_SHARE_READ : 0;
+	outFile = CreateFileW(fullPath, GENERIC_READ, shareMode, NULL, OPEN_EXISTING, sequentialScanFlag | nobufferingFlag, overlapped);
+	if (outFile != InvalidFileHandle)
 		return true;
 
-	logErrorf(L"Failed to open file %s: %s", fullPath, getErrorText(fullPath, GetLastError()).c_str());
+	logErrorf(L"Failed to open file %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
 	return false;
-
+	#else
+	String path = toLinuxPath(fullPath);
+    int fileHandle = open(path.c_str(), O_RDONLY, 0);
+	if (fileHandle == -1)
+	{
+		outFile = InvalidFileHandle;
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+	outFile = (FileHandle)(uintptr_t)fileHandle;
+	//if (!sharedRead)
+	//	flock(fileHandle, LOCK_EX); // This does not work.. don't know how to do this on linux
+	return true;
+	#endif
 }
 
-bool openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped, bool hidden)
+bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden)
 {
-	DWORD nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
-	DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
+	#if defined(_WIN32)
+	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
+	uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
-	DWORD flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | nobufferingFlag | writeThroughFlag;
+	uint flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | nobufferingFlag | writeThroughFlag;
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
 	if (hidden)
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
 
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
-	if (outFile != INVALID_HANDLE_VALUE)
+	if (outFile != InvalidFileHandle)
 		return true;
-	logErrorf(L"Trying to create file %s: %s", fullPath, getErrorText(fullPath, GetLastError()).c_str());
+	logErrorf(L"Trying to create file %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
 	return false;
+	#else
+	String path = toLinuxPath(fullPath);
+    int fileHandle = open(path.c_str(), O_WRONLY | O_CREAT, 0644);
+	if (fileHandle == -1)
+	{
+		outFile = InvalidFileHandle;
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+	outFile = (FileHandle)(uintptr_t)fileHandle;
+	return true;
+	#endif
 }
 
-bool writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 dataSize, OVERLAPPED* overlapped)
+bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, _OVERLAPPED* overlapped)
 {
+	#if defined(_WIN32)
 	if (overlapped)
 	{
-		assert(dataSize < u64(INT_MAX-1));
-		DWORD written;
+		if (dataSize >= u64(INT_MAX-1))
+		{
+			logErrorf(L"TODO: Data size too big, needs implementation");
+			return false;
+		}
+
+		uint written;
 		if (!WriteFile(file, data, (uint)dataSize, &written, overlapped))
 			return false;
 		return true;
@@ -838,109 +1269,175 @@ bool writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 data
 	u64 left = dataSize;
 	while (left)
 	{
-		DWORD written;
-		uint toWrite = (uint)min(left, u64(INT_MAX-1));
+		uint written;
+		uint toWrite = (uint)std::min(left, u64(INT_MAX-1));
 		if (!WriteFile(file, data, toWrite, &written, nullptr))
 		{
-			logErrorf(L"Trying to write data to %s", fullPath);
+			logErrorf(L"Trying to write data to %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
 			CloseHandle(file);
-			file = INVALID_HANDLE_VALUE;
+			file = InvalidFileHandle;
 			return false;
 		}
 		(char*&)data += written;
 		left -= written;
 	}
 	return true;
+	#else
+	int fileHandle = (int)(uintptr_t)file;
+	u64 left = dataSize;
+	while (left)
+	{
+		size_t  toWrite = (uint)std::min(left, u64(INT_MAX-1));
+		size_t written = write(fileHandle, data, toWrite);
+		if (written == -1)
+		{
+			EACOPY_NOT_IMPLEMENTED
+			return false;
+		}
+		(char*&)data += written;
+		left -= written;
+	}
+	return true;
+	#endif
 }
 
-bool setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWriteTime)
+bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read)
 {
-	if (file == INVALID_HANDLE_VALUE)
+	#if defined(_WIN32)
+	DWORD dwRead = 0;
+	bool success = ReadFile(file, destData, toRead, &dwRead, NULL) != 0;
+	read = dwRead;
+	if (success)
+		return true;
+
+	if (GetLastError() == ERROR_IO_PENDING)
+		return true;
+
+	logErrorf(L"Fail reading file %ls: %ls", fullPath, getLastErrorText().c_str());
+	return false;
+	#else
+	int fileHandle = (int)(uintptr_t)file;
+	size_t size = ::read(fileHandle, destData, toRead);
+	if (size == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+	read = size;
+	return true;
+	#endif
+}
+
+bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime)
+{
+	if (file == InvalidFileHandle)
 		return false;
 
 	// This should not be needed!
 	//if (!FlushFileBuffers(file))
 	//{
-	//	logErrorf(L"Failed flushing buffer for file %s: %s", fullPath, getLastErrorText().c_str());
+	//	logErrorf(L"Failed flushing buffer for file %ls: %ls", fullPath, getLastErrorText().c_str());
 	//	return false;
 	//}
 
-	if (SetFileTime(file, NULL, NULL, &lastWriteTime))
+	#if defined(_WIN32)
+	if (SetFileTime(file, NULL, NULL, (FILETIME*)&lastWriteTime))
 		return true;
-
-	logErrorf(L"Failed to set file time on %s", fullPath);
+	logErrorf(L"Failed to set file time on %ls", fullPath);
 	CloseHandle(file);
-	file = INVALID_HANDLE_VALUE;
+	file = InvalidFileHandle;
 	return false;
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
 }
 
-bool setFilePosition(const wchar_t* fullPath, HANDLE& file, u64 position)
+bool setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position)
 {
+	#if defined(_WIN32)
 	LARGE_INTEGER li;
 	li.QuadPart = position;
 
 	if (SetFilePointer(file, li.LowPart, &li.HighPart, FILE_BEGIN) != INVALID_SET_FILE_POINTER)
 		return true;
-	logErrorf(L"Fail setting file position on file %s: %s", fullPath, getLastErrorText().c_str());
+	logErrorf(L"Fail setting file position on file %ls: %ls", fullPath, getLastErrorText().c_str());
 	return false;
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
 }
 
-bool closeFile(const wchar_t* fullPath, HANDLE& file)
+bool closeFile(const wchar_t* fullPath, FileHandle& file)
 {
-	if (file == INVALID_HANDLE_VALUE)
+	if (file == InvalidFileHandle)
 		return true;
 
+	#if defined(_WIN32)
 	bool success = CloseHandle(file) != 0;
-	file = INVALID_HANDLE_VALUE;
-
+	file = InvalidFileHandle;
 	if (!success)
-		logErrorf(L"Failed to close file %s", fullPath);
-
+		logErrorf(L"Failed to close file %ls", fullPath);
 	return success;
+	#else
+	int fileHandle = (int)(uintptr_t)file;
+	file = InvalidFileHandle;
+    if (close(fileHandle) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+	return true;
+	#endif
 }
 
 bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden)
 {
-	HANDLE file;
+	FileHandle file;
 	if (!openFileWrite(fullPath, file, useBufferedIO, nullptr, hidden))
 		return false;
-
 	if (!writeFile(fullPath, file, data, info.fileSize))
 		return false;
-
 	if (info.lastWriteTime.dwLowDateTime || info.lastWriteTime.dwHighDateTime)
 		if (!setFileLastWriteTime(fullPath, file, info.lastWriteTime))
 			return false;
-
 	return closeFile(fullPath, file);
 }
 
 bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip)
 {
 	outSkip = false;
+	#if defined(_WIN32)
 	if (CreateHardLinkW(fullPath, sourcePath, NULL))
 		return true;
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (error == ERROR_ALREADY_EXISTS)
 	{
 		FileInfo other;
-		DWORD attributes = getFileInfo(other, fullPath);
+		uint attributes = getFileInfo(other, fullPath);
 		if (!equals(info, other))
 			return false;
 		outSkip = true;
 		return true;
 	}
-	logDebugLinef(L"Failed creating hardlink on %s", sourcePath);
+	logDebugLinef(L"Failed creating hardlink on %ls", sourcePath);
 	return false;
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
 }
 
-DWORD internalCopyProgressRoutine(LARGE_INTEGER TotalFileSize, LARGE_INTEGER TotalBytesTransferred, LARGE_INTEGER StreamSize, LARGE_INTEGER StreamBytesTransferred, DWORD dwStreamNumber, DWORD dwCallbackReason, HANDLE hSourceFile, HANDLE hDestinationFile, LPVOID lpData)
+#if defined(_WIN32)
+uint internalCopyProgressRoutine(LARGE_INTEGER TotalFileSize, LARGE_INTEGER TotalBytesTransferred, LARGE_INTEGER StreamSize, LARGE_INTEGER StreamBytesTransferred, uint dwStreamNumber, uint dwCallbackReason, HANDLE hSourceFile, HANDLE hDestinationFile, LPVOID lpData)
 {
 	if (TotalBytesTransferred.QuadPart == TotalFileSize.QuadPart)
 		*(u64*)lpData = TotalBytesTransferred.QuadPart;
 	return PROGRESS_CONTINUE;
 }
+#endif
 
 CopyContext::CopyContext()
 {
@@ -964,7 +1461,9 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
+	outBytesCopied = 0;
 
+	#if defined(_WIN32)
 
 	// This kind of sucks but since machines might not have long paths enabled we have to work around it by making a symlink and copy through that
 	WString tempBuffer1;
@@ -979,22 +1478,22 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		static_assert(ReadChunkSize <= CopyContextBufferSize, "ReadChunkSize must be smaller than CopyContextBufferSize");
 
 		FileInfo sourceInfo;
-		DWORD sourceAttributes = getFileInfo(sourceInfo, source);
+		uint sourceAttributes = getFileInfo(sourceInfo, source);
 		if (!sourceAttributes)
 		{
-			logErrorf(L"Failed to get file info for source file %s: %s", source, getLastErrorText().c_str());
+			logErrorf(L"Failed to get file info for source file %ls: %ls", source, getLastErrorText().c_str());
 			return false;
 		}
 
 		if ((sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
 		{
-			logErrorf(L"Failed to copy source file %s: File is a directory", source);
+			logErrorf(L"Failed to copy source file %ls: File is a directory", source);
 			return false;
 		}
 
-		DWORD overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
-		DWORD nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
-		DWORD writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
+		uint overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
+		uint nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
+		uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
 		OVERLAPPED osRead  = {0,0,0};
 		osRead.Offset = 0;
@@ -1005,9 +1504,9 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
 		copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
 
-		if (sourceFile == INVALID_HANDLE_VALUE)
+		if (sourceFile == InvalidFileHandle)
 		{
-			logErrorf(L"Failed to open file %s for read: %s", source, getErrorText(source, GetLastError()).c_str());
+			logErrorf(L"Failed to open file %ls for read: %ls", source, getErrorText(source, GetLastError()).c_str());
 			return false;
 		}
 
@@ -1022,16 +1521,16 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
 		copyStats.createWriteTimeMs += getTimeMs() - startCreateWriteTimeMs;
 
-		if (destFile == INVALID_HANDLE_VALUE)
+		if (destFile == InvalidFileHandle)
 		{
-			DWORD error = GetLastError();
+			uint error = GetLastError();
 			if (ERROR_FILE_EXISTS == error)
 			{
 				outExisted = true;
 				return false;
 			}
 
-			logErrorf(L"Failed to create file %s: %s", dest, getErrorText(dest, error).c_str());
+			logErrorf(L"Failed to create file %ls: %ls", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
 		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); CloseHandle(destFile); });
@@ -1054,13 +1553,13 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 					return false;
 				}
 
-				DWORD written = 0;
-				DWORD toWrite = nobufferingFlag ? (((sizeFilled + 4095) / 4096) * 4096) : sizeFilled;
+				uint written = 0;
+				uint toWrite = nobufferingFlag ? (((sizeFilled + 4095) / 4096) * 4096) : sizeFilled;
 				if (!WriteFile(destFile, bufferFilled, toWrite, &written, &osWrite))
 				{
 					if (GetLastError() != ERROR_IO_PENDING)
 					{
-						logErrorf(L"Fail writing file %s: %s", dest, getLastErrorText().c_str());
+						logErrorf(L"Fail writing file %ls: %ls", dest, getLastErrorText().c_str());
 						return false;
 					}
 				}
@@ -1084,7 +1583,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			{
 				u64 startReadMs = getTimeMs();
 
-				uint toRead = (uint)min(left, ReadChunkSize);
+				uint toRead = (uint)std::min(left, u64(ReadChunkSize));
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
 
 				uint toReadAligned = nobufferingFlag ? (((toRead + 4095) / 4096) * 4096) : toRead;
@@ -1096,7 +1595,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 				{
 					if (GetLastError() != ERROR_IO_PENDING)
 					{
-						logErrorf(L"Fail reading file %s: %s", source, getLastErrorText().c_str());
+						logErrorf(L"Fail reading file %ls: %ls", source, getLastErrorText().c_str());
 						return false;
 					}
 				}
@@ -1137,14 +1636,14 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		{
 			u64 startReadMs = getTimeMs();
 			CloseHandle(sourceFile);
-			sourceFile = INVALID_HANDLE_VALUE;
+			sourceFile = InvalidFileHandle;
 			copyStats.readTimeMs += getTimeMs() - startReadMs;
 		}
 
 		{
 			u64 startWriteMs = getTimeMs();
 			CloseHandle(destFile);
-			destFile = INVALID_HANDLE_VALUE;
+			destFile = InvalidFileHandle;
 			copyStats.writeTimeMs += getTimeMs() - startWriteMs;
 		}
 
@@ -1157,22 +1656,116 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 	else
 	{
 		BOOL cancel = false;
-		DWORD flags = 0;
+		uint flags = 0;
 		if (failIfExists)
 			flags |= COPY_FILE_FAIL_IF_EXISTS;
 		if (CopyFileExW(validSource, validDest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
 			return true;
 
-		DWORD error = GetLastError();
+		uint error = GetLastError();
 		if (ERROR_FILE_EXISTS == error)
 		{
 			outExisted = true;
 			return false;
 		}
 
-		logErrorf(L"Failed to copy file %s to %s. Reason: %s%s", source, dest, getErrorText(error).c_str());
+		logErrorf(L"Failed to copy file %ls to %ls. Reason: %ls", source, dest, getErrorText(error).c_str());
 		return false;
 	}
+
+	#else
+
+	int destFlags = O_WRONLY | O_CREAT;
+	if (failIfExists)
+		destFlags |= O_EXCL;
+	String to = toLinuxPath(dest);
+    int destHandle = open(to.c_str(), destFlags, 0644);
+	if (destHandle == -1)
+	{
+		if (errno == EEXIST)
+		{
+			outExisted = true;
+			return false;
+		}
+		if (errno == EACCES)
+		{
+			outExisted = true;
+			t_lastError = FILE_ATTRIBUTE_READONLY;
+			return false;
+		}
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+	String from = toLinuxPath(source);
+	int sourceHandle = open(from.c_str(), O_RDONLY, 0);
+	if (sourceHandle == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+	u64 written = 0;
+	u8* buf = copyContext.buffers[0];
+    while (true)
+	{
+		size_t size = read(sourceHandle, buf, CopyContextBufferSize);
+		if (size == 0)
+			break;
+		if (size == -1)
+		{
+			EACOPY_NOT_IMPLEMENTED
+			break;
+		}
+        if (write(destHandle, buf, size) == -1)
+		{
+			EACOPY_NOT_IMPLEMENTED
+			break;
+		}
+		written += size;
+	}
+
+	if (ftruncate(destHandle, written) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+
+	if (close(sourceHandle) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+	if (close(destHandle) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+
+	struct stat sourceStat;
+	if (stat(from.c_str(), &sourceStat) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+	utimbuf newTimes;
+	newTimes.actime = time(NULL);
+	newTimes.modtime = sourceStat.st_mtime;
+
+	if (utime(to.c_str(), &newTimes) == -1)
+	{
+		EACOPY_NOT_IMPLEMENTED
+		return false;
+	}
+
+	outBytesCopied += written;
+
+	return true;
+	#endif
 }
 
 bool deleteFile(const wchar_t* fullPath, bool errorOnMissingFile)
@@ -1180,20 +1773,45 @@ bool deleteFile(const wchar_t* fullPath, bool errorOnMissingFile)
 	WString tempBuffer;
 	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer);
 
+	#if defined(_WIN32)
 	if (DeleteFileW(validFullPath) != 0)
 		return true;
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (!isError(error, errorOnMissingFile))
 		return true;
 
 	if (ERROR_FILE_NOT_FOUND == error)
 	{
-		logErrorf(L"File not found. Failed to delete file %s", fullPath);
+		logErrorf(L"File not found. Failed to delete file %ls", fullPath);
 		return false;
 	}
-	logErrorf(L"Failed to delete file %s. Reason: %s", fullPath, getErrorText(error).c_str());
+	logErrorf(L"Failed to delete file %ls. Reason: %ls", fullPath, getErrorText(error).c_str());
 	return false;
+	#else
+
+	String file = toLinuxPath(validFullPath);
+	if (remove(file.c_str()) == 0)
+		return true;
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
+}
+
+bool setFileWritable(const wchar_t* fullPath, bool writable)
+{
+	#if defined(_WIN32)
+	return SetFileAttributesW(fullPath, writable ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_READONLY) != 0;
+	#else
+	String file = toLinuxPath(fullPath);
+	int mode = S_IREAD;
+	if (writable)
+		mode |= S_IWRITE;
+    if (chmod(file.c_str(), mode) == 0)
+		return true;
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
 }
 
 void convertSlashToBackslash(wchar_t* path)
@@ -1222,6 +1840,7 @@ void convertSlashToBackslash(char* path, size_t size)
 
 u64 getTimeMs()
 {
+	#if defined(_WIN32)
 	FILETIME ft;
 	GetSystemTimeAsFileTime(&ft);
 
@@ -1229,6 +1848,15 @@ u64 getTimeMs()
 	li.LowPart = ft.dwLowDateTime;
 	li.HighPart = ft.dwHighDateTime;
 	return (li.QuadPart - 116444736000000000LL) / 10000;
+	#else
+	timeval tv;
+    u64 result = 11644473600LL;
+    gettimeofday(&tv, NULL);
+    result += tv.tv_sec;
+    result *= 10000000LL;
+    result += tv.tv_usec * 10;
+    return result;
+#endif
 }
 
 bool equalsIgnoreCase(const wchar_t* a, const wchar_t* b)
@@ -1236,14 +1864,28 @@ bool equalsIgnoreCase(const wchar_t* a, const wchar_t* b)
 	return _wcsicmp(a, b) == 0;
 }
 
+bool lessIgnoreCase(const wchar_t* a, const wchar_t* b)
+{
+	return _wcsicmp(a, b) < 0;
+}
+
 bool startsWithIgnoreCase(const wchar_t* str, const wchar_t* substr)
 {
+	#if defined(_WIN32)
 	return StrStrIW(str, substr) == str;
+	#else
+	size_t strLen = wcslen(str);
+	size_t substrLen = wcslen(substr);
+	if (strLen < substrLen)
+		return false;
+	return wcsncasecmp(str, substr, substrLen) == 0;
+	#endif
 }
 
 WString getErrorText(uint error)
 {
-	DWORD dwRet;
+	#if defined(_WIN32)
+	uint dwRet;
 	wchar_t* lpszTemp = NULL;
 
 	dwRet = FormatMessageW( FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |FORMAT_MESSAGE_ARGUMENT_ARRAY,
@@ -1261,6 +1903,11 @@ WString getErrorText(uint error)
 	WString res = lpszTemp;
 	LocalFree((HLOCAL)lpszTemp);
 	return std::move(res);
+	#else
+	wchar_t buffer[128];
+	swprintf(buffer, 128, L"ERROR: %i", error);
+	return WString(buffer);
+	#endif
 }
 
 WString	getErrorText(const wchar_t* resourceName, uint error)
@@ -1283,28 +1930,29 @@ WString getLastErrorText()
 
 WString getProcessesUsingResource(const wchar_t* resourceName)
 {
-	DWORD dwSession;
+	#if defined(_WIN32)
+	uint dwSession;
 	WCHAR szSessionKey[CCH_RM_SESSION_KEY+1] = { 0 };
-	if (DWORD dwError = RmStartSession(&dwSession, 0, szSessionKey))
+	if (uint dwError = RmStartSession(&dwSession, 0, szSessionKey))
 		return L"";
 	ScopeGuard sessionGuard([&]() { RmEndSession(dwSession); });
 
-	if (DWORD dwError = RmRegisterResources(dwSession, 1, &resourceName, 0, NULL, 0, NULL))
+	if (uint dwError = RmRegisterResources(dwSession, 1, &resourceName, 0, NULL, 0, NULL))
 		return L"";
 
 	WString result;
 
-	DWORD dwReason;
-	uint nProcInfoNeeded;
-	uint nProcInfo = 10;
+	uint dwReason;
+	UINT nProcInfoNeeded;
+	UINT nProcInfo = 10;
 	RM_PROCESS_INFO rgpi[10];
-	if (DWORD dwError = RmGetList(dwSession, &nProcInfoNeeded, &nProcInfo, rgpi, &dwReason))
+	if (uint dwError = RmGetList(dwSession, &nProcInfoNeeded, &nProcInfo, rgpi, &dwReason))
 		return L"";
 
 	for (uint i = 0; i < nProcInfo; i++)
 	{
 		HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, rgpi[i].Process.dwProcessId);
-		if (hProcess == INVALID_HANDLE_VALUE)
+		if (hProcess == InvalidFileHandle)
 			continue;
 		ScopeGuard processGuard([&]() { CloseHandle(hProcess); });
 
@@ -1312,7 +1960,7 @@ WString getProcessesUsingResource(const wchar_t* resourceName)
 		if (!GetProcessTimes(hProcess, &ftCreate, &ftExit, &ftKernel, &ftUser) && CompareFileTime(&rgpi[i].Process.ProcessStartTime, &ftCreate) == 0)
 			continue;
 		WCHAR sz[MaxPath];
-		DWORD cch = MaxPath;
+		uint cch = MaxPath;
 		if (!QueryFullProcessImageNameW(hProcess, 0, sz, &cch))
 			continue;
 
@@ -1322,6 +1970,9 @@ WString getProcessesUsingResource(const wchar_t* resourceName)
 	}
 
 	return std::move(result);
+	#else
+	return WString();
+	#endif
 }
 
 WString toPretty(u64 bytes, uint alignment)
@@ -1333,7 +1984,8 @@ WString toPretty(u64 bytes, uint alignment)
 
 	wchar_t buffer[128];
 	wchar_t* dest = buffer + 64;
-	StringCbPrintfW(dest, 64, L"%.1f%s", value, suffix);
+
+	StringCbPrintfW(dest, 64, L"%.1f%ls", value, suffix);
 
 	uint len = (uint)wcslen(dest);
 	while (len <= alignment)
@@ -1377,7 +2029,7 @@ WString toHourMinSec(u64 timeMs, uint alignment)
 	else
 	{
 		wchar_t* printfDest = dest;
-		_itow_s((int)days, printfDest, 64, 10);
+		itow((int)days, printfDest, 64);
 		wcscat_s(printfDest, 64, L"d ");
 		printfDest += wcslen(printfDest);
 
@@ -1400,6 +2052,19 @@ String toString(const wchar_t* str)
 	using convert_type = std::codecvt_utf8<wchar_t>;
 	return std::wstring_convert<convert_type, wchar_t>().to_bytes( str );
 }
+
+void itow(int value, wchar_t* dst, uint dstCapacity)
+{
+	#if defined(_WIN32)
+	_itow_s(value, dst, dstCapacity, 10);
+	#else
+	swprintf(dst, dstCapacity, L"%d", value);
+	#endif
+}
+
+int stringEquals(const wchar_t* a, const wchar_t* b) { return wcscmp(a, b) == 0; }
+int	stringEquals(const char* a, const char* b) { return strcmp(a, b) == 0; }
+bool stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source) { return wcscpy_s(dest, destCapacity, source) == 0; }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

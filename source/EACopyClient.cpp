@@ -1,12 +1,23 @@
 // (c) Electronic Arts. All Rights Reserved.
 
 #include "EACopyClient.h"
+#include <assert.h>
+#include <utility>
+#if defined(_WIN32)
+#define NOMINMAX
 #include <ws2tcpip.h>
 #include <assert.h>
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <strsafe.h>
-
+#include <windows.h>
+#include <mbctype.h>
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#endif
 #if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 #include <EACopyRsync.h>
 #endif
@@ -15,7 +26,31 @@
 #include "EACopyZdelta.h"
 #endif
 
+#if defined(_WIN32)
 #pragma comment (lib, "Shlwapi.lib") // PathMatchSpecW
+#endif
+
+#if defined(_WIN32)
+#else
+#define TIMEVAL timeval
+namespace eacopy {
+bool PathMatchSpecW(const wchar_t* file, const wchar_t* spec) { EACOPY_NOT_IMPLEMENTED return false; }
+enum : int { FindExSearchNameMatch, FindExInfoStandard };
+bool RemoveDirectoryW(const wchar_t* dir);
+#define WSAHOST_NOT_FOUND                11001L
+#define WSA_FLAG_OVERLAPPED           0x01
+SOCKET WSASocketW(int af, int type, int protocol, void* lpProtocolInfo, int g, int dwFlags) { EACOPY_NOT_IMPLEMENTED return 0; }
+#define WSAEWOULDBLOCK                   10035L
+#define GUID Guid
+void StringFromGUID2(Guid rguid, wchar_t* lpsz, int cchMax) { EACOPY_NOT_IMPLEMENTED }
+#define SD_SEND         0x01
+}
+#endif
+
+namespace stdargv_c
+{
+	static void parse_cmdline(const char *cmdstart, char **argv, char *args, int *numargs, int *numchars);
+}
 
 namespace eacopy
 {
@@ -40,10 +75,13 @@ Client::process(Log& log, ClientStats& outStats)
 	resetWorkState(log);
 
 	m_networkWsaInitDone = false;
+
+	#if defined(_WIN32)
 	ScopeGuard wsaCleanup([this]() { if (m_networkWsaInitDone) WSACleanup(); });
+	#endif
 
 	m_serverAddrInfo = nullptr;
-	ScopeGuard addrCleanup([this]() { if (m_serverAddrInfo) FreeAddrInfoW(m_serverAddrInfo); });
+	ScopeGuard addrCleanup([this]() { if (m_serverAddrInfo) freeAddrInfo(m_serverAddrInfo); });
 
 	LogContext logContext(log);
 
@@ -60,23 +98,25 @@ Client::process(Log& log, ClientStats& outStats)
 		return -1;
 	ScopeGuard destConnectionCleanup([this]() { delete m_destConnection; m_destConnection = nullptr; });
 
+	#if defined(_WIN32)
 	if (m_settings.threadCount > 0)
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+	#endif
 
 	// Spawn worker threads that will copy the files
-	Vector<HANDLE> workerThreadList(m_settings.threadCount);
 	struct WorkerThreadData { ClientStats stats; Client* client; uint connectionIndex; };
 	Vector<WorkerThreadData> workerThreadDataList(m_settings.threadCount);
+
+	Vector<Thread> workerThreadList(m_settings.threadCount);
 	for (int i=0; i!=m_settings.threadCount; ++i)
 	{
 		auto& threadData = workerThreadDataList[i];
 		threadData.client = this;
 		threadData.connectionIndex = i + 1;
-		workerThreadList[i] = CreateThread(NULL, 0, [](LPVOID p) -> DWORD
+		workerThreadList[i].start([&]() -> int
 			{
-				auto& data = *(WorkerThreadData*)p;
-				return data.client->workerThread(data.connectionIndex, data.stats);
-			}, &threadData, 0, NULL);
+				return threadData.client->workerThread(threadData.connectionIndex, threadData.stats);
+			});
 	}
 
 	// Setup guard that will make sure all threads are waited for before leaving method
@@ -84,7 +124,8 @@ Client::process(Log& log, ClientStats& outStats)
 	{
 		// Wait for all threads to finish
 		m_workDone.set();
-		WaitForMultipleObjects((uint)workerThreadList.size(), workerThreadList.data(), TRUE, INFINITE);
+		for (auto& thread : workerThreadList)
+			thread.wait();
 	});
 
 	// Connect to source if no destination is set
@@ -121,7 +162,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 				// Reset last error and try again!
 				logContext.resetLastError();
-				logInfoLinef(L"Warning - Failed to create directory %s, retrying in %i seconds", destDir.c_str(), m_settings.retryWaitTimeMs/1000);
+				logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destDir.c_str(), m_settings.retryWaitTimeMs/1000);
 				Sleep(m_settings.retryWaitTimeMs);
 
 				++outStats.retryCount;
@@ -161,14 +202,13 @@ Client::process(Log& log, ClientStats& outStats)
 		return exitCode;
 
 	// Go through all threads and see if any of them had an error code.
-	for (HANDLE wt : workerThreadList)
+	for (Thread& wt : workerThreadList)
 	{
-		DWORD threadExitCode;
-		if (!GetExitCodeThread(wt, &threadExitCode))
+		uint threadExitCode;
+		if (!wt.getExitCode(threadExitCode))
 			return -1;
 		if (threadExitCode != 0)
 			return threadExitCode;
-		CloseHandle(wt);
 	}
 
 	u64 startPurgeTimeMs = getTimeMs();
@@ -184,7 +224,7 @@ Client::process(Log& log, ClientStats& outStats)
 		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 		{
 			FileInfo dirInfo;
-			DWORD dirAttributes = getFileInfo(dirInfo, purgeDir.c_str());
+			uint dirAttributes = getFileInfo(dirInfo, purgeDir.c_str());
 			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth))
 				return -1;
 		}
@@ -251,7 +291,7 @@ Client::reportServerStatus(Log& log)
 	Connection* connection = createConnection(m_settings.destDirectory.c_str(), 0, stats, useServerFailed, false);
 	if (!connection)
 	{
-		logErrorf(L"Failed to connect to server. Is path '%s' a proper smb path?", m_settings.destDirectory.c_str());
+		logErrorf(L"Failed to connect to server. Is path '%ls' a proper smb path?", m_settings.destDirectory.c_str());
 		return -1;
 	}
 	ScopeGuard connectionGuard([&]() { delete connection; });
@@ -340,7 +380,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				if (written)
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"%s   %s", linked ? L"Link File" : L"New File ", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"%ls   %ls", linked ? L"Link File" : L"New File ", getRelativeSourceFile(entry.src));
 					(linked ? stats.linkTimeMs : stats.copyTimeMs) += getTimeMs() - startTimeMs;
 					++(linked ? stats.linkCount : stats.copyCount);
 					(linked ? stats.linkSize : stats.copySize) += written;
@@ -348,7 +388,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				else
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
 					stats.skipTimeMs += getTimeMs() - startTimeMs;
 					++stats.skipCount;
 					stats.skipSize += size;
@@ -367,7 +407,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				if (read)
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"%s   %s", L"New File ", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"%ls   %ls", L"New File ", getRelativeSourceFile(entry.src));
 					stats.copyTimeMs += getTimeMs() - startTimeMs;
 					++stats.copyCount;
 					stats.copySize += size;
@@ -375,7 +415,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				else
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
 					stats.skipTimeMs += getTimeMs() - startTimeMs;
 					++stats.skipCount;
 					stats.skipSize += size;
@@ -405,7 +445,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"New File    %s", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
 					stats.copyTimeMs += getTimeMs() - startTimeMs;
 					++stats.copyCount;
 					stats.copySize += written;
@@ -421,18 +461,18 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			if (existed || !tryCopyFirst)
 			{
 				FileInfo destInfo;
-				DWORD fileAttributes = getFileInfo(destInfo, fullDst.c_str());
+				uint fileAttributes = getFileInfo(destInfo, fullDst.c_str());
 
 				// If no file attributes it might be that the file doesnt exist
 				if (!fileAttributes)
 				{
 					if (m_settings.logProgress)
-						logDebugLinef(L"Failed to get attributes from file %s", fullDst.c_str());
+						logDebugLinef(L"Failed to get attributes from file %ls", fullDst.c_str());
 				}
 				else if (!m_settings.forceCopy && equals(entry.srcInfo, destInfo)) // Skip file if the same
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"Skip File   %s", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
 					stats.skipTimeMs += getTimeMs() - startTimeMs;
 					++stats.skipCount;
 					stats.skipSize += destInfo.fileSize;
@@ -443,14 +483,14 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				// if destination file is read-only then we will clear that flag so the copy can succeed
 				if (fileAttributes & FILE_ATTRIBUTE_READONLY)
 				{
-					if (!SetFileAttributesW(fullDst.c_str(), FILE_ATTRIBUTE_NORMAL))
-						logErrorf(L"Could not copy over read-only destination file (%s).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
+					if (!setFileWritable(fullDst.c_str(), true))
+						logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
 				}
 				
 				if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
-						logInfoLinef(L"New File    %s", getRelativeSourceFile(entry.src));
+						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
 
 					stats.copyTimeMs += getTimeMs() - startTimeMs;
 					++stats.copyCount;
@@ -464,13 +504,13 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		if (retryCountLeft-- == 0)
 		{
 			++stats.failCount;
-			logErrorf(L"failed to copy file (%s)", entry.src.c_str());
+			logErrorf(L"failed to copy file (%ls)", entry.src.c_str());
 			return true;
 		}
 
 		// Reset last error and try again!
 		logContext.resetLastError();
-		logInfoLinef(L"Warning - failed to copy file %s to %s, retrying in %i seconds", entry.src.c_str(), fullDst.c_str(), m_settings.retryWaitTimeMs/1000);
+		logInfoLinef(L"Warning - failed to copy file %ls to %ls, retrying in %i seconds", entry.src.c_str(), fullDst.c_str(), m_settings.retryWaitTimeMs/1000);
 		Sleep(m_settings.retryWaitTimeMs);
 
 		++stats.retryCount;
@@ -496,7 +536,7 @@ Client::connectToServer(const wchar_t* networkPath, uint connectionIndex, Connec
 
 	if (failedToConnect && m_settings.useServer == UseServer_Required)
 	{
-		logErrorf(L"Failed to connect to server hosting %s at port %u", networkPath, m_settings.serverPort);
+		logErrorf(L"Failed to connect to server hosting %ls at port %u", networkPath, m_settings.serverPort);
 		return false;
 	}
 	return true;
@@ -560,7 +600,7 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 
 	WString destFullPath = destPath + destFileName;
 
-	// Chec if file should be excluded because of wild cards
+	// Check if file should be excluded because of wild cards
 	for (auto& excludeWildcard : m_settings.excludeWildcards)
 		if (PathMatchSpecW(destFullPath.c_str(), excludeWildcard.c_str()))
 			return true;
@@ -628,7 +668,7 @@ Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - Failed to create directory %s, retrying in %i seconds", newDestDirectory.c_str(), m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", newDestDirectory.c_str(), m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 
 			++stats.retryCount;
@@ -660,14 +700,14 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 	if (fileName[0])
 		fullFileName += fileName;
 
-	DWORD attributes = 0;
+	uint attributes = 0;
 	FileInfo fileInfo;
 
 	{
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			DWORD error = 0;
+			uint error = 0;
 
 			// Get file attributes (and allow retry if fails)
 			if (isValid(m_sourceConnection))
@@ -679,14 +719,11 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 			}
 			else
 			{
-				WIN32_FILE_ATTRIBUTE_DATA fd;
-				BOOL ret = GetFileAttributesExW(fullFileName.c_str(), GetFileExInfoStandard, &fd); 
-				if (ret != 0)
+				FileInfo temp;
+				if (uint attr = getFileInfo(temp, fullFileName.c_str()))
 				{
-					fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-					fileInfo.lastWriteTime = fd.ftLastWriteTime;
-					fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-					attributes = fd.dwFileAttributes;
+					fileInfo = temp;
+					attributes = attr;
 					break;
 				}
 				error = GetLastError();
@@ -704,10 +741,10 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 						return true;
 				if (m_handledFiles.find(fileName) != m_handledFiles.end())
 					return true;
-				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"Can't find file/directory %s", fullFileName.c_str());
+				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"Can't find file/directory %ls", fullFileName.c_str());
 			}
 			else
-				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"%s getting attributes from file/directory %s", getErrorText(error).c_str(), fullFileName.c_str());
+				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"%ls getting attributes from file/directory %ls", getErrorText(error).c_str(), fullFileName.c_str());
 
 			if (retryCount-- == 0)
 			{
@@ -718,7 +755,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - %s, retrying in %i seconds", errorDesc, m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - %ls, retrying in %i seconds", errorDesc, m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 
 			++stats.retryCount;
@@ -739,7 +776,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 			const wchar_t* lastSlash = wcsrchr(sourcePath.c_str(), L'\\');
 			if (!lastSlash)
 			{
-				logErrorf(L"Something went wrong with the file paths. Source: %s Dest: %s", sourcePath.c_str(), destPath.c_str());
+				logErrorf(L"Something went wrong with the file paths. Source: %ls Dest: %ls", sourcePath.c_str(), destPath.c_str());
 				return false;
 			}
 
@@ -806,64 +843,60 @@ Client::findFilesInDirectory(LogContext& logContext, const WString& sourcePath, 
 			WString tempBuffer;
 			const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
 
-			WIN32_FIND_DATAW fd; 
-			HANDLE hFind; 
+			FindFileData fd; 
+			FindFileHandle findFileHandle; 
 
 			int retryCount = m_settings.retryCount;
 			while (true)
 			{
-				hFind = FindFirstFileW(validSearchStr, &fd); 
-				if (hFind != INVALID_HANDLE_VALUE)
+				findFileHandle = findFirstFile(validSearchStr, fd); 
+				if (findFileHandle != InvalidFindFileHandle)
 					break;
 
-				DWORD findFileError = GetLastError();
+				uint findFileError = GetLastError();
 
 				// If path is wildcard and file is not found it is still fine.. just skip find next
 				if (findFileError == ERROR_FILE_NOT_FOUND)
 				{
 					if (wildcard.find('*') != std::string::npos)
 						break;
-					logErrorf(L"Can't find file %s", searchStr.c_str());
+					logErrorf(L"Can't find file %ls", searchStr.c_str());
 				}
 				else
-					logErrorf(L"FindFirstFile %s failed: %s", searchStr.c_str(), getErrorText(findFileError).c_str());
+					logErrorf(L"FindFirstFile %ls failed: %ls", searchStr.c_str(), getErrorText(findFileError).c_str());
 
 				if (retryCount-- == 0)
 					return false;
 
 				// Reset last error and try again!
 				logContext.resetLastError();
-				logInfoLinef(L"Warning - FindFirstFile %s failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
+				logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
 				Sleep(m_settings.retryWaitTimeMs);
 				++stats.retryCount;
 			}
 
 			//Handle all the files first
-			if (hFind != INVALID_HANDLE_VALUE)
+			if (findFileHandle != InvalidFindFileHandle)
 			{
-				ScopeGuard _([&]() { FindClose(hFind); });
+				ScopeGuard _([&]() { findClose(findFileHandle); });
 
 				do
 				{
-					if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+					FileInfo fileInfo;
+					uint fileAttr = getFileInfo(fileInfo, fd);
+					if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
 						continue;
 
-					if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-					{
-						FileInfo fileInfo;
-						fileInfo.creationTime = { 0, 0 };//fd.ftCreationTime;
-						fileInfo.lastWriteTime = fd.ftLastWriteTime;
-						fileInfo.fileSize = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
-						if (!handleFile(sourcePath, destPath, fd.cFileName, fileInfo, handleFileFunc))
+					if (!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
+						if (!handleFile(sourcePath, destPath, getFileName(fd), fileInfo, handleFileFunc))
 							return false;
-					}
 				}
-				while (FindNextFileW(hFind, &fd));
+				while (findNextFile(findFileHandle, fd));
 
-				DWORD findNextError = GetLastError();
+				uint findNextError = GetLastError();
 				if (findNextError != ERROR_NO_MORE_FILES)
 				{
-					logErrorf(L"FindNextFileW failed for %s: %s", validSearchStr, getErrorText(findNextError).c_str());
+					logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
 					return false;
 				}
 			}
@@ -875,56 +908,59 @@ Client::findFilesInDirectory(LogContext& logContext, const WString& sourcePath, 
 		WString tempBuffer;
 		const wchar_t* validDirSearchStr = convertToShortPath(dirSearchStr.c_str(), tempBuffer);
 
-		WIN32_FIND_DATAW fdDir;
-		HANDLE hFindDir;
+		FindFileData fdDir;
+		FindFileHandle findDirHandle;
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			hFindDir = FindFirstFileExW(validDirSearchStr, FindExInfoStandard, &fdDir, FindExSearchNameMatch, NULL, 0);
-			if (hFindDir != INVALID_HANDLE_VALUE)
+			findDirHandle = findFirstFile2(validDirSearchStr, fdDir);
+			if (findDirHandle != InvalidFindFileHandle)
 				break;
 
-			DWORD findDirError = GetLastError();
+			uint findDirError = GetLastError();
 
-			//If directory was just not found then its okay, but otherwise return false and error.
+			// If directory was just not found then its okay, but otherwise return false and error.
 			if (findDirError == ERROR_FILE_NOT_FOUND)
 				break;
 
-			logErrorf(L"FindFirstFileEx %s failed: %s", dirSearchStr.c_str(), getErrorText(findDirError).c_str());
+			logErrorf(L"FindFirstFileEx %ls failed: %ls", dirSearchStr.c_str(), getErrorText(findDirError).c_str());
 			if (retryCount-- == 0)
 				return false;
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - FindFirstFileEx %s failed, retrying in %i seconds", validDirSearchStr, m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - FindFirstFileEx %ls failed, retrying in %i seconds", validDirSearchStr, m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 			++stats.retryCount;
 		}
 
-		if (hFindDir != INVALID_HANDLE_VALUE)
+		if (findDirHandle != InvalidFindFileHandle)
 		{
-			ScopeGuard _([&]() { FindClose(hFindDir); });
+			ScopeGuard _([&]() { findClose(findDirHandle); });
 			do
 			{
-				if ((fdDir.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+				FileInfo dirinfo;
+				uint dirAttr = getFileInfo(dirinfo, fdDir);
+				if ((dirAttr & FILE_ATTRIBUTE_HIDDEN))
 					continue;
 
-				if ((fdDir.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+				if ((dirAttr & FILE_ATTRIBUTE_DIRECTORY))
 				{
 					if (depthLeft)
 					{
-						if (wcscmp(fdDir.cFileName, L".") != 0 && wcscmp(fdDir.cFileName, L"..") != 0)
-							if (!handleDirectory(logContext, sourcePath, destPath, fdDir.cFileName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+						const wchar_t* dirName = getFileName(fdDir);
+						if (!isDotOrDotDot(dirName))
+							if (!handleDirectory(logContext, sourcePath, destPath, dirName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
 								return false;
 					}
 				}
 			}
-			while (FindNextFileW(hFindDir, &fdDir));
+			while (findNextFile(findDirHandle, fdDir));
 
-			DWORD findNextError = GetLastError();
+			uint findNextError = GetLastError();
 			if (findNextError != ERROR_NO_MORE_FILES)
 			{
-				logErrorf(L"FindNextFileW failed for %s: %s", validDirSearchStr, getErrorText(findNextError).c_str());
+				logErrorf(L"FindNextFileW failed for %ls: %ls", validDirSearchStr, getErrorText(findNextError).c_str());
 				return false;
 			}
 		}
@@ -959,7 +995,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 				return false;
 
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - Failed reading input file %s, retrying in %i seconds", originalFullPath.c_str(), m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - Failed reading input file %ls, retrying in %i seconds", originalFullPath.c_str(), m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 
 			++stats.retryCount;
@@ -980,7 +1016,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		}
 
 
-		HANDLE hFile;
+		FileHandle hFile;
 		if (!openFileRead(fullPath.c_str(), hFile, true))
 			continue;
 		ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile); });
@@ -991,11 +1027,11 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		uint lineIndex = 0;
 		while (true)
 		{
-			DWORD read = 0;
-			DWORD toRead = CopyContextBufferSize - left - 1;
-			if (ReadFile(hFile, buffer + left, toRead, &read, NULL) == 0)
+			u64 read = 0;
+			u64 toRead = CopyContextBufferSize - left - 1;
+			if (!readFile(fullPath.c_str(), hFile, buffer + left, toRead, read))
 			{
-				logErrorf(L"Failed reading input file %s: %s (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);
+				logErrorf(L"Failed reading input file %ls: %ls (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);
 				continue;
 			}
 			totalRead += read;
@@ -1068,7 +1104,7 @@ Client::excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const W
 		convertSlashToBackslash(str);
 		if (strchr(str, '*') != nullptr)
 		{
-			logErrorf(L"Wildcards not supported in exclude list file %s", fileName.c_str());
+			logErrorf(L"Wildcards not supported in exclude list file %ls", fileName.c_str());
 			return false;
 		}
 		m_handledFiles.insert(WString(str, str + strlen(str)));
@@ -1087,10 +1123,20 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		// Handle initial path that might exist inside input file
 
 		// Parse line to figure out the parts. source [dest [file [file]...]] [options]
-		WString wstr(str, str + strlen(str));
-		int argc;
-		wchar_t** argv = CommandLineToArgvW(wstr.c_str(), &argc);
-		ScopeGuard _([&]{ LocalFree(argv); });
+
+		int argc = 0;
+		char* argv_[64];
+		char buffer[1024];
+		int numchars;
+		stdargv_c::parse_cmdline(str, argv_, buffer, &argc, &numchars);
+		--argc;
+		wchar_t* argv[64];
+		WString temp[64];
+		for (int i=0; i!=argc; ++i)
+		{
+			temp[i] = WString(argv_[i], argv_[i] + strlen(argv_[i]));
+			argv[i] = const_cast<wchar_t*>(temp[i].c_str());
+		}
 
 		if (argc == 0)
 			return true;
@@ -1135,7 +1181,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 					// Reset last error and try again!
 					logContext.resetLastError();
-					logInfoLinef(L"Warning - Failed to create directory %s, retrying in %i seconds", destPath.c_str(), m_settings.retryWaitTimeMs/1000);
+					logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destPath.c_str(), m_settings.retryWaitTimeMs/1000);
 					Sleep(m_settings.retryWaitTimeMs);
 
 					++stats.retryCount;
@@ -1150,7 +1196,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		{
 			if (_wcsnicmp(argv[i], L"/PURGE", 6) != 0)
 			{
-				logErrorf(L"Only '/PURGE' allowed after second separator in file list %s", fileName.c_str());
+				logErrorf(L"Only '/PURGE' allowed after second separator in file list %ls", fileName.c_str());
 				return false;
 			}
 			m_purgeDirs.insert(destPath + wpath + L'\\');
@@ -1165,7 +1211,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			}
 			else if (!m_settings.flattenDestination)
 			{
-				logErrorf(L"Entry in file list %s is using absolute path %s that is not in source path %s", fileName.c_str(), wpath.c_str(), sourcePath.c_str());
+				logErrorf(L"Entry in file list %ls is using absolute path %ls that is not in source path %ls", fileName.c_str(), wpath.c_str(), sourcePath.c_str());
 				return false;
 			}
 		}
@@ -1205,7 +1251,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 }
 
 bool
-Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int depthLeft)
+Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int depthLeft)
 {
 	// We don't enter symlinks for purging. Maybe this should be an command line option to treat symlinks just like normal directories
 	// but in the use cases we have at ea we don't want to enter symlinks for purging
@@ -1223,33 +1269,35 @@ Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int
 			return m_destConnection->sendDeleteAllFiles(relPath.c_str());
 
 
-    WIN32_FIND_DATAW fd; 
+    FindFileData fd; 
     WString searchStr = path + L"*.*";
-    HANDLE hFind = FindFirstFileW(searchStr.c_str(), &fd); 
-    if(hFind == INVALID_HANDLE_VALUE)
+    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd); 
+    if(findHandle == InvalidFindFileHandle)
 	{
-		DWORD lastError = GetLastError();
+		uint lastError = GetLastError();
 		if (lastError == ERROR_FILE_NOT_FOUND)
 			return true;
-		logErrorf(L"FindFirstFile failed while purging with search string %s: %s", searchStr.c_str(), getErrorText(lastError).c_str());
+		logErrorf(L"FindFirstFile failed while purging with search string %ls: %ls", searchStr.c_str(), getErrorText(lastError).c_str());
 		return false;
 	}
-	ScopeGuard _([&]() { FindClose(hFind); });
+	ScopeGuard _([&]() { findClose(findHandle); });
 
 	bool errorOnMissingFile = false;
 	bool res = true;
     do
-	{ 
-		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+	{
+		FileInfo fileInfo;
+		uint fileAttr = getFileInfo(fileInfo, fd);
+		if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
 			continue;
-
+		const wchar_t* fileName = getFileName(fd);
 		// Check if file was copied here
-		WString filePath = relPath + fd.cFileName;
+		WString filePath = relPath + fileName;
 
-		bool isDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		bool isDir = (fileAttr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 		if (isDir)
 		{
-			if ((wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
+			if (isDotOrDotDot(fileName))
 				continue;
 			filePath += L'\\';
 		}
@@ -1257,17 +1305,17 @@ Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int
 		// File/directory was not part of source, delete
 		if (m_handledFiles.find(filePath) == m_handledFiles.end())
 		{
-			if (isIgnoredDirectory(fd.cFileName))
+			if (isIgnoredDirectory(fileName))
 				continue;
-			WString fullPath = (path + fd.cFileName);
+			WString fullPath = (path + fileName);
 	        if(isDir)
 			{
-				bool isSymlink = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+				bool isSymlink = (fileAttr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 				if (isSymlink)
 				{
 					if (!RemoveDirectoryW(fullPath.c_str()))
 					{
-						logErrorf(L"Trying to remove reparse point while purging destination %s: %s", fullPath.c_str(), getLastErrorText().c_str());
+						logErrorf(L"Trying to remove reparse point while purging destination %ls: %ls", fullPath.c_str(), getLastErrorText().c_str());
 						res = false;
 					}
 				}
@@ -1282,16 +1330,16 @@ Client::purgeFilesInDirectory(const WString& path, DWORD destPathAttributes, int
 		}
         else if(isDir)
 		{
-			if (!purgeFilesInDirectory(path + fd.cFileName + L'\\', fd.dwFileAttributes, depthLeft - 1))
+			if (!purgeFilesInDirectory(path + fileName + L'\\', fileAttr, depthLeft - 1))
 				res = false;
 		}
 
-	} while (FindNextFileW(hFind, &fd));
+	} while (findNextFile(findHandle, fd));
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (error != ERROR_NO_MORE_FILES)
 	{
-		logErrorf(L"FindNextFile failed while purging for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+		logErrorf(L"FindNextFile failed while purging for %ls: %ls", searchStr.c_str(), getErrorText(error).c_str());
 		res = false;
 	}
 
@@ -1322,10 +1370,8 @@ Client::getRelativeSourceFile(const WString& sourcePath) const
 {
 	const wchar_t* logStr = sourcePath.c_str();
 	const WString& baseDir = m_settings.sourceDirectory;
-	if (StrCmpNIW(logStr, baseDir.c_str(), baseDir.size()) == 0)
+	if (_wcsnicmp(logStr, baseDir.c_str(), baseDir.size()) == 0)
 		logStr += baseDir.size();
-	//if (wcsstr(logStr, baseDir.c_str()) == logStr)
-	//	logStr += baseDir.size();
 	return logStr;
 }
 
@@ -1343,13 +1389,16 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		m_networkInitDone = true;
 
 		// Initialize Winsock
+		#if defined(_WIN32)
 		WSADATA wsaData;
-		int res = WSAStartup(MAKEWORD(2,2), &wsaData);
-		if (res != 0)
+		int wsaRes = WSAStartup(MAKEWORD(2,2), &wsaData);
+		if (wsaRes != 0)
 		{
-			logErrorf(L"WSAStartup failed with error: %d", res);
+			logErrorf(L"WSAStartup failed with error: %d", wsaRes);
 			return nullptr;
 		}
+		#endif
+
 		m_networkWsaInitDone = true;
 
 		WString networkServerName;
@@ -1381,30 +1430,30 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			m_networkServerNetDirectory = networkPath;
 		}
    
-		addrinfoW hints;
-		ZeroMemory( &hints, sizeof(hints) );
+		AddrInfo  hints;
+		memset(&hints, 0, sizeof(hints));
 		hints.ai_family = AF_INET; //AF_UNSPEC; (Skip AF_INET6)
 		hints.ai_socktype = SOCK_STREAM;
 		hints.ai_protocol = IPPROTO_TCP;
 
 		wchar_t defaultPortStr[32];
-		_itow_s(m_settings.serverPort, defaultPortStr, eacopy_sizeof_array(defaultPortStr), 10);
+		itow(m_settings.serverPort, defaultPortStr, eacopy_sizeof_array(defaultPortStr));
 
 		// Resolve the server address and port
-		res = GetAddrInfoW(networkServerName.c_str(), defaultPortStr, &hints, &m_serverAddrInfo);
+		int res = getAddrInfoW(networkServerName.c_str(), defaultPortStr, &hints, &m_serverAddrInfo);
 		if (res != 0)
 		{
 			if (res == WSAHOST_NOT_FOUND)
 			{
 				if (!failedToConnect) // Just to reduce chance of getting multiple log entries in multithreading scenarios (which doesnt matter)
 				{
-					logInfoLinef(L"   !!Invalid server address '%s'", networkServerName.c_str());
+					logInfoLinef(L"   !!Invalid server address '%ls'", networkServerName.c_str());
 					logInfoLinef();
 					failedToConnect = true;
 				}
 				return nullptr;
 			}
-			logErrorf(L"GetAddrInfoW failed with error: %s", getErrorText(res).c_str());
+			logErrorf(L"GetAddrInfoW failed with error: %ls", getErrorText(res).c_str());
 
 			return nullptr;
 		}
@@ -1427,7 +1476,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		sock.socket = WSASocketW(addrInfoIt->ai_family, addrInfoIt->ai_socktype, addrInfoIt->ai_protocol, NULL, 0, WSA_FLAG_OVERLAPPED);
 		if (sock.socket == INVALID_SOCKET)
 		{
-			logErrorf(L"socket failed with error: %ld", WSAGetLastError());
+			logErrorf(L"socket failed with error: %ld", getLastNetworkError());
 			return nullptr;
 		}
 
@@ -1442,7 +1491,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		int res = connect(sock.socket, addrInfoIt->ai_addr, (int)addrInfoIt->ai_addrlen);
 		if (res == SOCKET_ERROR)
 		{
-			if (WSAGetLastError() != WSAEWOULDBLOCK)
+			if (getLastNetworkError() != WSAEWOULDBLOCK)
 				break;
 		}
 
@@ -1470,7 +1519,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 	}
 
 	u64 endTime = getTimeMs();
-	logDebugLinef(L"Connect to server %s. (%.1f seconds)", sock.socket != INVALID_SOCKET ? L"SUCCESS" : L"FAILED", float(endTime - startTime)/1000.0f);
+	logDebugLinef(L"Connect to server %ls. (%.1f seconds)", sock.socket != INVALID_SOCKET ? L"SUCCESS" : L"FAILED", float(endTime - startTime)/1000.0f);
 
 	if (sock.socket == INVALID_SOCKET)
 	{
@@ -1523,7 +1572,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		if (useSecurityFile)
 			m_secretGuidCs.enter();
 		ScopeGuard secretGuidCsGuard([&] { if (useSecurityFile) m_secretGuidCs.leave(); });
-		GUID zeroGuid = {0};
+		Guid zeroGuid = {0};
 		bool hasSecretGuid = (!useSecurityFile) || m_secretGuid != zeroGuid;
 		if (hasSecretGuid)
 			secretGuidCsGuard.execute();
@@ -1538,9 +1587,9 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		cmd.secretGuid = m_secretGuid;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);
 		
-		if (wcscpy_s(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
+		if (!stringCopy(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
 		{
-			logErrorf(L"Failed send environment %s: wcscpy_s", m_networkServerNetDirectory.c_str());
+			logErrorf(L"Failed send environment %ls: wcscpy_s", m_networkServerNetDirectory.c_str());
 			return nullptr;
 		}
 	
@@ -1549,29 +1598,29 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 
 		if (!hasSecretGuid)
 		{
-			GUID securityFileGuid;
+			Guid securityFileGuid;
 			if (!receiveData(sock, &securityFileGuid, sizeof(securityFileGuid)))
 				return nullptr;
 			wchar_t securityFile[128];
 			securityFile[0] = L'.';
-			StringFromGUID2(securityFileGuid, securityFile + 1, 40);
+			StringFromGUID2(*(GUID*)&securityFileGuid, securityFile + 1, 40);
 			securityFile[1] = L'f';
 			securityFile[41] = 0;
-			HANDLE hFile;
+			FileHandle hFile;
 			WString networkFilePath = m_settings.destDirectory + securityFile;
 			if (!openFileRead(networkFilePath.c_str(), hFile, true))
 				return nullptr;
 			ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile); });
 
-			DWORD read = 0;
-			bool secretGuidRead = ReadFile(hFile, &m_secretGuid, sizeof(m_secretGuid), &read, NULL) != 0;
+			u64 read = 0;
+			bool secretGuidRead = readFile(networkFilePath.c_str(), hFile, &m_secretGuid, sizeof(m_secretGuid),read) != 0;
 
 			if (!sendData(sock, &m_secretGuid, sizeof(m_secretGuid)))
 				return nullptr;
 
 			if (!secretGuidRead)
 			{
-				logErrorf(L"Failed reading secret guid from file %s", networkFilePath.c_str());
+				logErrorf(L"Failed reading secret guid from file %ls", networkFilePath.c_str());
 				return nullptr;
 			}
 		}
@@ -1605,7 +1654,7 @@ Client::Connection::Connection(const ClientSettings& settings, ClientStats& stat
 {
 	m_compressionEnabled = settings.compressionEnabled;
 	m_compressionData.fixedLevel = settings.compressionLevel != 0;
-	m_compressionData.level = min(max(settings.compressionLevel, 1), 22);
+	m_compressionData.level = std::min(std::max(settings.compressionLevel, 1), 22);
 }
 
 Client::Connection::~Connection()
@@ -1638,7 +1687,7 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 	auto& cmd = *(TextCommand*)buffer;
 	cmd.commandType = CommandType_Text;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(text)*2);
-	if (wcscpy_s(cmd.string, eacopy_sizeof_array(buffer) - sizeof(cmd), text))
+	if (!stringCopy(cmd.string, eacopy_sizeof_array(buffer) - sizeof(cmd), text))
 	{
 		logErrorf(L"wcscpy_s in sendTextCommand failed");
 		return false;
@@ -1660,9 +1709,9 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	cmd.commandType = CommandType_WriteFile;
 	cmd.writeType = writeType;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
-	if (wcscpy_s(cmd.path, MaxPath, dst))
+	if (!stringCopy(cmd.path, MaxPath, dst))
 	{
-		logErrorf(L"Failed to write file %s: wcscpy_s in sendWriteFileCommand failed", dst);
+		logErrorf(L"Failed to write file %ls: wcscpy_s in sendWriteFileCommand failed", dst);
 		return false;
 	}
 	
@@ -1709,7 +1758,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 		if (!writeSuccess)
 		{
-			logErrorf(L"Failed to write file %s: server returned failure after sending file", dst);
+			logErrorf(L"Failed to write file %ls: server returned failure after sending file", dst);
 			return false;
 		}
 
@@ -1749,7 +1798,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 		if (!writeSuccess)
 		{
-			logErrorf(L"Failed to write file %s: server returned failure after sending file delta", dst);
+			logErrorf(L"Failed to write file %ls: server returned failure after sending file delta", dst);
 			return false;
 		}
 
@@ -1761,7 +1810,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 	if (writeResponse == WriteResponse_BadDestination)
 	{
-		logErrorf(L"Failed to write file %s: Server reported Bad destination (check your destination path)", src);
+		logErrorf(L"Failed to write file %ls: Server reported Bad destination (check your destination path)", src);
 		return false;
 	}
 
@@ -1782,18 +1831,18 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	cmd.commandType = CommandType_ReadFile;
 	cmd.compressionEnabled = m_compressionEnabled;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(src)*2);
-	if (wcscpy_s(cmd.path, MaxPath, src))
+	if (!stringCopy(cmd.path, MaxPath, src))
 	{
-		logErrorf(L"Failed to read file %s: wcscpy_s in sendReadFileCommand failed", src);
+		logErrorf(L"Failed to read file %ls: wcscpy_s in sendReadFileCommand failed", src);
 		return ReadFileResult_Error;
 	}
 
 	WString fullDest = m_settings.destDirectory + dst;
 
-	if (DWORD fileAttributes = getFileInfo(cmd.info, fullDest.c_str()))
+	if (uint fileAttributes = getFileInfo(cmd.info, fullDest.c_str()))
 		if (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			logErrorf(L"Trying to copy to file %s which is a directory", fullDest.c_str());
+			logErrorf(L"Trying to copy to file %ls which is a directory", fullDest.c_str());
 			return ReadFileResult_Error;
 		}
 
@@ -1818,7 +1867,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 	if (readResponse == ReadResponse_BadSource)
 	{
-		logErrorf(L"Unknown server side error while asking for file %s: sendReadFileCommand failed", fullDest.c_str());
+		logErrorf(L"Unknown server side error while asking for file %ls: sendReadFileCommand failed", fullDest.c_str());
 		return ReadFileResult_Error;
 	}
 
@@ -1829,7 +1878,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		return ReadFileResult_Success;
 	}
 
-	FILETIME newFileLastWriteTime;
+	FileTime newFileLastWriteTime;
 	if (!receiveData(m_socket, &newFileLastWriteTime, sizeof(newFileLastWriteTime)))
 		return ReadFileResult_Error;
 
@@ -1891,9 +1940,9 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSe
 	uint relDirLen = wcslen(relDir);
 	cmd.commandSize = sizeof(cmd) + uint(relDirLen*2);
 	
-	if (wcscpy_s(cmd.path, MaxPath, relDir))
+	if (!stringCopy(cmd.path, MaxPath, relDir))
 	{
-		logErrorf(L"Failed to create directory %s: wcscpy_s in sendCreateDirectoryCommand failed", relDir);
+		logErrorf(L"Failed to create directory %ls: wcscpy_s in sendCreateDirectoryCommand failed", relDir);
 		return false;
 	}
 
@@ -1906,13 +1955,13 @@ Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSe
 
 	if (createDirResponse == CreateDirResponse_BadDestination)
 	{
-		logErrorf(L"Failed to create directory %s: Server reported Bad destination (check your destination path)", relDir);
+		logErrorf(L"Failed to create directory %ls: Server reported Bad destination (check your destination path)", relDir);
 		return false;
 	}
 
 	if (createDirResponse == CreateDirResponse_Error)
 	{
-		logErrorf(L"Failed to create directory %s: Server reported unknown error", relDir);
+		logErrorf(L"Failed to create directory %ls: Server reported unknown error", relDir);
 		return false;
 	}
 
@@ -1941,9 +1990,9 @@ Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
 	cmd.commandType = CommandType_DeleteFiles;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dir)*2);
 
-	if (wcscpy_s(cmd.path, MaxPath, dir))
+	if (!stringCopy(cmd.path, MaxPath, dir))
 	{
-		logErrorf(L"Failed to delete directory %s: wcscpy_s in sendDeleteAllFiles failed", dir);
+		logErrorf(L"Failed to delete directory %ls: wcscpy_s in sendDeleteAllFiles failed", dir);
 		return false;
 	}
 
@@ -1956,13 +2005,13 @@ Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
 
 	if (deleteFilesResponse == DeleteFilesResponse_BadDestination)
 	{
-		logErrorf(L"Failed to delete directory %s: Server reported Bad destination (check your destination path)", dir);
+		logErrorf(L"Failed to delete directory %ls: Server reported Bad destination (check your destination path)", dir);
 		return false;
 	}
 
 	if (deleteFilesResponse == DeleteFilesResponse_Error)
 	{
-		logErrorf(L"Failed to delete directory %s: Server reported unknown error", dir);
+		logErrorf(L"Failed to delete directory %ls: Server reported unknown error", dir);
 		return false;
 	}
 	return true;
@@ -1976,9 +2025,9 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 	cmd.commandType = CommandType_FindFiles;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dirAndWildcard)*2);
 
-	if (wcscpy_s(cmd.pathAndWildcard, MaxPath, dirAndWildcard))
+	if (!stringCopy(cmd.pathAndWildcard, MaxPath, dirAndWildcard))
 	{
-		logErrorf(L"Failed to find files %s: wcscpy_s in sendFindFiles failed", dirAndWildcard);
+		logErrorf(L"Failed to find files %ls: wcscpy_s in sendFindFiles failed", dirAndWildcard);
 		return false;
 	}
 
@@ -1998,7 +2047,7 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 
 		if (blockSize == ~0u)
 		{
-			logErrorf(L"Can't find %s", dirAndWildcard);
+			logErrorf(L"Can't find %ls", dirAndWildcard);
 			return false;
 		}
 	
@@ -2013,7 +2062,7 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 
 			nafi.attributes = *(uint*)blockPos;
 			blockPos += sizeof(uint);
-			nafi.info.lastWriteTime = *(FILETIME*)blockPos;
+			nafi.info.lastWriteTime = *(FileTime*)blockPos;
 			blockPos += sizeof(u64);
 			nafi.info.fileSize = *(u64*)blockPos;
 			blockPos += sizeof(u64);
@@ -2027,30 +2076,30 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 }
 
 bool
-Client::Connection::sendGetFileAttributes(const wchar_t* path, FileInfo& outInfo, DWORD& outAttributes, DWORD& outError)
+Client::Connection::sendGetFileAttributes(const wchar_t* path, FileInfo& outInfo, uint& outAttributes, uint& outError)
 {
 	char buffer[MaxPath*2 + sizeof(GetFileInfoCommand)+1];
 	auto& cmd = *(GetFileInfoCommand*)buffer;
 	cmd.commandType = CommandType_GetFileInfo;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(path)*2);
 
-	if (wcscpy_s(cmd.path, MaxPath, path))
+	if (!stringCopy(cmd.path, MaxPath, path))
 	{
-		logErrorf(L"Failed to get file info %s: wcscpy_s in sendGetFileAttributes failed", path);
+		logErrorf(L"Failed to get file info %ls: wcscpy_s in sendGetFileAttributes failed", path);
 		return false;
 	}
 
 	if (!sendCommand(cmd))
 		return false;
 
-	__declspec(align(8)) u8 recvBuffer[3*8+2*4];
-	static_assert(sizeof(recvBuffer) == sizeof(FileInfo) + sizeof(DWORD) + sizeof(DWORD), "");
+	alignas(8) u8 recvBuffer[3*8+2*4];
+	static_assert(sizeof(recvBuffer) == sizeof(FileInfo) + sizeof(uint) + sizeof(uint), "");
 
 	if (!receiveData(m_socket, recvBuffer, sizeof(recvBuffer)))
 		return false;
 	outInfo = *(FileInfo*)recvBuffer;
-	outAttributes = *(DWORD*)(recvBuffer + sizeof(FileInfo));
-	outError = *(DWORD*)(recvBuffer + sizeof(FileInfo) + sizeof(DWORD));
+	outAttributes = *(uint*)(recvBuffer + sizeof(FileInfo));
+	outError = *(uint*)(recvBuffer + sizeof(FileInfo) + sizeof(uint));
 
 	return true;
 }
@@ -2063,7 +2112,7 @@ Client::Connection::destroy()
 	// shutdown the connection since no more data will be sent
 	if (shutdown(m_socket.socket, SD_SEND) == SOCKET_ERROR)
 	{
-		logErrorf(L"shutdown failed with error: %d", WSAGetLastError());
+		logErrorf(L"shutdown failed with error: %d", getLastNetworkError());
 		return false;
 	}
 
@@ -2082,7 +2131,7 @@ Client::Connection::destroy()
 		
 		if (res < 0)
 		{
-			logErrorf(L"recv failed with error: %d", WSAGetLastError());
+			logErrorf(L"recv failed with error: %d", getLastNetworkError());
 			return false;
 		}
 			
@@ -2096,3 +2145,194 @@ Client::Connection::destroy()
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace eacopy
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+namespace stdargv_c
+{
+	constexpr char NULCHAR    = '\0';
+	constexpr char SPACECHAR  = ' ';
+	constexpr char TABCHAR	  =	'\t';
+	constexpr char CRCHAR	  = '\r';
+	constexpr char LFCHAR	  = '\n';
+	constexpr char DQUOTECHAR =	'\"';
+	constexpr char SLASHCHAR  = '\\';
+
+	static void parse_cmdline(
+		const char *cmdstart,
+		char **argv,
+		char *args,
+		int *numargs,
+		int *numchars
+		)
+	{
+			const char *p;
+			char c;
+			int inquote;                    /* 1 = inside quotes */
+			int copychar;                   /* 1 = copy char to *args */
+			unsigned numslash;              /* num of backslashes seen */
+
+			*numchars = 0;
+			*numargs = 1;                   /* the program name at least */
+
+			/* first scan the program name, copy it, and count the bytes */
+			p = cmdstart;
+			if (argv)
+				*argv++ = args;
+
+	#ifdef WILDCARD
+			/* To handle later wild card expansion, we prefix each entry by
+			it's first character before quote handling.  This is done
+			so _[w]cwild() knows whether to expand an entry or not. */
+			if (args)
+				*args++ = *p;
+			++*numchars;
+
+	#endif  /* WILDCARD */
+
+			/* A quoted program name is handled here. The handling is much
+			   simpler than for other arguments. Basically, whatever lies
+			   between the leading double-quote and next one, or a terminal null
+			   character is simply accepted. Fancier handling is not required
+			   because the program name must be a legal NTFS/HPFS file name.
+			   Note that the double-quote characters are not copied, nor do they
+			   contribute to numchars. */
+			inquote = 0;
+			do {
+				if (*p == DQUOTECHAR )
+				{
+					inquote = !inquote;
+					c = (char) *p++;
+					continue;
+				}
+				++*numchars;
+				if (args)
+					*args++ = *p;
+
+				c = (char) *p++;
+	#ifdef _MBCS
+				if (_ismbblead(c)) {
+					++*numchars;
+					if (args)
+						*args++ = *p;   /* copy 2nd byte too */
+					p++;  /* skip over trail byte */
+				}
+	#endif  /* _MBCS */
+
+			} while ( (c != NULCHAR && c != CRCHAR && c != LFCHAR && (inquote || (c !=SPACECHAR && c != TABCHAR))) );
+
+			if ( c == NULCHAR ) {
+				p--;
+			} else {
+				if (args)
+					*(args-1) = NULCHAR;
+			}
+
+			inquote = 0;
+
+			/* loop on each argument */
+			for(;;) {
+
+				if ( *p ) {
+					while (*p == SPACECHAR || *p == TABCHAR || *p == CRCHAR || *p == LFCHAR)
+						++p;
+				}
+
+				if (*p == NULCHAR)
+					break;              /* end of args */
+
+				/* scan an argument */
+				if (argv)
+					*argv++ = args;     /* store ptr to arg */
+				++*numargs;
+
+	#ifdef WILDCARD
+			/* To handle later wild card expansion, we prefix each entry by
+			it's first character before quote handling.  This is done
+			so _[w]cwild() knows whether to expand an entry or not. */
+			if (args)
+				*args++ = *p;
+			++*numchars;
+
+	#endif  /* WILDCARD */
+
+			/* loop through scanning one argument */
+			for (;;) {
+				copychar = 1;
+				/* Rules: 2N backslashes + " ==> N backslashes and begin/end quote
+				   2N+1 backslashes + " ==> N backslashes + literal "
+				   N backslashes ==> N backslashes */
+				numslash = 0;
+				while (*p == SLASHCHAR) {
+					/* count number of backslashes for use below */
+					++p;
+					++numslash;
+				}
+				if (*p == DQUOTECHAR) {
+					/* if 2N backslashes before, start/end quote, otherwise
+						copy literally */
+					if (numslash % 2 == 0) {
+						if (inquote && p[1] == DQUOTECHAR) {
+							p++;    /* Double quote inside quoted string */
+						} else {    /* skip first quote char and copy second */
+							copychar = 0;       /* don't copy quote */
+							inquote = !inquote;
+						}
+					}
+					numslash /= 2;          /* divide numslash by two */
+				}
+
+				/* copy slashes */
+				while (numslash--) {
+					if (args)
+						*args++ = SLASHCHAR;
+					++*numchars;
+				}
+
+				/* if at end of arg, break loop */
+				if (*p == NULCHAR || *p == CRCHAR || *p == LFCHAR || (!inquote && (*p == SPACECHAR || *p == TABCHAR)))
+					break;
+
+				/* copy character into argument */
+	#ifdef _MBCS
+				if (copychar) {
+					if (args) {
+						if (_ismbblead(*p)) {
+							*args++ = *p++;
+							++*numchars;
+						}
+						*args++ = *p;
+					} else {
+						if (_ismbblead(*p)) {
+							++p;
+							++*numchars;
+						}
+					}
+					++*numchars;
+				}
+				++p;
+	#else  /* _MBCS */
+				if (copychar) {
+					if (args)
+						*args++ = *p;
+					++*numchars;
+				}
+				++p;
+	#endif  /* _MBCS */
+				}
+
+				/* null-terminate the argument */
+
+				if (args)
+					*args++ = NULCHAR;          /* terminate string */
+				++*numchars;
+			}
+
+			/* We put one last argument in -- a null ptr */
+			if (argv)
+				*argv++ = NULL;
+			++*numargs;
+	}
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

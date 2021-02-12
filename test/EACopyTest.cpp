@@ -1,21 +1,30 @@
 // (c) Electronic Arts. All Rights Reserved.
 
 #include "EACopyClient.h"
-#include "EACopyServer.h"
 #include <assert.h>
+#include <utility>
+#if defined(_WIN32)
+#include "EACopyServer.h"
+#define NOMINMAX
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <Shlobj.h>
+#else
+#include <algorithm>
+#include <limits.h>
+#include <unistd.h>
+#endif
 
 namespace eacopy
 {
 
 #if defined(NDEBUG)
-#define EACOPY_ASSERT(x) if (!(x)) { logInfoLinef(L"ASSERT! " #x "\r\n"); *(int*)nullptr = 0xdeadbeef; }
+#define EACOPY_ASSERT(x) if (!(x)) { logInfoLinef(L"ASSERT! " #x "\r\n"); Sleep(2000); fflush(stdout); *(int*)nullptr = 0xdeadbeef; }
 #else
-	#define EACOPY_ASSERT(x) assert(x)
+	#define EACOPY_ASSERT(x) if (!(x)) { Sleep(1000); fflush(stdout); assert(false); }
 #endif
 
+#if defined(_WIN32)
 //Set these Variables to run EACopyTest without having to specify the source/dest input parameters.
 //Examples are detailed:
 // L"C:\\temp\\EACopyTest\\source" OR L"I:\\MyLocalDrive"
@@ -27,6 +36,11 @@ namespace eacopy
 #define DEFAULT_DEST_DIR  L"\\\\localhost\\EACopyTest\\dest"
 // Some network share on another machine than where the EACopyService run
 #define DEFAULT_EXTERNAL_DEST_DIR L""
+#else
+#define DEFAULT_SOURCE_DIR  L"EACopyTest/source"
+#define DEFAULT_DEST_DIR  L"EACopyTest/dest"
+#define DEFAULT_EXTERNAL_DEST_DIR L""
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -43,6 +57,7 @@ WString g_testExternalDestDir = DEFAULT_EXTERNAL_DEST_DIR;
 // TestServer
 // Wrapper of the Server with execution happening on another thread to be able to run EAClient on main thread during testing
 
+#if defined(_WIN32)
 class TestServer
 {
 public:
@@ -77,7 +92,7 @@ private:
 	int threadFunc()
 	{
 		m_threadStarted = true;
-		m_server.start(m_settings, m_log, false, [this](DWORD dwCurrentState, DWORD dwWin32ExitCode, DWORD dwWaitHint) -> BOOL { m_isServerReady = dwCurrentState == SERVICE_RUNNING; return TRUE; });
+		m_server.start(m_settings, m_log, false, [this](uint dwCurrentState, uint dwWin32ExitCode, uint dwWaitHint) -> BOOL { m_isServerReady = dwCurrentState == SERVICE_RUNNING; return TRUE; });
 		m_threadExited = true;
 		return 0;
 	}
@@ -90,6 +105,10 @@ private:
 	bool m_isServerReady = false;
 	Thread m_serverThread;
 };
+#else
+constexpr char ServerVersion[] = "NOSERVER";
+#define MAX_PATH 260
+#endif
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -123,7 +142,8 @@ struct TestBase
 				clientLog.init((name + L"_ClientLog.txt").c_str(), true, false);
 				serverLog.init((name + L"_ServerLog.txt").c_str(), true, false);
 			}
-			wprintf(L"Running test %2u/%u '%s'...", testIndex, count, name.c_str());
+			wprintf(L"Running test %2u/%u '%ls'...", testIndex, count, name.c_str());
+			fflush(stdout);
 			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
 			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
 			EACOPY_ASSERT(ensureDirectory(testSourceDir.c_str()));
@@ -134,7 +154,7 @@ struct TestBase
 			u64 endTime = getTimeMs();
 			if (!skipped)
 			{
-				wprintf(L"Done (%s)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
+				wprintf(L"Done (%ls)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
 				++s_successCount;
 			}
 			else
@@ -199,50 +219,50 @@ struct TestBase
 		WString fullFilename = dir + name;
 		const wchar_t* fullFileName = convertToShortPath(fullFilename.c_str(), tempBuffer);
 
-		HANDLE file = CreateFileW(fullFileName, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		EACOPY_ASSERT(file != INVALID_HANDLE_VALUE);
-
-		u64 dataSize = min(size, 1024*1024*256ull);
-		char* data = new char[dataSize];
+		u64 dataSize = std::min(size, 1024*1024*256ull);
+		char* data = new char[size];
 		for (u64 i=0; i!=dataSize; ++i)
 			data[i] = 'a' + i % 26;
-		u64 left = size;
-		while (left)
-		{
-			u64 toWrite = min(dataSize, left);
-			DWORD written;
-			EACOPY_ASSERT(WriteFile(file, data, (DWORD)toWrite, &written, nullptr) == TRUE);
-			EACOPY_ASSERT(toWrite == written);
-			left -= written;
-		}
+
+		FileInfo fileInfo;
+		fileInfo.fileSize = size;
+		EACOPY_ASSERT(createFile(fullFileName, fileInfo, data, true));
 
 		delete[] data;
-
-		CloseHandle(file);
 
 		m_setupTime += getTimeMs() - startSetupTime;
 	}
 
 	bool getGeneralFileExists(const wchar_t* fullFilePath)
 	{
-		WString str = L"";
-		str.append(fullFilePath);
-		return PathFileExistsW(str.c_str()) == TRUE;
+		#if defined(_WIN32)
+		return PathFileExistsW(fullFilePath) == TRUE;
+		#else
+		auto str = toString(fullFilePath);
+		std::replace(str.begin(), str.end(), '\\', '/');
+		return access(str.c_str(), F_OK) == 0;
+		#endif	
 	}
 
 	bool getTestFileExists(const wchar_t* name, bool source = false)
 	{
 		WString str = source ? testSourceDir : testDestDir;
 		str.append(L"\\").append(name);
+		#if defined(_WIN32)
 		return PathFileExistsW(str.c_str()) == TRUE;
+		#else
+		auto str2 = toString(str.c_str());
+		std::replace(str2.begin(), str2.end(), '\\', '/');
+		return access(str2.c_str(), F_OK) == 0;
+		#endif	
 	}
 
 	bool isEqual(const wchar_t* fileA, const wchar_t* fileB)
 	{
 		FileInfo a;
 		FileInfo b;
-		DWORD attrA = getFileInfo(a, fileA);
-		DWORD attrB = getFileInfo(b, fileB);
+		uint attrA = getFileInfo(a, fileA);
+		uint attrB = getFileInfo(b, fileB);
 		if (!attrA || attrA != attrB)
 			return false;
 		return equals(a, b);
@@ -257,7 +277,7 @@ struct TestBase
 	{
 		WString dir = source ? testSourceDir : testDestDir;
 		WString fileName = dir + L'\\' + name;
-		HANDLE fileHandle;
+		FileHandle fileHandle;
 		(void)fileHandle; // suppress unused variable warning
 
 		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, true));
@@ -268,22 +288,26 @@ struct TestBase
 	void setReadOnly(const wchar_t* file, bool readonly, bool source = true)
 	{
 		const WString dir = source ? testSourceDir : testDestDir;
-		EACOPY_ASSERT(SetFileAttributesW((dir + file).c_str(), readonly ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_NORMAL) != 0);
+		EACOPY_ASSERT(setFileWritable((dir + file).c_str(), !readonly));
 	}
 
 	void writeRandomData(const wchar_t* sourceFile, u64 fileSize)
 	{
-		HANDLE file = CreateFileW(sourceFile, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-		EACOPY_ASSERT(file != INVALID_HANDLE_VALUE);
+		char* data = new char[fileSize];
+		memset(data, 0, fileSize);
 		for (uint i=0; i!=100; ++i)
 		{
 			char buffer[128];
 			memset(buffer, 0, sizeof(buffer));
-			uint writePos = max(0, ((uint(rand()) << 16) + uint(rand())) % (fileSize - 128));
-			EACOPY_ASSERT(SetFilePointer(file, writePos, NULL, FILE_BEGIN) == writePos);
-			EACOPY_ASSERT(WriteFile(file, buffer, sizeof(buffer), NULL, NULL) != 0);
+			uint writePos = std::max((uint)0, (uint)(((uint(rand()) << 16) + uint(rand())) % (fileSize - 128)));
+			memcpy(data + writePos, buffer, sizeof(buffer));
 		}
-		CloseHandle(file);
+
+		FileInfo fileInfo;
+		fileInfo.fileSize = fileSize;
+		EACOPY_ASSERT(createFile(sourceFile, fileInfo, data, true));
+
+		delete[] data;
 	}
 
 	u64 m_setupTime;
@@ -313,7 +337,7 @@ uint TestBase::s_skipCount;
 #define EACOPY_TEST_LOOP(name, loopCount)															\
 	struct Test_##name : public TestBase															\
 	{																								\
-		Test_##name(bool isTemp) : TestBase(L#name, isTemp) {}										\
+		Test_##name(bool isTemp) : TestBase(L## #name, isTemp) {}									\
 		virtual void runImpl(uint loopIndex) override;												\
 		virtual uint runCount() override { return loopCount; }										\
 	} test_##name(false);																			\
@@ -342,12 +366,14 @@ uint TestBase::s_skipCount;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#if defined(_WIN32)
 EACOPY_TEST(UncPathOptimization)
 {
 	WString temp;
 	const wchar_t* optimizedPath = optimizeUncPath(g_testDestDir.c_str(), temp);
 	EACOPY_ASSERT(optimizedPath[0] && optimizedPath[1] == L':');
 }
+#endif
 
 EACOPY_TEST(CopySmallFile)
 {
@@ -445,7 +471,7 @@ EACOPY_TEST(CopyEmptyDir)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"DIRECTORY").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Directory").c_str()) != 0);
 }
 
 EACOPY_TEST(CopyFileToReadOnlyDest)
@@ -479,13 +505,15 @@ EACOPY_TEST(CopyFileToReadOnlyDest)
 	EACOPY_ASSERT(isSourceEqualDest(L"Bar2.txt"));
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	createTestFile(L"Foo.txt", 100, false);
 	EACOPY_ASSERT(!isSourceEqualDest(L"Foo.txt"));
 
-	HANDLE destFile = CreateFileW((testDestDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	FileHandle destFile;
+	openFileRead((testDestDir + L"Foo.txt").c_str(), destFile, true);
 	EACOPY_ASSERT(destFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -499,7 +527,7 @@ EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		CloseHandle(destFile);
+		closeFile(L"", destFile);
 		return 0;
 	});
 
@@ -509,11 +537,14 @@ EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
+#endif
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
-	HANDLE sourceFile = CreateFileW((testSourceDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	FileHandle sourceFile;
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -527,7 +558,7 @@ EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		CloseHandle(sourceFile);
+		closeFile(L"", sourceFile);
 		return 0;
 	});
 
@@ -537,11 +568,14 @@ EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
+#endif
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
-	HANDLE sourceFile = CreateFileW((testSourceDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	FileHandle sourceFile;
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -555,7 +589,7 @@ EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		CloseHandle(sourceFile);
+		closeFile(L"", sourceFile);
 		return 0;
 	});
 
@@ -565,11 +599,14 @@ EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
+#endif
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
-	HANDLE sourceFile = CreateFileW((testSourceDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	FileHandle sourceFile;
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -583,7 +620,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		CloseHandle(sourceFile);
+		closeFile(L"", sourceFile);
 		return 0;
 	});
 
@@ -593,7 +630,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
-
+#endif
 
 EACOPY_TEST(CopyWildcardMissing)
 {
@@ -793,6 +830,7 @@ EACOPY_TEST(CopyFileListMissing)
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileListMissingOptional)
 {
 	createFileList(L"FileList.txt", "Foo.txt");
@@ -804,6 +842,7 @@ EACOPY_TEST(CopyFileListMissingOptional)
 
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 }
+#endif
 
 EACOPY_TEST(CopyFileListMissingAndFound)
 {
@@ -883,8 +922,8 @@ EACOPY_TEST(CopyFilePurge)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(getTestFileExists(L"Foo.txt") == true);
 	EACOPY_ASSERT(getTestFileExists(L"Bar.txt") == false);
-	EACOPY_ASSERT(getTestFileExists(L"a\\b\\Foo.txt") == true);
-	EACOPY_ASSERT(getTestFileExists(L"a\\b\\Bar.txt") == false);
+	EACOPY_ASSERT(getTestFileExists(L"A\\B\\Foo.txt") == true);
+	EACOPY_ASSERT(getTestFileExists(L"A\\B\\Bar.txt") == false);
 	EACOPY_ASSERT(getTestFileExists(L"SourceDir") == false);
 	EACOPY_ASSERT(getTestFileExists(L"DestDir") == false);
 	EACOPY_ASSERT(getTestFileExists(L"SourceDir2") == false);
@@ -924,6 +963,7 @@ EACOPY_TEST(CopyFileTargetDirectoryIsfile)
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileTargetHasSymlink)
 {
 	ensureDirectory((testSourceDir + L"Source\\RealDir").c_str());
@@ -947,7 +987,9 @@ EACOPY_TEST(CopyFileTargetHasSymlink)
 	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir\\Boo.txt", false) == true);
 	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
 }
+#endif
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 {
 	ensureDirectory((testSourceDir + L"Source").c_str());
@@ -972,6 +1014,7 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 	EACOPY_ASSERT(getTestFileExists(L"Dest\\RealDir", false) == false);
 	EACOPY_ASSERT((getFileInfo(fi, (testDestDir + L"Dest\\RealDir").c_str()) & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
 }
+#endif
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
@@ -991,6 +1034,7 @@ EACOPY_TEST(CopyFileWithVeryLongPath)
 	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(ServerCopyAttemptFallback)
 {
 	createTestFile(L"Foo.txt", 10);
@@ -1217,7 +1261,7 @@ EACOPY_TEST(ServerCopyMultiClient)
 	for (uint i=0; i!=50; ++i)
 	{
 		wchar_t iStr[10];
-		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
+		itow(i, iStr, eacopy_sizeof_array(iStr));
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
@@ -1349,7 +1393,7 @@ EACOPY_TEST(ServerCopyFileDestLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	createTestFile(L"Foo.txt", 100, false);
-	HANDLE destFile = CreateFileW((testDestDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+	FileHandle destFile = CreateFileW((testDestDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	EACOPY_ASSERT(destFile);
 
 	ServerSettings serverSettings;
@@ -1471,6 +1515,7 @@ EACOPY_TEST(ServerLinkModified)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 2);
 }
+#endif
 
 EACOPY_TEST(CopyFileWithDoubleSlashPath)
 {
@@ -1502,6 +1547,7 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath2)
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
 {
 	uint fileSize = 3 * 1024 * 1024 + 123;
@@ -1528,6 +1574,7 @@ EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
 
 	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test3\\NotFoo.xml").c_str()) == 0);
 }
+#endif
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
@@ -1639,6 +1686,7 @@ EACOPY_TEST(CopyMultiFileListDestIsLocal)
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo2.txt"));
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(ServerCopyFileListDestIsLocal)
 {
 	std::swap(testDestDir, testSourceDir);
@@ -1702,16 +1750,20 @@ EACOPY_TEST(CopyFileWithVeryLongPathDestIsLocal)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
 }
+#endif
 
 EACOPY_TEST(CopyLargeFile)
 {
 	u64 fileSize = u64(INT_MAX) + 2*1024*1024 + 123;
 	createTestFile(L"Foo.txt", fileSize);
+	FileInfo sourceFile;
+	EACOPY_ASSERT(getFileInfo(sourceFile, (testSourceDir + L"\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(sourceFile.fileSize == fileSize);
 
 	for (uint i=0; i!=1; ++i)
 	{
 		wchar_t iStr[10];
-		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
+		itow(i, iStr, eacopy_sizeof_array(iStr));
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.destDirectory = testDestDir+ iStr + L'\\';
@@ -1725,6 +1777,7 @@ EACOPY_TEST(CopyLargeFile)
 	}
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(ServerCopyLargeFile)
 {
 	u64 fileSize = u64(INT_MAX) + 2*1024*1024 + 123;
@@ -1737,7 +1790,7 @@ EACOPY_TEST(ServerCopyLargeFile)
 		server.waitReady();
 
 		wchar_t iStr[10];
-		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
+		itow(i, iStr, eacopy_sizeof_array(iStr));
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
@@ -1764,7 +1817,7 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 		server.waitReady();
 
 		wchar_t iStr[10];
-		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
+		itow(i, iStr, eacopy_sizeof_array(iStr));
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
@@ -1797,7 +1850,7 @@ EACOPY_TEST(ServerTestMemory)
 	for (uint i=0; i!=10000; ++i)
 	{
 		wchar_t iStr[10];
-		_itow_s(i, iStr, eacopy_sizeof_array(iStr), 10);
+		itow(i, iStr, eacopy_sizeof_array(iStr));
 
 		ClientSettings clientSettings;
 		clientSettings.sourceDirectory = testSourceDir;
@@ -1822,7 +1875,7 @@ EACOPY_TEST(UsedByOtherProcessError)
 {
 	wchar_t buffer[1024];
 	wchar_t buffer2[1024];
-	DWORD size = GetCurrentDirectoryW(1024, buffer);
+	uint size = GetCurrentDirectoryW(1024, buffer);
 
 	#if !defined(NDEBUG)
 	wcscat(buffer, L"\\..\\Debug\\");
@@ -1851,6 +1904,7 @@ EACOPY_TEST(UsedByOtherProcessError)
 	EACOPY_ASSERT(clientStats.failCount == 1);
 	EACOPY_ASSERT(clientStats.copyCount == 0);
 }
+#endif
 
 EACOPY_TEST(FileGoingOverMaxPath)
 {
@@ -1885,6 +1939,7 @@ EACOPY_TEST(PathGoingOverMaxPath)
 	EACOPY_ASSERT(isEqual((testSourceDir + L"Foo.txt").c_str(), (clientSettings.destDirectory + L"Foo.txt").c_str()));
 }
 
+#if defined(_WIN32)
 EACOPY_TEST(ServerCopyFileExternalPath)
 {
 	EACOPY_REQUIRE_EXTERNAL_SHARE
@@ -2015,12 +2070,12 @@ EACOPY_TEST(ServerTestSecurityFileMultiThreadedClient)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 4);
 }
-
+#endif
 
 void printHelp()
 {
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyTest (Client v%S Server v%S) (c) Electronic Arts.  All Rights Reserved.", ClientVersion, ServerVersion);
+	logInfoLinef(L"  EACopyTest (Client v%hs Server v%hs) (c) Electronic Arts.  All Rights Reserved.", ClientVersion, ServerVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyTest source destination");
@@ -2035,9 +2090,22 @@ void printHelp()
 } // namespace eacopy
 
 
+#if defined(_WIN32)
 int wmain(int argc, wchar_t* argv[])
 {
 	using namespace eacopy;
+#else
+int main(int argc, char* argv_[])
+{
+	using namespace eacopy;
+	wchar_t* argv[64];
+	WString temp[64];
+	for (int i=0; i!=argc; ++i)
+	{
+		temp[i] = WString(argv_[i], argv_[i] + strlen(argv_[i]));
+		argv[i] = const_cast<wchar_t*>(temp[i].c_str());
+	}
+#endif
 
 	// If source and dest are not hardcoded we use command line
 	if (g_testSourceDir.empty() || g_testDestDir.empty())
@@ -2057,6 +2125,17 @@ int wmain(int argc, wchar_t* argv[])
 
 		g_testSourceDir = argv[1];
 		g_testDestDir = argv[2];
+	}
+	else
+	{
+#if !defined(_WIN32)
+		const char* home = getenv("HOME");
+		WString whome(home, home + strlen(home));
+		g_testSourceDir = whome + L"/" + g_testSourceDir;
+		g_testDestDir = whome + L"/" + g_testDestDir;
+		std::replace(g_testSourceDir.begin(), g_testSourceDir.end(), '/', '\\');
+		std::replace(g_testDestDir.begin(), g_testDestDir.end(), '/', '\\');
+#endif
 	}
 
 	// Run all the tests

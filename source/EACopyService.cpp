@@ -2,6 +2,7 @@
 
 #include "EACopyServer.h"
 #include <tchar.h>
+#include <windows.h>
 
 namespace eacopy
 {
@@ -33,7 +34,7 @@ Server					g_server;
 void printHelp()
 {
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyService v%S - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion);
+	logInfoLinef(L"  EACopyService v%hs - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyService [options]");
@@ -103,7 +104,7 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		}
 		else
 		{
-			logErrorf(L"Unknown option %s. Use /? for help", arg);
+			logErrorf(L"Unknown option %ls. Use /? for help", arg);
 			return false;
 		}
 	}
@@ -121,7 +122,7 @@ void addLastErrorToMessageLog(const wchar_t* lpszMsg)
 		return;
 
 	wchar_t szMsg[eacopy_sizeof_array(SERVICENAME) + 100 ];
-	swprintf_s(szMsg,eacopy_sizeof_array(SERVICENAME) + 100, L"%s error: %d", SERVICENAME, g_dwErr);
+	swprintf_s(szMsg,eacopy_sizeof_array(SERVICENAME) + 100, L"%ls error: %d", SERVICENAME, g_dwErr);
 	const wchar_t* lpszStrings[2] = { szMsg, lpszMsg };
 	ReportEventW(hEventSource, EVENTLOG_ERROR_TYPE, 0, 0, NULL, 2, 0, &lpszStrings[0], NULL);
 	DeregisterEventSource(hEventSource);
@@ -169,7 +170,7 @@ BOOL reportServiceStatus(DWORD dwCurrentState, DWORD dwWin32ExitCode, DWORD dwWa
 		return TRUE;
 
 	wchar_t errMsg[512];
-	swprintf_s(errMsg, L"SetServiceStatus failed: '%s'", getLastErrorText().c_str());
+	swprintf_s(errMsg, L"SetServiceStatus failed: '%ls'", getLastErrorText().c_str());
 
 	addLastErrorToMessageLog(errMsg);
 	return res;
@@ -228,7 +229,7 @@ void WINAPI serviceMain(DWORD dwArgc, LPWSTR *lpszArgv)
 	if (!g_sshStatusHandle)
 	{
 		wchar_t msg[256];
-		swprintf_s(msg, L"Failed to register control handler! err = %s", getLastErrorText().c_str());
+		swprintf_s(msg, L"Failed to register control handler! err = %ls", getLastErrorText().c_str());
 		addLastErrorToMessageLog(msg);
 		return;
 	}
@@ -279,7 +280,7 @@ int installService(int argc, wchar_t** argv)
 	wchar_t szPath[512];
 	if (GetModuleFileNameW(NULL, szPath, eacopy_sizeof_array(szPath)) == 0)
 	{
-		logErrorf(L"Unable to install %s - %s", SERVICEDISPLAYNAME, getLastErrorText().c_str());
+		logErrorf(L"Unable to install %ls - %ls", SERVICEDISPLAYNAME, getLastErrorText().c_str());
 		return -1;
 	}
 
@@ -297,7 +298,7 @@ int installService(int argc, wchar_t** argv)
 	SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
 	if (!manager)
 	{
-		logErrorf(L"OpenSCManager failed - %s", getLastErrorText().c_str());
+		logErrorf(L"OpenSCManager failed - %ls", getLastErrorText().c_str());
 		return -1;
 	}
 	ScopeGuard managerGuard([&]() { CloseServiceHandle(manager); });
@@ -318,7 +319,7 @@ int installService(int argc, wchar_t** argv)
 
 	if (!service)
 	{
-		logErrorf(L"CreateService failed - %s", getLastErrorText().c_str());
+		logErrorf(L"CreateService failed - %ls", getLastErrorText().c_str());
 		return -1;
 	}
 	ScopeGuard serviceGuard([&]() { CloseServiceHandle(service); });
@@ -354,7 +355,7 @@ int installService(int argc, wchar_t** argv)
 		return -1;
 	}
 
-	logInfoLinef(L"%s installed. commandline = %s", SERVICEDISPLAYNAME, szPath );
+	logInfoLinef(L"%ls installed. commandline = %ls", SERVICEDISPLAYNAME, szPath );
 
 	// Autostart server
 	if (!StartServiceA(service, argc, (LPCSTR*)argv))
@@ -364,7 +365,7 @@ int installService(int argc, wchar_t** argv)
 		if (error == ERROR_SERVICE_LOGON_FAILED)
 			logErrorf(L"Failed to start service due to a logon failure. MAKE SURE USER IS ADDED TO \"Log on as a service\" policy.");
 		else
-			logErrorf(L"Failed to start service - %s", getErrorText(error).c_str());
+			logErrorf(L"Failed to start service - %ls", getErrorText(error).c_str());
 		return -1;
 	}
 
@@ -376,7 +377,7 @@ int removeService()
 	SC_HANDLE manager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
 	if (!manager)
 	{
-		logErrorf(L"OpenSCManager failed - %s", getLastErrorText().c_str());
+		logErrorf(L"OpenSCManager failed - %ls", getLastErrorText().c_str());
 		return -1;
 	}
 	ScopeGuard managerGuard([&]() { CloseServiceHandle(manager); });
@@ -385,14 +386,14 @@ int removeService()
 
 	if (!service)
 	{
-		logErrorf(L"OpenService failed - %s", getLastErrorText().c_str());
+		logErrorf(L"OpenService failed - %ls", getLastErrorText().c_str());
 		return -1;
 	}
 	ScopeGuard serviceGuard([&]() { CloseServiceHandle(service); });
 
 	if (ControlService(service, SERVICE_CONTROL_STOP, &g_ssStatus))
 	{
-		logInfof(L"Stopping %s.", SERVICEDISPLAYNAME);
+		logInfof(L"Stopping %ls.", SERVICEDISPLAYNAME);
 		Sleep(1000);
 
 		while (QueryServiceStatus(service, &g_ssStatus))
@@ -406,20 +407,20 @@ int removeService()
 		logInfoLinef();
 		if (g_ssStatus.dwCurrentState != SERVICE_STOPPED)
 		{
-			logErrorf(L"%s failed to stop.", SERVICEDISPLAYNAME);
+			logErrorf(L"%ls failed to stop.", SERVICEDISPLAYNAME);
 			return -1;
 		}
 			
-		logInfoLinef(L"%s stopped.", SERVICEDISPLAYNAME);
+		logInfoLinef(L"%ls stopped.", SERVICEDISPLAYNAME);
 	}
 
 	if (!DeleteService(service))
 	{
-		logErrorf(L"DeleteService failed - %s", getLastErrorText().c_str());
+		logErrorf(L"DeleteService failed - %ls", getLastErrorText().c_str());
 		return -1;
 	}
 
-	logInfoLinef(L"%s removed.", SERVICEDISPLAYNAME);
+	logInfoLinef(L"%ls removed.", SERVICEDISPLAYNAME);
 	return 0;
 }
 
@@ -486,7 +487,7 @@ int __cdecl wmain(int argc, wchar_t** argv)
 	if (!readSettings(settings, logFileName, argc, argv))
 		return -1;
 
-	logInfoLinef(L"Server v%S - Starting... (Add /? for help)", ServerVersion);
+	logInfoLinef(L"Server v%hs - Starting... (Add /? for help)", ServerVersion);
 
 	Log log;
 	log.init(logFileName.c_str(), settings.logDebug, true);

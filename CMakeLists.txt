@@ -12,7 +12,19 @@ set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "My multi config type
 #-------------------------------------------------------------------------------------------
 option(EACOPY_BUILD_TESTS "Enable generation of build files for tests" OFF)
 
-SET(CMAKE_CXX_FLAGS "/GR-") 
+if (WIN32)
+	SET(CMAKE_CXX_FLAGS "/GR-") 
+endif(WIN32)
+
+if (UNIX)
+	find_package (Threads)
+endif (UNIX)
+
+
+#-------------------------------------------------------------------------------------------
+# Dependencies
+#-------------------------------------------------------------------------------------------
+add_subdirectory(external/zstd)
 
 #-------------------------------------------------------------------------------------------
 # Library definitions
@@ -27,27 +39,30 @@ add_executable(EACopy
 	source/EACopyShared.cpp
 	source/Addition.manifest)
 
-add_executable(EACopyService
-	source/EACopyService.cpp
-	include/EACopyServer.h
-	source/EACopyServer.cpp
-	include/EACopyNetwork.h
-	source/EACopyNetwork.cpp
-	include/EACopyShared.h
-	source/EACopyShared.cpp
-	source/Addition.manifest)
-
 target_include_directories(EACopy PUBLIC include)
-target_include_directories(EACopyService PUBLIC include)
 
+if (WIN32)
+	target_link_libraries(EACopy zstd)
+endif(WIN32)
 
-#-------------------------------------------------------------------------------------------
-# Dependencies
-#-------------------------------------------------------------------------------------------
-add_subdirectory(external/zstd)
+if (UNIX)
+	target_link_libraries(EACopy zstd ${CMAKE_THREAD_LIBS_INIT})
+endif (UNIX)
 
-target_link_libraries(EACopy zstd)
-target_link_libraries(EACopyService zstd)
+if (WIN32)
+	add_executable(EACopyService
+		source/EACopyService.cpp
+		include/EACopyServer.h
+		source/EACopyServer.cpp
+		include/EACopyNetwork.h
+		source/EACopyNetwork.cpp
+		include/EACopyShared.h
+		source/EACopyShared.cpp
+		source/Addition.manifest)
+
+	target_include_directories(EACopyService PUBLIC include)
+	target_link_libraries(EACopyService zstd)
+endif(WIN32)
 
 
 if(EACOPY_BUILD_TESTS)

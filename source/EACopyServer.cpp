@@ -26,6 +26,23 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+bool Server::FileKey::operator<(const FileKey& o) const
+{
+	// Sort by name first (we need this for delta-copy)
+	int cmp = wcscmp(name.c_str(), o.name.c_str());
+	if (cmp != 0)
+		return cmp < 0;
+
+	// Sort by write time first (we need this for delta-copy)
+	LONG timeDiff = CompareFileTime((FILETIME*)&lastWriteTime, (FILETIME*)&o.lastWriteTime);
+	if (timeDiff != 0)
+		return timeDiff < 0;
+
+	return fileSize < o.fileSize;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void
 Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus)
 {
@@ -74,7 +91,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 	m_listenSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
 	if (m_listenSocket == INVALID_SOCKET)
 	{
-		logErrorf(L"socket failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+		logErrorf(L"socket failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 		reportStatus(SERVICE_START_PENDING, -1, 3000);
 		return;
 	}
@@ -85,7 +102,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 	res = bind(m_listenSocket, result->ai_addr, (int)result->ai_addrlen);
 	if (res == SOCKET_ERROR)
 	{
-		logErrorf(L"bind failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+		logErrorf(L"bind failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 		reportStatus(SERVICE_START_PENDING, -1, 3000);
 		return;
 	}
@@ -95,7 +112,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 	res = listen(m_listenSocket, SOMAXCONN);
 	if (res == SOCKET_ERROR)
 	{
-		logErrorf(L"listen failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+		logErrorf(L"listen failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 		reportStatus(SERVICE_START_PENDING, -1, 3000);
 		return;
 	}
@@ -136,7 +153,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 			if (selectRes == SOCKET_ERROR)
 			{
 				m_loopServer = false;
-				logErrorf(L"Select failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+				logErrorf(L"Select failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 				reportStatus(SERVICE_RUNNING, -1, 3000);
 			}
 		}
@@ -149,7 +166,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 				if (!m_loopServer) // If server is shutting down we need to close the connection sockets to prevent potential deadlocks
 					closeSocket(i->socket);
 
-				DWORD exitCode;
+				uint exitCode;
 				if (!i->thread->getExitCode(exitCode))
 					return;
 				if (exitCode == STILL_ACTIVE)
@@ -191,7 +208,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 			if (clientSocket == INVALID_SOCKET)
 			{
 				if (m_loopServer)
-					logErrorf(L"accept failed with WSA error: %s", getErrorText(WSAGetLastError()).c_str());
+					logErrorf(L"accept failed with WSA error: %ls", getErrorText(getLastNetworkError()).c_str());
 				reportStatus(SERVICE_RUNNING, -1, 3000);
 				m_loopServer = false;
 				break;
@@ -241,9 +258,9 @@ Server::primeDirectoryRecursive(const WString& directory)
     WIN32_FIND_DATAW fd; 
     WString searchStr = directory + L"*.*";
     HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-    if(hFind == INVALID_HANDLE_VALUE)
+    if(hFind == InvalidFileHandle)
 	{
-		logErrorf(L"FindFirstFile failed with search string %s", searchStr.c_str());
+		logErrorf(L"FindFirstFile failed with search string %ls", searchStr.c_str());
 		return false;
 	}
 	ScopeGuard _([&]() { FindClose(hFind); });
@@ -254,29 +271,29 @@ Server::primeDirectoryRecursive(const WString& directory)
 
 		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
 		{
-			if ((wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
+			if (isDotOrDotDot(fd.cFileName))
 				continue;
 			if (!primeDirectoryRecursive(directory + fd.cFileName + L'\\'))
 				return false;
 		}
 		else
 		{
-			addToLocalFilesHistory({ fd.cFileName, fd.ftLastWriteTime, ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow }, directory + fd.cFileName);
+			addToLocalFilesHistory({ fd.cFileName, *(FileTime*)&fd.ftLastWriteTime, ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow }, directory + fd.cFileName);
 		}
 	} 
 	while(FindNextFileW(hFind, &fd)); 
 
-	DWORD error = GetLastError();
+	uint error = GetLastError();
 	if (error != ERROR_NO_MORE_FILES)
 	{
-		logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+		logErrorf(L"FindNextFile failed for %ls: %ls", searchStr.c_str(), getErrorText(error).c_str());
 		return false;
 	}
 
 	return true;
 }
 
-DWORD
+uint
 Server::connectionThread(ConnectionInfo& info)
 {
 	LogContext logContext(info.log);
@@ -340,8 +357,8 @@ Server::connectionThread(ConnectionInfo& info)
 			q.erase(std::find(q.begin(), q.end(), &info));
 		});
 
-	GUID zeroGuid = {0};
-	GUID secretGuid = {0};
+	Guid zeroGuid = {0};
+	Guid secretGuid = {0};
 	ScopeGuard removeSecretGuid([&]()
 		{
 			ScopedCriticalSection cs(m_validSecretGuidsCs);
@@ -359,11 +376,11 @@ Server::connectionThread(ConnectionInfo& info)
 		}
 		if (res < 0)
 		{
-			int error = WSAGetLastError();
+			int error = getLastNetworkError();
 			if (error == WSAECONNRESET) // An existing connection was forcibly closed by the remote host.
 				logInfoLinef(L"An existing connection was forcibly closed by the remote host");
 			else
-				logErrorf(L"recv failed with error: %s", getErrorText(error).c_str());
+				logErrorf(L"recv failed with error: %ls", getErrorText(error).c_str());
 			return -1;
 		}
 
@@ -425,7 +442,7 @@ Server::connectionThread(ConnectionInfo& info)
 							filename[1] = L'f';
 							filename[41] = 0;
 
-							if (CoCreateGuid(&secretGuid) != S_OK)
+							if (CoCreateGuid((GUID*)&secretGuid) != S_OK)
 							{
 								logErrorf(L"CoCreateGuid - Failed to create secret guid");
 								break;
@@ -444,7 +461,7 @@ Server::connectionThread(ConnectionInfo& info)
 							if (!sendData(info.socket, &filenameGuid, sizeof(GUID)))
 								break;
 
-							GUID returnedSecretGuid;
+							Guid returnedSecretGuid;
 							if (!receiveData(info.socket, &returnedSecretGuid, sizeof(returnedSecretGuid))) // Let client do the copying while we want for a success or not
 								break;
 
@@ -462,7 +479,7 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_Text:
 				{
 					auto& cmd = *(const TextCommand*)recvBuffer;
-					logInfoLinef(L"%s", cmd.string);
+					logInfoLinef(L"%ls", cmd.string);
 				}
 				break;
 			case CommandType_WriteFile:
@@ -478,7 +495,7 @@ Server::connectionThread(ConnectionInfo& info)
 					auto& cmd = *(const WriteFileCommand*)recvBuffer;
 					WString fullPath = serverPath + cmd.path;
 
-					//logDebugLinef("%s", fullPath.c_str());
+					//logDebugLinef("%ls", fullPath.c_str());
 
 					const wchar_t* fileName = cmd.path;
 					if (const wchar_t* lastSlash = wcsrchr(fileName, '\\'))
@@ -502,7 +519,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						// File has already been copied, if the old copied file still has the same attributes as when it was copied we create a link to it
 						FileInfo other;
-						DWORD attributes = getFileInfo(other, localFile.name.c_str());
+						uint attributes = getFileInfo(other, localFile.name.c_str());
 						if (attributes && equals(cmd.info, other))
 						{
 							FileInfo destInfo;
@@ -532,7 +549,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						// Check if file already exists at destination and has same attributes, in that case, skip copy
 						FileInfo other;
-						DWORD attributes = getFileInfo(other, fullPath.c_str());
+						uint attributes = getFileInfo(other, fullPath.c_str());
 						if (attributes && equals(cmd.info, other))
 							writeResponse = WriteResponse_Skip;
 					}
@@ -670,7 +687,7 @@ Server::connectionThread(ConnectionInfo& info)
 					WString fullPath = serverPath + cmd.path;
 
 					FileInfo fi;
-					DWORD attributes = getFileInfo(fi, fullPath.c_str());
+					uint attributes = getFileInfo(fi, fullPath.c_str());
 					if (!attributes || attributes & FILE_ATTRIBUTE_DIRECTORY)
 					{
 						ReadResponse readResponse = ReadResponse_BadSource;
@@ -786,7 +803,7 @@ Server::connectionThread(ConnectionInfo& info)
 					WString tempBuffer;
 					const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
 					HANDLE hFind = ::FindFirstFileW(validSearchStr, &fd); 
-					if(hFind == INVALID_HANDLE_VALUE)
+					if(hFind == InvalidFileHandle)
 					{
 						uint blockSize = ~0u;
 						if (!sendData(info.socket, &blockSize, sizeof(blockSize)))
@@ -813,7 +830,7 @@ Server::connectionThread(ConnectionInfo& info)
 						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
 							continue;
 
-						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0))
+						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fd.cFileName))
 							continue;
 
 						uint fileNameBytes = (wcslen(fd.cFileName)+1)*2;
@@ -834,10 +851,10 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 					while(FindNextFileW(hFind, &fd)); 
 
-					DWORD error = GetLastError();
+					uint error = GetLastError();
 					if (error != ERROR_NO_MORE_FILES)
 					{
-						logErrorf(L"FindNextFile failed for %s: %s", searchStr.c_str(), getErrorText(error).c_str());
+						logErrorf(L"FindNextFile failed for %ls: %ls", searchStr.c_str(), getErrorText(error).c_str());
 						return -1;
 					}
 
@@ -855,13 +872,13 @@ Server::connectionThread(ConnectionInfo& info)
 					WIN32_FIND_DATAW fd; 
 					WString fullPath = serverPath + cmd.path;
 					__declspec(align(8)) u8 sendBuffer[3*8+2*4];
-					static_assert(sizeof(sendBuffer) == sizeof(FileInfo) + sizeof(DWORD) + sizeof(DWORD), "");
-					DWORD attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str());
-					*(DWORD*)(sendBuffer + sizeof(FileInfo)) = attributes;
-					DWORD error = 0;
+					static_assert(sizeof(sendBuffer) == sizeof(FileInfo) + sizeof(uint) + sizeof(uint), "");
+					uint attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str());
+					*(uint*)(sendBuffer + sizeof(FileInfo)) = attributes;
+					uint error = 0;
 					if (!attributes)
 						error = GetLastError();
-					*(DWORD*)(sendBuffer + sizeof(FileInfo) + sizeof(DWORD)) = error;
+					*(uint*)(sendBuffer + sizeof(FileInfo) + sizeof(uint)) = error;
 
 					sendData(info.socket, sendBuffer, sizeof(sendBuffer));
 				}
@@ -890,19 +907,19 @@ Server::connectionThread(ConnectionInfo& info)
 					auto elementCount = bufferSize/2;
 
 					StringCbPrintfW(buffer, CopyContextBufferSize,
-						L"   Server v%S  (c) Electronic Arts.  All Rights Reserved.\n"
+						L"   Server v%hs  (c) Electronic Arts.  All Rights Reserved.\n"
 						L"\n"
 						L"   Protocol: v%u\n"
-						L"   Running as: %s\n"
-						L"   Uptime: %s\n"
+						L"   Running as: %ls\n"
+						L"   Uptime: %ls\n"
 						L"   Connections active: %u (handled: %u)\n"
 						L"   Local file history size: %u\n"
-						L"   Memory working set: %s (Peak: %s)\n"
-						L"   Free space on volume: %s\n"
+						L"   Memory working set: %ls (Peak: %ls)\n"
+						L"   Free space on volume: %ls\n"
 						L"\n"
-						L"   %s copied (%s received)\n"
-						L"   %s linked\n"
-						L"   %s skipped\n"
+						L"   %ls copied (%ls received)\n"
+						L"   %ls linked\n"
+						L"   %ls skipped\n"
 						, ServerVersion, ProtocolVersion, m_isConsole ? L"Console" : L"Service"
 						, toHourMinSec(uptimeMs).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
@@ -948,7 +965,7 @@ Server::connectionThread(ConnectionInfo& info)
 	// shutdown the connection since we're done
 	if (shutdown(info.socket.socket, SD_BOTH) == SOCKET_ERROR)
 	{
-		logErrorf(L"shutdown failed with error: %s", getErrorText(WSAGetLastError()).c_str());
+		logErrorf(L"shutdown failed with error: %ls", getErrorText(getLastNetworkError()).c_str());
 		return -1;
 	}
 
@@ -989,7 +1006,7 @@ Server::getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirector
 			return true;
 		}
 
-		logErrorf(L"Failed to find netshare '%s'", netname.c_str());
+		logErrorf(L"Failed to find netshare '%ls'", netname.c_str());
 		return false;
 	}
 

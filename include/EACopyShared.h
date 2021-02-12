@@ -4,7 +4,6 @@
 #undef UNICODE
 #define WIN32_LEAN_AND_MEAN
 #define _HAS_EXCEPTIONS 0
-#include <windows.h>
 
 #include <functional>
 #include <list>
@@ -12,6 +11,7 @@
 #include <set>
 #include <string>
 #include <vector>
+struct _OVERLAPPED;
 
 namespace eacopy
 {
@@ -26,7 +26,11 @@ enum { MaxPath = 4096 }; // Max path for EACopy
 // Types
 
 using								u8			= unsigned char;
+#if defined(_WIN32)
+using								uint		= unsigned long;
+#else
 using								uint		= unsigned int;
+#endif
 using								s64			= long long;
 using								u64			= unsigned long long;
 using								String		= std::string;
@@ -36,8 +40,10 @@ template<class K, class V> using	Map			= std::map<K, V>;
 template<class K, class L> using	Set			= std::set<K, L>;
 template<class T> using				Vector		= std::vector<T>;
 template<class T> using				Function	= std::function<T>;
-
-
+using								FileHandle  = void*;
+#define								InvalidFileHandle ((FileHandle)-1)
+using								FindFileHandle  = void*;
+#define								InvalidFindFileHandle ((FindFileHandle)-1)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // ScopeGuard - Will call provided function when exiting scope
@@ -62,15 +68,15 @@ private:
 class CriticalSection
 {
 public:
-						CriticalSection() { InitializeCriticalSectionAndSpinCount(&cs, 0x00000400); }
-						~CriticalSection() { DeleteCriticalSection(&cs); }
+						CriticalSection();
+						~CriticalSection();
 
-	void				enter() { EnterCriticalSection(&cs); }
-	void				leave() { LeaveCriticalSection(&cs); }
+	void				enter();
+	void				leave();
 	template<class Functor> void scoped(const Functor& f) { enter(); f(); leave(); }
 
 private:
-	CRITICAL_SECTION	cs;
+	u8					data[40];
 };
 
 class ScopedCriticalSection 
@@ -94,10 +100,14 @@ public:
 						~Event();
 	void				set();
 	void				reset();
-	bool				isSet(uint timeOutMs = INFINITE);
+	bool				isSet(uint timeOutMs = 0xFFFFFFFF);
 
 private:
-	HANDLE				ev;
+	#if !defined(_WIN32)
+	CriticalSection		cs;
+	#endif
+
+	void*				ev;
 };
 
 
@@ -108,15 +118,18 @@ private:
 class Thread
 {
 public:
+						Thread();
 						Thread(Function<int()>&& func);
 						~Thread();
-
+	void				start(Function<int()>&& func);
 	void				wait();
-	bool				getExitCode(DWORD& outExitCode);
+	bool				getExitCode(uint& outExitCode);
 
 private:
 	Function<int()>		func;
-	HANDLE				handle;
+	void*				handle;
+	uint				exitCode;
+	bool				joined;
 };
 
 
@@ -126,6 +139,7 @@ private:
 
 u64						getTimeMs();
 bool					equalsIgnoreCase(const wchar_t* a, const wchar_t* b);
+bool					lessIgnoreCase(const wchar_t* a, const wchar_t* b);
 bool					startsWithIgnoreCase(const wchar_t* str, const wchar_t* substr);
 WString					getErrorText(uint error);
 WString					getErrorText(const wchar_t* resourceName, uint error);
@@ -134,6 +148,10 @@ WString					getProcessesUsingResource(const wchar_t* resourceName);
 WString					toPretty(u64 bytes, uint alignment = 0);
 WString					toHourMinSec(u64 timeMs, uint alignment = 0);
 String					toString(const wchar_t* str);
+void					itow(int value, wchar_t* dst, uint dstCapacity);
+int						stringEquals(const wchar_t* a, const wchar_t* b);
+int						stringEquals(const char* a, const char* b);
+bool					stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source);
 #define					eacopy_sizeof_array(array) int(sizeof(array)/sizeof(array[0]))
 
 
@@ -141,10 +159,15 @@ String					toString(const wchar_t* str);
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // IO
 
+struct FileTime {
+    uint dwLowDateTime;
+    uint dwHighDateTime;
+};
+
 struct FileInfo
 {
-	FILETIME			creationTime = { 0, 0 };
-	FILETIME			lastWriteTime = { 0, 0 };
+	FileTime			creationTime = { 0, 0 };
+	FileTime			lastWriteTime = { 0, 0 };
 	u64					fileSize = 0;
 };
 
@@ -164,35 +187,47 @@ struct CopyStats
 	u64					setLastWriteTimeTimeMs = 0;
 };
 
-struct					NoCaseWStringLess { bool operator()(const WString& a, const WString& b) const { return _wcsicmp(a.c_str(), b.c_str()) < 0; } };
+struct					NoCaseWStringLess { bool operator()(const WString& a, const WString& b) const { return lessIgnoreCase(a.c_str(), b.c_str()); } };
 using					FilesSet = Set<WString, NoCaseWStringLess>;
 
 enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedIO_Disabled };
 bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 
-DWORD					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
+uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
 bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
 bool					deleteDirectory(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
-bool					openFileRead(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true);
-bool					openFileWrite(const wchar_t* fullPath, HANDLE& outFile, bool useBufferedIO, OVERLAPPED* overlapped = nullptr, bool hidden = false);
-bool					writeFile(const wchar_t* fullPath, HANDLE& file, const void* data, u64 dataSize, OVERLAPPED* overlapped = nullptr);
-bool					setFileLastWriteTime(const wchar_t* fullPath, HANDLE& file, FILETIME lastWriteTime);
-bool					setFilePosition(const wchar_t* fullPath, HANDLE& file, u64 position);
-bool					closeFile(const wchar_t* fullPath, HANDLE& file);
+bool					openFileRead(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true, bool sharedRead = true);
+bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false);
+bool					writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, _OVERLAPPED* overlapped = nullptr);
+bool					readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read);
+bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime);
+bool					setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position);
+bool					closeFile(const wchar_t* fullPath, FileHandle& file);
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden = false);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath, bool errorOnMissingFile = true);
+bool					setFileWritable(const wchar_t* fullPath, bool writable);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);
 void					convertSlashToBackslash(char* path);
 void					convertSlashToBackslash(char* path, size_t size);
 WString					getCleanedupPath(wchar_t* path, uint startIndex = 2, bool lastWasSlash = false);
 const wchar_t*			convertToShortPath(const wchar_t* path, WString& outTempBuffer);
+bool					isDotOrDotDot(const wchar_t* str);
+
+
+struct					FindFileData { u64 data[1024]; };
+FindFileHandle			findFirstFile(const wchar_t* searchStr, FindFileData& findFileData);
+FindFileHandle			findFirstFile2(const wchar_t* searchStr, FindFileData& findFileData);
+bool					findNextFile(FindFileHandle handle, FindFileData& findFileData);
+void					findClose(FindFileHandle handle);
+uint					getFileInfo(FileInfo& outInfo, FindFileData& findFileData);
+wchar_t*				getFileName(FindFileData& findFileData);
 
 
 
@@ -223,7 +258,7 @@ private:
 
 	void				writeEntry(bool isDebuggerPresent, const LogEntry& entry);
 	uint				processLogQueue(bool isDebuggerPresent);
-	DWORD				logQueueThread();
+	uint				logQueueThread();
 
 	WString				m_logFileName;
 	bool				m_logDebug = false;
@@ -234,7 +269,7 @@ private:
 	WString				m_logLastText;
 	bool				m_logQueueFlush = false;
 	Thread*				m_logThread = nullptr;
-	HANDLE				m_logFile = INVALID_HANDLE_VALUE;
+	FileHandle			m_logFile = InvalidFileHandle;
 	bool				m_logThreadActive = false;
 	friend void			logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError);
 	friend void			logScopeEnter();
@@ -265,6 +300,34 @@ private:
 #else
 #define CFG_STR "DBG"
 #endif
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(_WIN32)
+#else
+void Sleep(uint milliseconds);
+uint GetLastError();
+#define StringCbPrintfW swprintf
+#define wcscpy_s(a, b, c) wcscpy(a, c)
+#define wcscat_s(a, b, c) wcscat(a, c)
+#define vswprintf_s vswprintf
+#define MAX_PATH 260
+#define _wcsicmp wcscasecmp
+#define _wcsnicmp wcsncasecmp
+#define FILE_ATTRIBUTE_READONLY             0x00000001  
+#define FILE_ATTRIBUTE_HIDDEN               0x00000002  
+#define FILE_ATTRIBUTE_DIRECTORY            0x00000010  
+#define FILE_ATTRIBUTE_NORMAL               0x00000080  
+#define FILE_ATTRIBUTE_REPARSE_POINT        0x00000400  
+#define ERROR_FILE_NOT_FOUND             2L
+#define ERROR_PATH_NOT_FOUND             3L
+#define ERROR_INVALID_HANDLE             6L
+#define ERROR_NO_MORE_FILES              18L
+#define ERROR_ALREADY_EXISTS             183L
+#define ERROR_SHARING_VIOLATION          32L
+#endif
+
+#define EACOPY_NOT_IMPLEMENTED { eacopy::Sleep(1000); fflush(stdout); assert(false); }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

@@ -2,7 +2,19 @@
 
 #pragma once
 #include "EACopyShared.h"
-#include <winsock2.h>
+#include <cstring>
+
+typedef eacopy::u64 SOCKET;
+#define INVALID_SOCKET  (SOCKET)(~0)
+
+struct Guid {
+    unsigned long  Data1;
+    unsigned short Data2;
+    unsigned short Data3;
+    unsigned char  Data4[8];
+	bool operator==(const Guid& other) const { return memcmp(this, &other, sizeof(Guid)) == 0; }
+	bool operator!=(const Guid& other) const { return memcmp(this, &other, sizeof(Guid)) != 0; }
+};
 
 namespace eacopy
 {
@@ -55,7 +67,7 @@ struct EnvironmentCommand : Command
 {
 	u64 deltaCompressionThreshold;
 	uint connectionIndex;
-	GUID secretGuid;
+	Guid secretGuid;
 	wchar_t netDirectory[1];
 };
 
@@ -214,8 +226,26 @@ struct RecvFileStats
 	u64			decompressTimeMs = 0;
 };
 
-bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FILETIME lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats);
+bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#if defined(_WIN32)
+struct addrinfoW;
+#define AddrInfo addrinfoW
+#define freeAddrInfo FreeAddrInfoW
+#else
+struct addrinfo;
+#define AddrInfo addrinfo
+#define freeAddrInfo freeaddrinfo
+#define SOCKET_ERROR (-1)
+#endif
+
+int getAddrInfoW(const wchar_t* name, const wchar_t* service, const AddrInfo* hints, AddrInfo** result);
+int getLastNetworkError();
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

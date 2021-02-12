@@ -115,7 +115,7 @@ private:
 	using				HandleFileOrWildcardFunc = Function<bool(char*)>;
 	using				CopyEntries = List<CopyEntry>;
 	class				Connection;
-	struct				NameAndFileInfo { WString name; FileInfo info; DWORD attributes; };
+	struct				NameAndFileInfo { WString name; FileInfo info; uint attributes; };
 
 	// Methods
 	void				resetWorkState(Log& log);
@@ -130,7 +130,7 @@ private:
 	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileFunc& handleFileFunc);
-	bool				purgeFilesInDirectory(const WString& destPath, DWORD destPathAttributes, int depthLeft);
+	bool				purgeFilesInDirectory(const WString& destPath, uint destPathAttributes, int depthLeft);
 	bool				ensureDirectory(const wchar_t* directory);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
@@ -160,8 +160,8 @@ private:
 	bool				m_networkInitDone;
 	WString				m_networkServerName;
 	WString				m_networkServerNetDirectory;
-	addrinfoW*			m_serverAddrInfo;
-	GUID				m_secretGuid;
+	AddrInfo*			m_serverAddrInfo;
+	Guid				m_secretGuid;
 	CriticalSection		m_secretGuidCs;
 
 						Client(const Client&) = delete;
@@ -188,7 +188,7 @@ public:
 	bool				sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs);
 	bool				sendDeleteAllFiles(const wchar_t* dir);
 	bool				sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext);
-	bool				sendGetFileAttributes(const wchar_t* file, FileInfo& outInfo, DWORD& outAttributes, DWORD& outError);
+	bool				sendGetFileAttributes(const wchar_t* file, FileInfo& outInfo, uint& outAttributes, uint& outError);
 
 	bool				destroy();
 

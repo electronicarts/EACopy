@@ -7,11 +7,15 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+inline int wtoi(const wchar_t *str) { return (int)wcstol(str, 0, 10); }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void printHelp()
 {
 	logInfoLinef();
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopy v%S - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
+	logInfoLinef(L"  EACopy v%hs - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopy source destination [file [file]...] [options]");
@@ -54,7 +58,7 @@ void printHelp()
 	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (uses zstd)");
 	#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 	logInfoLinef(L"           /DC[:b] :: use DeltaCompression. Provide value to set min file size");
-	logInfoLinef(L"                      b defaults to %s (uses rsync algorithm)", toPretty(DefaultDeltaCompressionThreshold).c_str());
+	logInfoLinef(L"                      b defaults to %ls (uses rsync algorithm)", toPretty(DefaultDeltaCompressionThreshold).c_str());
 	logInfoLinef();
 	#endif
 	logInfoLinef(L"/DCOPY:copyflag[s] :: what to COPY for directories (default is /DCOPY:DA).");
@@ -123,7 +127,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/LEV:"))
 		{
-			outSettings.copySubdirDepth = _wtoi(arg + 5);
+			outSettings.copySubdirDepth = wtoi(arg + 5);
 		}
 		else if (equalsIgnoreCase(arg, L"/J"))
 		{
@@ -136,7 +140,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (equalsIgnoreCase(arg, L"/PURGE"))
 		{
 			outSettings.purgeDestination = true;
-			outSettings.copySubdirDepth = 0;
+			//outSettings.copySubdirDepth = 0; // Purge in robocopy is weird.. revisit
 		}
 		else if (equalsIgnoreCase(arg, L"/MIR"))
 		{
@@ -174,7 +178,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			outSettings.threadCount = 8;
 			if (arg[3] == ':')
-				outSettings.threadCount = _wtoi(arg + 4);
+				outSettings.threadCount = wtoi(arg + 4);
 		}
 		else if (equalsIgnoreCase(arg, L"/NOSERVER"))
 		{
@@ -190,19 +194,19 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/SERVERPORT:"))
 		{
-			outSettings.serverPort = _wtoi(arg + 6);
+			outSettings.serverPort = wtoi(arg + 6);
 		}
 		else if (startsWithIgnoreCase(arg, L"/C"))
 		{
 			outSettings.compressionEnabled = true;
 			if (arg[2] == ':')
-				outSettings.compressionLevel = _wtoi(arg + 3);
+				outSettings.compressionLevel = wtoi(arg + 3);
 		}
 		else if (startsWithIgnoreCase(arg, L"/DC"))
 		{
 			outSettings.deltaCompressionThreshold = 0;
 			if (arg[3] == ':')
-				outSettings.deltaCompressionThreshold = _wtoi(arg + 4);
+				outSettings.deltaCompressionThreshold = wtoi(arg + 4);
 		}
 		else if (startsWithIgnoreCase(arg, L"/XF"))
 		{
@@ -238,11 +242,11 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/R:"))
 		{
-			outSettings.retryCount = _wtoi(arg + 3);
+			outSettings.retryCount = wtoi(arg + 3);
 		}
 		else if (startsWithIgnoreCase(arg, L"/W:"))
 		{
-			outSettings.retryWaitTimeMs = _wtoi(arg + 3) * 1000;
+			outSettings.retryWaitTimeMs = wtoi(arg + 3) * 1000;
 		}
 		else if(startsWithIgnoreCase(arg, L"/LOG:"))
 		{
@@ -324,7 +328,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			}
 			else
 			{
-				logErrorf(L"Unknown option %s", arg);
+				logErrorf(L"Unknown option %ls", arg);
 				return false;
 			}
 		}
@@ -348,9 +352,22 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 
 } // namespace eacopy
 
+#if defined(_WIN32)
 int wmain(int argc, wchar_t* argv[])
 {
 	using namespace eacopy;
+#else
+int main(int argc, char* argv_[])
+{
+	using namespace eacopy;
+	wchar_t* argv[64];
+	WString temp[64];
+	for (int i=0; i!=argc; ++i)
+	{
+		temp[i] = WString(argv_[i], argv_[i] + strlen(argv_[i]));
+		argv[i] = const_cast<wchar_t*>(temp[i].c_str());
+	}
+#endif
 
 	u64 startTimeMs = getTimeMs();
 
@@ -384,6 +401,9 @@ int wmain(int argc, wchar_t* argv[])
 	if (!readSettings(settings, argc, argv))
 		return -1;
 
+	//for (int i=0; i!=argc; ++i)
+	//	logDebugLinef(L"CMD: %ls", argv[i]);
+
 	//SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
 	Log log;
@@ -394,11 +414,11 @@ int wmain(int argc, wchar_t* argv[])
 	{
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
-		logInfoLinef(L"  EACopy v%S - File Copy for Windows.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
+		logInfoLinef(L"  EACopy v%hs - File Copy for Windows.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
-		logInfoLinef(L"  Source : %s", settings.sourceDirectory.c_str());
-		logInfoLinef(L"    Dest : %s", settings.destDirectory.c_str());
+		logInfoLinef(L"  Source : %ls", settings.sourceDirectory.c_str());
+		logInfoLinef(L"    Dest : %ls", settings.destDirectory.c_str());
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
@@ -437,42 +457,42 @@ int wmain(int argc, wchar_t* argv[])
 		logInfoLinef(L"                 Total    Copied    Linked   Skipped  Mismatch    FAILED    Extras");
 		//logInfoLinef(L"    Dirs:      %7i   %7i   %7i   %7i   %7i   %7i", 1, 2, 3, 4, 5, 6);
 		logInfoLinef(L"   Files:      %7i   %7i   %7i   %7i   %7i   %7i   %7i", totalCount, stats.copyCount, stats.linkCount, stats.skipCount, 0, stats.failCount, stats.createDirCount);
-		logInfoLinef(L"   Bytes:     %s  %s  %s  %s   %7i   %7i   %7i", toPretty(totalSize, 7).c_str(), toPretty(stats.copySize, 7).c_str(), toPretty(stats.linkSize, 7).c_str(), toPretty(stats.skipSize, 7).c_str(), 0, 0, 0);
-		logInfoLinef(L"   Times:     %s  %s  %s  %s  %s  %s  %s", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.createDirTimeMs, 7).c_str());
+		logInfoLinef(L"   Bytes:     %ls  %ls  %ls  %ls   %7i   %7i   %7i", toPretty(totalSize, 7).c_str(), toPretty(stats.copySize, 7).c_str(), toPretty(stats.linkSize, 7).c_str(), toPretty(stats.skipSize, 7).c_str(), 0, 0, 0);
+		logInfoLinef(L"   Times:     %ls  %ls  %ls  %ls  %ls  %ls  %ls", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.createDirTimeMs, 7).c_str());
 	
 		if (stats.destServerUsed)
 		{
 			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %s      SendFile:         %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.sendTimeMs, 7).c_str());
-			logInfoLinef(L"   ReadFile:     %s      SendBytes:        %s", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toPretty(stats.sendSize, 7).c_str());
-			logInfoLinef(L"   CompressFile: %s      CompressLevel:     %7.1f", toHourMinSec(stats.compressTimeMs, 7).c_str(), stats.compressionAverageLevel);
-			logInfoLinef(L"   ConnectTime:  %s      DeltaCompress:    %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %s      PurgeDir          %s", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
+			logInfoLinef(L"   FindFile:     %ls      SendFile:         %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.sendTimeMs, 7).c_str());
+			logInfoLinef(L"   ReadFile:     %ls      SendBytes:        %ls", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toPretty(stats.sendSize, 7).c_str());
+			logInfoLinef(L"   CompressFile: %ls      CompressLevel:     %7.1f", toHourMinSec(stats.compressTimeMs, 7).c_str(), stats.compressionAverageLevel);
+			logInfoLinef(L"   ConnectTime:  %ls      DeltaCompress:    %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
+			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
 			logInfoLinef();
 			logInfoLinef(L"   Server found and used!");
 		}
 		else if (stats.sourceServerUsed)
 		{
 			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %s      RecvFile:         %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.recvTimeMs, 7).c_str());
-			logInfoLinef(L"   WriteFile:    %s      RecvBytes:        %s", toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str(), toPretty(stats.recvSize, 7).c_str());
-			logInfoLinef(L"   DecompreFile: %s                          ", toHourMinSec(stats.decompressTimeMs, 7).c_str());
-			logInfoLinef(L"   ConnectTime:  %s      DeltaCompress:    %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %s      PurgeDir          %s", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
+			logInfoLinef(L"   FindFile:     %ls      RecvFile:         %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.recvTimeMs, 7).c_str());
+			logInfoLinef(L"   WriteFile:    %ls      RecvBytes:        %ls", toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str(), toPretty(stats.recvSize, 7).c_str());
+			logInfoLinef(L"   DecompreFile: %ls                          ", toHourMinSec(stats.decompressTimeMs, 7).c_str());
+			logInfoLinef(L"   ConnectTime:  %ls      DeltaCompress:    %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
+			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
 			logInfoLinef();
 			logInfoLinef(L"   Server found and used!");
 		}
 		else
 		{
 			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %s      CreateFileWrite:  %s", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.createWriteTimeMs, 7).c_str());
-			logInfoLinef(L"   ReadFile:     %s      WriteFile:        %s", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str());
-			logInfoLinef(L"   ConnectTime:  %s      SetLastWriteTime: %s", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.setLastWriteTimeTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %s      PurgeDir          %s", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
+			logInfoLinef(L"   FindFile:     %ls      CreateFileWrite:  %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.createWriteTimeMs, 7).c_str());
+			logInfoLinef(L"   ReadFile:     %ls      WriteFile:        %ls", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str());
+			logInfoLinef(L"   ConnectTime:  %ls      SetLastWriteTime: %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.setLastWriteTimeTimeMs, 7).c_str());
+			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
 			logInfoLinef();
 
 			if (stats.serverAttempt && !stats.destServerUsed)
-				logInfoLinef(L"   Server not found (Spent ~%s trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/max(1, settings.threadCount)).c_str());
+				logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/std::max(1, (int)settings.threadCount)).c_str());
 			else
 				logInfoLinef(L"   No server used!");
 		}
