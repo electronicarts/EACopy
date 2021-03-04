@@ -348,6 +348,37 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 	return true;
 }
 
+const wchar_t* getPadding(const wchar_t* name)
+{
+	return L"              " + wcslen(name);
+}
+
+void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms)
+{
+	if (!ms)
+		return;
+	wchar_t buf[1024];
+	swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
+	stats.push_back(buf);
+}
+
+void populateStatsSize(Vector<WString>& stats, const wchar_t* name, u64 size)
+{
+	if (!size)
+		return;
+	wchar_t buf[1024];
+	swprintf(buf, L"  %ls:%ls%ls", name, getPadding(name), toPretty(size, 7).c_str());
+	stats.push_back(buf);
+}
+void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value)
+{
+	if (!value)
+		return;
+	wchar_t buf[1024];
+	swprintf(buf, L"  %ls:%ls%7.1f", name, getPadding(name), value);
+	stats.push_back(buf);
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace eacopy
@@ -458,44 +489,48 @@ int main(int argc, char* argv_[])
 		//logInfoLinef(L"    Dirs:      %7i   %7i   %7i   %7i   %7i   %7i", 1, 2, 3, 4, 5, 6);
 		logInfoLinef(L"   Files:      %7i   %7i   %7i   %7i   %7i   %7i   %7i", totalCount, stats.copyCount, stats.linkCount, stats.skipCount, 0, stats.failCount, stats.createDirCount);
 		logInfoLinef(L"   Bytes:     %ls  %ls  %ls  %ls   %7i   %7i   %7i", toPretty(totalSize, 7).c_str(), toPretty(stats.copySize, 7).c_str(), toPretty(stats.linkSize, 7).c_str(), toPretty(stats.skipSize, 7).c_str(), 0, 0, 0);
-		logInfoLinef(L"   Times:     %ls  %ls  %ls  %ls  %ls  %ls  %ls", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.createDirTimeMs, 7).c_str());
-	
-		if (stats.destServerUsed)
-		{
-			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %ls      SendFile:         %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.sendTimeMs, 7).c_str());
-			logInfoLinef(L"   ReadFile:     %ls      SendBytes:        %ls", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toPretty(stats.sendSize, 7).c_str());
-			logInfoLinef(L"   CompressFile: %ls      CompressLevel:     %7.1f", toHourMinSec(stats.compressTimeMs, 7).c_str(), stats.compressionAverageLevel);
-			logInfoLinef(L"   ConnectTime:  %ls      DeltaCompress:    %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
-			logInfoLinef();
-			logInfoLinef(L"   Server found and used!");
-		}
-		else if (stats.sourceServerUsed)
-		{
-			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %ls      RecvFile:         %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.recvTimeMs, 7).c_str());
-			logInfoLinef(L"   WriteFile:    %ls      RecvBytes:        %ls", toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str(), toPretty(stats.recvSize, 7).c_str());
-			logInfoLinef(L"   DecompreFile: %ls                          ", toHourMinSec(stats.decompressTimeMs, 7).c_str());
-			logInfoLinef(L"   ConnectTime:  %ls      DeltaCompress:    %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.deltaCompressionTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
-			logInfoLinef();
-			logInfoLinef(L"   Server found and used!");
-		}
-		else
-		{
-			logInfoLinef();
-			logInfoLinef(L"   FindFile:     %ls      CreateFileWrite:  %ls", toHourMinSec(stats.findFileTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.createWriteTimeMs, 7).c_str());
-			logInfoLinef(L"   ReadFile:     %ls      WriteFile:        %ls", toHourMinSec(stats.copyStats.readTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.writeTimeMs, 7).c_str());
-			logInfoLinef(L"   ConnectTime:  %ls      SetLastWriteTime: %ls", toHourMinSec(stats.connectTimeMs, 7).c_str(), toHourMinSec(stats.copyStats.setLastWriteTimeTimeMs, 7).c_str());
-			logInfoLinef(L"   CreateDir:    %ls      PurgeDir          %ls", toHourMinSec(stats.createDirTimeMs, 7).c_str(), toHourMinSec(stats.purgeTimeMs, 7).c_str());
-			logInfoLinef();
+		logInfoLinef(L"   Times:     %ls  %ls  %ls  %ls  %ls  %ls  %ls", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.ioStats.createDirMs, 7).c_str());
 
-			if (stats.serverAttempt && !stats.destServerUsed)
-				logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/std::max(1, (int)settings.threadCount)).c_str());
+		// Include close in read and write
+		stats.ioStats.readMs += stats.ioStats.closeReadMs + stats.ioStats.createReadMs;
+		stats.ioStats.writeMs += stats.ioStats.closeWriteMs + stats.ioStats.createWriteMs;
+
+		Vector<WString> statsVec;
+		populateStatsTime(statsVec, L"ConnectTime", stats.connectTimeMs);
+		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs);
+		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs);
+		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs);
+		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs);
+		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoMs);
+		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTimeMs);
+		populateStatsTime(statsVec, L"SendFile", stats.sendTimeMs);
+		populateStatsSize(statsVec, L"SendBytes", stats.sendSize);
+		populateStatsTime(statsVec, L"RecvFile", stats.recvTimeMs);
+		populateStatsSize(statsVec, L"RecvBytes", stats.recvSize);
+		populateStatsTime(statsVec, L"CompressFile", stats.compressTimeMs);
+		populateStatsValue(statsVec, L"CompressLevel", stats.compressionAverageLevel);
+		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTimeMs);
+		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTimeMs);
+		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTimeMs);
+
+		logInfoLinef();
+
+		for (uint i=0; i<statsVec.size(); i += 2)
+		{
+			if (i + 1 < statsVec.size())
+				logInfoLinef(L"%ls   %ls", statsVec[i].c_str(), statsVec[i+1].c_str());
 			else
-				logInfoLinef(L"   No server used!");
+				logInfoLinef(L"%ls", statsVec[i].c_str());
 		}
+		logInfoLinef();
+
+
+		if (stats.destServerUsed || stats.sourceServerUsed)
+			logInfoLinef(L"   Server found and used!");
+		else if (stats.serverAttempt && !stats.destServerUsed)
+			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/std::max(1, (int)settings.threadCount)).c_str());
+		else
+			logInfoLinef(L"   No server used!");
 	}
 
 	log.deinit([&]()

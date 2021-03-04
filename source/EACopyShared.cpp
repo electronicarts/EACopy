@@ -325,9 +325,10 @@ void Log::writeEntry(bool isDebuggerPresent, const LogEntry& entry)
 	if (m_logFile != InvalidFileHandle)
 	{
 		auto temp = toString(entry.str.c_str());
-		writeFile(m_logFileName.c_str(), m_logFile, temp.c_str(), temp.size());
+		IOStats ioStats;
+		writeFile(m_logFileName.c_str(), m_logFile, temp.c_str(), temp.size(), ioStats);
 		if (entry.linefeed)
-			writeFile(m_logFileName.c_str(), m_logFile, "\r\n", 2);
+			writeFile(m_logFileName.c_str(), m_logFile, "\r\n", 2, ioStats);
 	}
 	else
 	{
@@ -381,8 +382,9 @@ uint Log::logQueueThread()
 {
 	bool isDebuggerPresent = EACOPY_IS_DEBUGGER_PRESENT;
 
+	IOStats ioStats;
 	if (!m_logFileName.empty())
-		openFileWrite(m_logFileName.c_str(), m_logFile, true);
+		openFileWrite(m_logFileName.c_str(), m_logFile, ioStats, true);
 
 	while (m_logThreadActive)
 		if (!processLogQueue(isDebuggerPresent))
@@ -419,8 +421,9 @@ void Log::deinit(const Function<void()>& lastChanceLogging)
 	}
 	delete m_logQueue;
 	m_logQueue = nullptr;
+	IOStats ioStats;
 	if (m_logFile != InvalidFileHandle)
-		closeFile(m_logFileName.c_str(), m_logFile);
+		closeFile(m_logFileName.c_str(), m_logFile, AccessType_Write, ioStats);
 }
 
 void Log::traverseRecentErrors(const Function<bool(const WString&)>& errorFunc)
@@ -663,11 +666,12 @@ bool isDotOrDotDot(const wchar_t* str)
 }
 
 FindFileHandle
-findFirstFile(const wchar_t* searchStr, FindFileData& findFileData)
+findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioStats)
 {
+	TimerScope _(ioStats.findFileMs);
 #if defined(_WIN32)
 	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
-	return FindFirstFileW(searchStr, (WIN32_FIND_DATAW*)&findFileData);
+	return FindFirstFileExW(searchStr, FindExInfoBasic, (WIN32_FIND_DATAW*)&findFileData, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
 #else
 	static_assert(sizeof(FindFileDataLinux) <= sizeof(FindFileData), "");
 	String str = toLinuxPath(searchStr);
@@ -700,20 +704,10 @@ findFirstFile(const wchar_t* searchStr, FindFileData& findFileData)
 #endif
 }
 
-FindFileHandle
-findFirstFile2(const wchar_t* searchStr, FindFileData& findFileData)
-{
-#if defined(_WIN32)
-	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
-	return FindFirstFileExW(searchStr, FindExInfoStandard, (WIN32_FIND_DATAW*)&findFileData, FindExSearchNameMatch, NULL, 0);
-#else
-	return findFirstFile(searchStr, findFileData); // TODO Revisit this
-#endif
-}
-
 bool
-findNextFile(FindFileHandle handle, FindFileData& findFileData)
+findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats& ioStats)
 {
+	TimerScope _(ioStats.findFileMs);
 #if defined(_WIN32)
 	return FindNextFileW(handle, (WIN32_FIND_DATAW*)&findFileData);
 #else
@@ -736,8 +730,9 @@ findNextFile(FindFileHandle handle, FindFileData& findFileData)
 }
 
 void
-findClose(FindFileHandle handle)
+findClose(FindFileHandle handle, IOStats& ioStats)
 {
+	TimerScope _(ioStats.findFileMs);
 #if defined(_WIN32)
 	FindClose(handle);
 #else
@@ -861,8 +856,10 @@ void removeTemporarySymlinks(const wchar_t* path)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
+uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats)
 {
+	TimerScope _(ioStats.fileInfoMs);
+
 	#if defined(_WIN32)
 	WString tempBuffer;
 	const wchar_t* validFullFileName = convertToShortPath(fullFileName, tempBuffer);
@@ -946,21 +943,24 @@ bool replaceIfSymLink(const wchar_t* directory, uint attributes)
 	return false;
 }
 
-bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expectCreationAndParentExists, FilesSet* outCreatedDirs)
+bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink, bool expectCreationAndParentExists, FilesSet* outCreatedDirs)
 {
 	// This is an optimization to reduce kernel calls
 	if (expectCreationAndParentExists)
 	{
-		if (CreateDirectoryW(directory, NULL) != 0)
 		{
-			if (outCreatedDirs)
-				outCreatedDirs->insert(directory);
-			return true;
+			TimerScope _(ioStats.createDirMs);
+			if (CreateDirectoryW(directory, NULL) != 0)
+			{
+				if (outCreatedDirs)
+					outCreatedDirs->insert(directory);
+				return true;
+			}
 		}
 		if (GetLastError() == ERROR_ALREADY_EXISTS) 
 		{
 			FileInfo dirInfo;
-			uint destDirAttributes = getFileInfo(dirInfo, directory);
+			uint destDirAttributes = getFileInfo(dirInfo, directory, ioStats);
 			if (!destDirAttributes)
 			{
 				logErrorf(L"Trying to get info for %ls: %ls", directory, getLastErrorText().c_str());
@@ -999,7 +999,7 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	}
 
 	FileInfo dirInfo;
-	uint destDirAttributes = getFileInfo(dirInfo, directory);
+	uint destDirAttributes = getFileInfo(dirInfo, directory, ioStats);
 	if (destDirAttributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
 		if (replaceIfSymlink)
@@ -1025,18 +1025,21 @@ bool ensureDirectory(const wchar_t* directory, bool replaceIfSymlink, bool expec
 	if (lastBackslash)
 	{
 		WString shorterDirectory(directory, 0, lastBackslash - directory);
-		if (!ensureDirectory(shorterDirectory.c_str(), false, false, outCreatedDirs))
+		if (!ensureDirectory(shorterDirectory.c_str(), ioStats, false, false, outCreatedDirs))
 			return false;
 	}
 
 	WString tempBuffer;
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
-	if (CreateDirectoryW(validDirectory, NULL) != 0)
 	{
-		if (outCreatedDirs)
-			outCreatedDirs->insert(directory);
-		return true;
+		TimerScope _(ioStats.createDirMs);
+		if (CreateDirectoryW(validDirectory, NULL) != 0)
+		{
+			if (outCreatedDirs)
+				outCreatedDirs->insert(directory);
+			return true;
+		}
 	}
 
 	uint error = GetLastError();
@@ -1052,7 +1055,7 @@ bool isError(uint error, bool errorOnMissingFile)
 	return errorOnMissingFile || (ERROR_FILE_NOT_FOUND != error && ERROR_PATH_NOT_FOUND != error);
 }
 
-bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMissingFile)
+bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioStats, bool errorOnMissingFile)
 {
 	WString tempBuffer;
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
@@ -1063,7 +1066,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 	if (dir[dir.length()-1] != L'\\')
 		dir += L'\\';
     WString searchStr = dir + L"*.*";
-    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd); 
+    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd, ioStats); 
     if(findHandle == InvalidFileHandle)
 	{
 		uint error = GetLastError();
@@ -1077,7 +1080,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 		return false;
 	}
 
-	ScopeGuard closeFindGuard([&]() { findClose(findHandle); });
+	ScopeGuard closeFindGuard([&]() { findClose(findHandle, ioStats); });
 
     do
 	{ 
@@ -1115,12 +1118,12 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 					}
 				}
 			}
-			else if (!deleteDirectory(fullName.c_str(), errorOnMissingFile))
+			else if (!deleteDirectory(fullName.c_str(), ioStats, errorOnMissingFile))
 				return false;
 		}
 
 	}
-	while(findNextFile(findHandle, fd)); 
+	while(findNextFile(findHandle, fd, ioStats)); 
 
 	uint error = GetLastError();
 
@@ -1133,16 +1136,16 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, bool errorOnMi
 	return false;
 }
 
-bool deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile)
+bool deleteAllFiles(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile)
 {
 	bool pathFound;
-	return deleteAllFiles(directory, pathFound, errorOnMissingFile);
+	return deleteAllFiles(directory, pathFound, ioStats, errorOnMissingFile);
 }
 
-bool deleteDirectory(const wchar_t* directory, bool errorOnMissingFile)
+bool deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile)
 {
 	bool outPathFound;
-	if (!deleteAllFiles(directory, outPathFound, errorOnMissingFile))
+	if (!deleteAllFiles(directory, outPathFound, ioStats, errorOnMissingFile))
 		return false;
 
 	if (!outPathFound)
@@ -1190,8 +1193,9 @@ bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 	}
 }
 
-bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped, bool isSequentialScan, bool sharedRead)
+bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool isSequentialScan, bool sharedRead)
 {
+	TimerScope _(ioStats.createReadMs);
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	uint sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
@@ -1218,7 +1222,7 @@ bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, bool useBuffered
 	#endif
 }
 
-bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden)
+bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden)
 {
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
@@ -1230,6 +1234,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBuffere
 	if (hidden)
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
 
+	TimerScope _(ioStats.createWriteMs);
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
@@ -1249,8 +1254,9 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBuffere
 	#endif
 }
 
-bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, _OVERLAPPED* overlapped)
+bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped)
 {
+	TimerScope _(ioStats.writeMs);
 	#if defined(_WIN32)
 	if (overlapped)
 	{
@@ -1301,8 +1307,9 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 	#endif
 }
 
-bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read)
+bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats)
 {
+	TimerScope _(ioStats.readMs);
 	#if defined(_WIN32)
 	DWORD dwRead = 0;
 	bool success = ReadFile(file, destData, toRead, &dwRead, NULL) != 0;
@@ -1328,7 +1335,7 @@ bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toR
 	#endif
 }
 
-bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime)
+bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime, IOStats& ioStats)
 {
 	if (file == InvalidFileHandle)
 		return false;
@@ -1340,6 +1347,7 @@ bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime la
 	//	return false;
 	//}
 
+	TimerScope _(ioStats.setLastWriteTimeMs);
 	#if defined(_WIN32)
 	if (SetFileTime(file, NULL, NULL, (FILETIME*)&lastWriteTime))
 		return true;
@@ -1353,7 +1361,7 @@ bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime la
 	#endif
 }
 
-bool setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position)
+bool setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position, IOStats& ioStats)
 {
 	#if defined(_WIN32)
 	LARGE_INTEGER li;
@@ -1369,11 +1377,12 @@ bool setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position)
 	#endif
 }
 
-bool closeFile(const wchar_t* fullPath, FileHandle& file)
+bool closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType, IOStats& ioStats)
 {
 	if (file == InvalidFileHandle)
 		return true;
 
+	TimerScope _(accessType == AccessType_Read ? ioStats.closeReadMs : ioStats.closeWriteMs);
 	#if defined(_WIN32)
 	bool success = CloseHandle(file) != 0;
 	file = InvalidFileHandle;
@@ -1392,20 +1401,20 @@ bool closeFile(const wchar_t* fullPath, FileHandle& file)
 	#endif
 }
 
-bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden)
+bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, IOStats& ioStats, bool useBufferedIO, bool hidden)
 {
 	FileHandle file;
-	if (!openFileWrite(fullPath, file, useBufferedIO, nullptr, hidden))
+	if (!openFileWrite(fullPath, file, ioStats, useBufferedIO, nullptr, hidden))
 		return false;
-	if (!writeFile(fullPath, file, data, info.fileSize))
+	if (!writeFile(fullPath, file, data, info.fileSize, ioStats))
 		return false;
 	if (info.lastWriteTime.dwLowDateTime || info.lastWriteTime.dwHighDateTime)
-		if (!setFileLastWriteTime(fullPath, file, info.lastWriteTime))
+		if (!setFileLastWriteTime(fullPath, file, info.lastWriteTime, ioStats))
 			return false;
-	return closeFile(fullPath, file);
+	return closeFile(fullPath, file, AccessType_Write, ioStats);
 }
 
-bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip)
+bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats)
 {
 	outSkip = false;
 	#if defined(_WIN32)
@@ -1416,7 +1425,7 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 	if (error == ERROR_ALREADY_EXISTS)
 	{
 		FileInfo other;
-		uint attributes = getFileInfo(other, fullPath);
+		uint attributes = getFileInfo(other, fullPath, ioStats);
 		if (!equals(info, other))
 			return false;
 		outSkip = true;
@@ -1451,14 +1460,26 @@ CopyContext::~CopyContext()
 		delete[] buffers[i];
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO)
 {
 	CopyContext copyContext;
-	CopyStats copyStats;
-	return copyFile(source, dest, failIfExists, outExisted, outBytesCopied, copyContext, copyStats, useBufferedIO);
+	FileInfo sourceInfo;
+	uint sourceAttributes = getFileInfo(sourceInfo, source, ioStats);
+	if (!sourceAttributes)
+	{
+		logErrorf(L"Failed to get file info for source file %ls: %ls", source, getLastErrorText().c_str());
+		return false;
+	}
+
+	if ((sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+	{
+		logErrorf(L"Failed to copy source file %ls: File is a directory", source);
+		return false;
+	}
+	return copyFile(source, sourceInfo, dest, failIfExists, outExisted, outBytesCopied, copyContext, ioStats, useBufferedIO);
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
 	outBytesCopied = 0;
@@ -1477,20 +1498,6 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		enum { ReadChunkSize = 2 * 1024 * 1024 };
 		static_assert(ReadChunkSize <= CopyContextBufferSize, "ReadChunkSize must be smaller than CopyContextBufferSize");
 
-		FileInfo sourceInfo;
-		uint sourceAttributes = getFileInfo(sourceInfo, source);
-		if (!sourceAttributes)
-		{
-			logErrorf(L"Failed to get file info for source file %ls: %ls", source, getLastErrorText().c_str());
-			return false;
-		}
-
-		if ((sourceAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
-		{
-			logErrorf(L"Failed to copy source file %ls: File is a directory", source);
-			return false;
-		}
-
 		uint overlappedFlag = UseOverlappedCopy ? FILE_FLAG_OVERLAPPED : 0;
 		uint nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
 		uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
@@ -1502,7 +1509,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 		u64 startCreateReadTimeMs = getTimeMs();
 		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
-		copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
+		ioStats.createReadMs += getTimeMs() - startCreateReadTimeMs;
 
 		if (sourceFile == InvalidFileHandle)
 		{
@@ -1510,7 +1517,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			return false;
 		}
 
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); CloseHandle(sourceFile); });
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); CloseHandle(sourceFile); });
 
 		OVERLAPPED osWrite = {0,0,0};
 		osWrite.Offset = 0xFFFFFFFF;
@@ -1519,7 +1526,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 		u64 startCreateWriteTimeMs = getTimeMs();
 		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
-		copyStats.createWriteTimeMs += getTimeMs() - startCreateWriteTimeMs;
+		ioStats.createWriteMs += getTimeMs() - startCreateWriteTimeMs;
 
 		if (destFile == InvalidFileHandle)
 		{
@@ -1533,7 +1540,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			logErrorf(L"Failed to create file %ls: %ls", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
-		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); CloseHandle(destFile); });
+		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); TimerScope _(ioStats.closeWriteMs); CloseHandle(destFile); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -1545,7 +1552,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		{
 			if (sizeFilled)
 			{
-				u64 startWriteMs = getTimeMs();
+				TimerScope _(ioStats.writeMs);
 
 				if (UseOverlappedCopy && WaitForSingleObject(osWrite.hEvent, INFINITE) != WAIT_OBJECT_0)
 				{
@@ -1563,8 +1570,6 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 						return false;
 					}
 				}
-
-				copyStats.writeTimeMs += getTimeMs() - startWriteMs;
 			}
 
 			sizeFilled = (uint)osRead.InternalHigh;
@@ -1581,7 +1586,7 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 			if (left)
 			{
-				u64 startReadMs = getTimeMs();
+				TimerScope _(ioStats.readMs);
 
 				uint toRead = (uint)std::min(left, u64(ReadChunkSize));
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
@@ -1602,8 +1607,6 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 
 				read += toRead;
 				left -= toRead;
-
-				copyStats.readTimeMs += getTimeMs() - startReadMs;
 			}
 			else
 			{
@@ -1620,10 +1623,8 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 			}
 		}
 
-		u64 startSetLastWriteTimeTimeMs = getTimeMs();
-		if (!setFileLastWriteTime(dest, destFile, sourceInfo.lastWriteTime))
+		if (!setFileLastWriteTime(dest, destFile, sourceInfo.lastWriteTime, ioStats))
 			return false;
-		copyStats.setLastWriteTimeTimeMs += getTimeMs() - startSetLastWriteTimeTimeMs;
 
 		if (nobufferingFlag)
 		{
@@ -1634,22 +1635,18 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		}
 
 		{
-			u64 startReadMs = getTimeMs();
+			TimerScope _(ioStats.closeReadMs); 
 			CloseHandle(sourceFile);
 			sourceFile = InvalidFileHandle;
-			copyStats.readTimeMs += getTimeMs() - startReadMs;
 		}
 
 		{
-			u64 startWriteMs = getTimeMs();
+			TimerScope _(ioStats.closeWriteMs); 
 			CloseHandle(destFile);
 			destFile = InvalidFileHandle;
-			copyStats.writeTimeMs += getTimeMs() - startWriteMs;
 		}
 
 		outBytesCopied = sourceInfo.fileSize;
-
-		//copyStats.copyTimeMs += getTimeMs() - startCopyTimeMs;
 
 		return true;
 	}

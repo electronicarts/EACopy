@@ -337,6 +337,7 @@ Server::connectionThread(ConnectionInfo& info)
 		logScopeLeave();
 	});
 
+	IOStats ioStats;
 	NetworkCopyContext copyContext;
 	CompressionData	compressionData;
 
@@ -453,7 +454,7 @@ Server::connectionThread(ConnectionInfo& info)
 							fileInfo.fileSize = sizeof(secretGuid);
 							WString securityFilePath = serverPath + filename;
 							ScopeGuard deleteFileGuard([&]() { deleteFile(securityFilePath.c_str(), false); });
-							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, true, true))
+							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, ioStats, true, true))
 								break;
 
 							m_validSecretGuidsCs.scoped([&]() { m_validSecretGuids.insert(secretGuid); });
@@ -519,7 +520,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						// File has already been copied, if the old copied file still has the same attributes as when it was copied we create a link to it
 						FileInfo other;
-						uint attributes = getFileInfo(other, localFile.name.c_str());
+						uint attributes = getFileInfo(other, localFile.name.c_str(), ioStats);
 						if (attributes && equals(cmd.info, other))
 						{
 							FileInfo destInfo;
@@ -540,7 +541,7 @@ Server::connectionThread(ConnectionInfo& info)
 							*/
 							{
 								bool skip;
-								if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip))
+								if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
 									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
 							}
 						}
@@ -549,7 +550,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						// Check if file already exists at destination and has same attributes, in that case, skip copy
 						FileInfo other;
-						uint attributes = getFileInfo(other, fullPath.c_str());
+						uint attributes = getFileInfo(other, fullPath.c_str(), ioStats);
 						if (attributes && equals(cmd.info, other))
 							writeResponse = WriteResponse_Skip;
 					}
@@ -608,9 +609,8 @@ Server::connectionThread(ConnectionInfo& info)
 					else // WriteResponse_Copy
 					{
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, cmd.info.fileSize);
-						CopyStats copyStats;
 						RecvFileStats recvStats;
-						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, copyContext, recvBuffer, recvPos, header.commandSize, copyStats, recvStats))
+						if (!receiveFile(success, info.socket, fullPath.c_str(), cmd.info.fileSize, cmd.info.lastWriteTime, cmd.writeType, useBufferedIO, copyContext, recvBuffer, recvPos, header.commandSize, ioStats, recvStats))
 							return -1;
 					}
 
@@ -687,7 +687,7 @@ Server::connectionThread(ConnectionInfo& info)
 					WString fullPath = serverPath + cmd.path;
 
 					FileInfo fi;
-					uint attributes = getFileInfo(fi, fullPath.c_str());
+					uint attributes = getFileInfo(fi, fullPath.c_str(), ioStats);
 					if (!attributes || attributes & FILE_ATTRIBUTE_DIRECTORY)
 					{
 						ReadResponse readResponse = ReadResponse_BadSource;
@@ -733,9 +733,8 @@ Server::connectionThread(ConnectionInfo& info)
 						WriteFileType writeType = cmd.compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
 
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, fi.fileSize);
-						CopyStats copyStats;
 						SendFileStats sendStats;
-						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, copyStats, sendStats))
+						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, ioStats, sendStats))
 							return -1;
 					}
 					else if (readResponse == ReadResponse_CopyUsingSmb)
@@ -763,7 +762,7 @@ Server::connectionThread(ConnectionInfo& info)
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
 						WString fullPath = serverPath + cmd.path;
 						FilesSet createdDirs;
-						if (ensureDirectory(fullPath.c_str(), false, true, &createdDirs))
+						if (ensureDirectory(fullPath.c_str(), ioStats, false, true, &createdDirs))
 							createDirResponse = CreateDirResponse_SuccessExisted + (u8)min(createdDirs.size(), 200); // is not the end of the world if 201 was created but 200 was reported
 					}
 					else
@@ -783,7 +782,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
 						WString fullPath = serverPath + cmd.path;
-						if (!deleteAllFiles(fullPath.c_str(), false)) // No error on missing files
+						if (!deleteAllFiles(fullPath.c_str(), ioStats, false)) // No error on missing files
 							deleteFilesResponse = DeleteFilesResponse_Error;
 					}
 					else
@@ -873,7 +872,7 @@ Server::connectionThread(ConnectionInfo& info)
 					WString fullPath = serverPath + cmd.path;
 					__declspec(align(8)) u8 sendBuffer[3*8+2*4];
 					static_assert(sizeof(sendBuffer) == sizeof(FileInfo) + sizeof(uint) + sizeof(uint), "");
-					uint attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str());
+					uint attributes = getFileInfo(*(FileInfo*)sendBuffer, fullPath.c_str(), ioStats);
 					*(uint*)(sendBuffer + sizeof(FileInfo)) = attributes;
 					uint error = 0;
 					if (!attributes)

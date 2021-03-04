@@ -155,6 +155,13 @@ bool					stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source);
 #define					eacopy_sizeof_array(array) int(sizeof(array)/sizeof(array[0]))
 
 
+struct TimerScope
+{
+	TimerScope(u64& t) : timer(t), start(getTimeMs()) {}
+	~TimerScope() { timer += getTimeMs() - start; }
+	u64& timer;
+	u64 start;
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // IO
@@ -178,13 +185,26 @@ struct CopyContext
 	u8*					buffers[3];
 };
 
-struct CopyStats
+struct IOStats
 {
-	u64					createReadTimeMs = 0;
-	u64					readTimeMs = 0;
-	u64					createWriteTimeMs = 0;
-	u64					writeTimeMs = 0;
-	u64					setLastWriteTimeTimeMs = 0;
+	u64					createReadMs = 0;
+	u64					readMs = 0;
+	u64					closeReadMs = 0;
+
+	u64					createWriteMs = 0;
+	u64					writeMs = 0;
+	u64					closeWriteMs = 0;
+	u64					setLastWriteTimeMs = 0;
+	u64					findFileMs = 0;
+	u64					fileInfoMs = 0;
+	u64					createDirMs = 0;
+};
+
+
+enum AccessType
+{
+	AccessType_Read,
+	AccessType_Write,
 };
 
 struct					NoCaseWStringLess { bool operator()(const WString& a, const WString& b) const { return lessIgnoreCase(a.c_str(), b.c_str()); } };
@@ -193,23 +213,23 @@ using					FilesSet = Set<WString, NoCaseWStringLess>;
 enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedIO_Disabled };
 bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 
-uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName);
+uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats);
 bool					equals(const FileInfo& a, const FileInfo& b);
-bool					ensureDirectory(const wchar_t* directory, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
-bool					deleteDirectory(const wchar_t* directory, bool errorOnMissingFile = true);
-bool					deleteAllFiles(const wchar_t* directory, bool errorOnMissingFile = true);
+bool					ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
+bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
+bool					deleteAllFiles(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
-bool					openFileRead(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true, bool sharedRead = true);
-bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFile, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false);
-bool					writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, _OVERLAPPED* overlapped = nullptr);
-bool					readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read);
-bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime);
-bool					setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position);
-bool					closeFile(const wchar_t* fullPath, FileHandle& file);
-bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, bool useBufferedIO, bool hidden = false);
-bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, UseBufferedIO useBufferedIO);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, CopyStats& copyStats, UseBufferedIO useBufferedIO);
+bool					openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true, bool sharedRead = true);
+bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFilee, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false);
+bool					writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped = nullptr);
+bool					readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats);
+bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime, IOStats& ioStats);
+bool					setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position, IOStats& ioStats);
+bool					closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType, IOStats& ioStats);
+bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, IOStats& ioStats, bool useBufferedIO, bool hidden = false);
+bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats);
+bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath, bool errorOnMissingFile = true);
 bool					setFileWritable(const wchar_t* fullPath, bool writable);
 void					convertSlashToBackslash(wchar_t* path);
@@ -222,10 +242,9 @@ bool					isDotOrDotDot(const wchar_t* str);
 
 
 struct					FindFileData { u64 data[1024]; };
-FindFileHandle			findFirstFile(const wchar_t* searchStr, FindFileData& findFileData);
-FindFileHandle			findFirstFile2(const wchar_t* searchStr, FindFileData& findFileData);
-bool					findNextFile(FindFileHandle handle, FindFileData& findFileData);
-void					findClose(FindFileHandle handle);
+FindFileHandle			findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioStats);
+bool					findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats& ioStats);
+void					findClose(FindFileHandle handle, IOStats& ioStats);
 uint					getFileInfo(FileInfo& outInfo, FindFileData& findFileData);
 wchar_t*				getFileName(FindFileData& findFileData);
 

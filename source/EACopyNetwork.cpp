@@ -271,18 +271,16 @@ CompressionData::~CompressionData()
 		ZSTD_freeCCtx((ZSTD_CCtx*)context);
 }
 
-bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, CopyStats& copyStats, SendFileStats& sendStats)
+bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats)
 {
 	WString tempBuffer1;
 	const wchar_t* validSrc = convertToShortPath(src, tempBuffer1);
 
-	u64 startCreateReadTimeMs = getTimeMs();
 	FileHandle sourceFile;
-	if (!openFileRead(validSrc, sourceFile, useBufferedIO))
+	if (!openFileRead(validSrc, sourceFile, ioStats, useBufferedIO))
 		return false;
 
-	ScopeGuard closeSourceFile([&]() { closeFile(validSrc, sourceFile); });
-	copyStats.createReadTimeMs += getTimeMs() - startCreateReadTimeMs;
+	ScopeGuard closeSourceFile([&]() { closeFile(validSrc, sourceFile, AccessType_Read, ioStats); });
 
 
 	if (writeType == WriteFileType_TransmitFile)
@@ -335,12 +333,11 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 		u64 left = fileSize;
 		while (left)
 		{
-			u64 startReadMs = getTimeMs();
 			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			u64 read;
-			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read))
+			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
@@ -348,7 +345,6 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					return false;
 				}
 			}
-			copyStats.readTimeMs += getTimeMs() - startReadMs;
 
 			u64 startSendMs = getTimeMs();
 			if (!sendData(socket, copyContext.buffers[0], read))
@@ -368,11 +364,10 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			// Make sure the amount of data we've read fit in the destination compressed buffer
 			static_assert(ZSTD_COMPRESSBOUND(NetworkTransferChunkSize - CompressBoundReservation) <= NetworkTransferChunkSize - 4, "");
 
-			u64 startReadMs = getTimeMs();
 			uint toRead = std::min(left, u64(NetworkTransferChunkSize - CompressBoundReservation));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 			u64 read;
-			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read))
+			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
@@ -380,7 +375,6 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					return false;
 				}
 			}
-			copyStats.readTimeMs += getTimeMs() - startReadMs;
 
 			if (!compressionData.context)
 				compressionData.context = ZSTD_createCCtx();
@@ -445,7 +439,7 @@ NetworkCopyContext::~NetworkCopyContext()
 	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
 }
 
-bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, CopyStats& copyStats, RecvFileStats& recvStats)
+bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, IOStats& ioStats, RecvFileStats& recvStats)
 {
 	WString tempBuffer1;
 	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer1);
@@ -461,23 +455,18 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
-		//copyStats.createWriteTimeMs 
-		u64 startCreateWriteTimeMs = getTimeMs();
-		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
-		copyStats.createWriteTimeMs = getTimeMs() - startCreateWriteTimeMs;
-		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file); CloseHandle(osWrite.hEvent); });
+		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
+		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file, AccessType_Write, ioStats); CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
 
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
-			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
+			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
-			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 		}
 
 		int fileBufIndex = 0;
@@ -508,9 +497,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			recvStats.recvTimeMs += getTimeMs() - startRecvTimeMs;
 			recvStats.recvSize += recvBytes;
 
-			u64 startWriteTimeMs = getTimeMs();
-			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], recvBytes, &osWrite);
-			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
+			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], recvBytes, ioStats, &osWrite);
 
 			read += recvBytes;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -520,9 +507,9 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime);
-		outSuccess = outSuccess && closeFile(validFullPath, file);
-		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
+		ioStats.writeMs = getTimeMs() - startWriteTimeMs;
+		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
+		outSuccess = outSuccess && closeFile(validFullPath, file, AccessType_Write, ioStats);
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
@@ -533,20 +520,18 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
-		outSuccess = openFileWrite(validFullPath, file, useBufferedIO);
-		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file); CloseHandle(osWrite.hEvent); });
+		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
+		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file, AccessType_Write, ioStats); CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
 
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
-			u64 startWriteTimeMs = getTimeMs();
 			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, &osWrite);
+			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
-			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
 		}
 
 		int fileBufIndex = 0;
@@ -608,9 +593,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 
-			u64 startWriteTimeMs = getTimeMs();
-			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, &osWrite);
-			copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
+			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, ioStats, &osWrite);
 
 			read += decompressedSize;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -618,9 +601,9 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		u64 startWriteTimeMs = getTimeMs();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime);
-		outSuccess = outSuccess && closeFile(validFullPath, file);
-		copyStats.writeTimeMs = getTimeMs() - startWriteTimeMs;
+		ioStats.writeMs = getTimeMs() - startWriteTimeMs;
+		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
+		outSuccess = outSuccess && closeFile(validFullPath, file, AccessType_Write, ioStats);
 	}
 
 	return true;

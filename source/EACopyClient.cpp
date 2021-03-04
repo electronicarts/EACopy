@@ -34,7 +34,13 @@
 #else
 #define TIMEVAL timeval
 namespace eacopy {
-bool PathMatchSpecW(const wchar_t* file, const wchar_t* spec) { EACOPY_NOT_IMPLEMENTED return false; }
+bool PathMatchSpecW(const wchar_t* file, const wchar_t* spec)
+{
+	if (wcscmp(spec, "*.*") == 0)
+		return true;
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+}
 enum : int { FindExSearchNameMatch, FindExInfoStandard };
 bool RemoveDirectoryW(const wchar_t* dir);
 #define WSAHOST_NOT_FOUND                11001L
@@ -134,8 +140,6 @@ Client::process(Log& log, ClientStats& outStats)
 			return false;
 	ScopeGuard sourceConnectionGuard([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
 
-	u64 startFindFileTimeMs = getTimeMs();
-
 	// Collect exclusions provided through file
 	for (auto& file : m_settings.filesExcludeFiles)
 		if (!excludeFilesFromFile(logContext, outStats, sourceDir, file, destDir))
@@ -150,11 +154,10 @@ Client::process(Log& log, ClientStats& outStats)
 				return true;
 			destDirCreated = true;
 
-			u64 startTime = getTimeMs();
 			int retryCount = m_settings.retryCount;
 			while (true)
 			{
-				if (ensureDirectory(destDir.c_str()))
+				if (ensureDirectory(destDir.c_str(), outStats.ioStats))
 					return true;
 
 				if (retryCount-- == 0)
@@ -167,26 +170,24 @@ Client::process(Log& log, ClientStats& outStats)
 
 				++outStats.retryCount;
 			}
-			outStats.createDirTimeMs += getTimeMs() - startTime;
 			++outStats.createDirCount;
 		};
 
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination directories needed.
 		if (!m_settings.filesOrWildcardsFiles.empty())
 		{
+			CachedFindFileEntries findFileCache;
 			for (auto& file : m_settings.filesOrWildcardsFiles)
-				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, sourceDir, file, destDir, createDirectoryFunc))
+				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir, createDirectoryFunc))
 					break;
 		}
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-				if (!findFilesInDirectory(logContext, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc, outStats))
+				if (!traverseFilesInDirectory(logContext, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc, outStats))
 					break;
 		}
 	}
-
-	outStats.findFileTimeMs = getTimeMs() - startFindFileTimeMs - outStats.createDirTimeMs;
 
 
 	// Process files (worker threads are doing the same right now)
@@ -216,7 +217,7 @@ Client::process(Log& log, ClientStats& outStats)
 	// If purge feature is enabled.. traverse destination and remove unwanted files/directories
 	if (m_settings.purgeDestination)
 		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
-			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth)) // use 0 for directory attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
+			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth, outStats)) // use 0 for directory attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
 				return -1;
 
 	// Purge individual directories (can be provided in filelist file)
@@ -224,8 +225,8 @@ Client::process(Log& log, ClientStats& outStats)
 		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 		{
 			FileInfo dirInfo;
-			uint dirAttributes = getFileInfo(dirInfo, purgeDir.c_str());
-			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth))
+			uint dirAttributes = getFileInfo(dirInfo, purgeDir.c_str(), outStats.ioStats);
+			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth, outStats))
 				return -1;
 		}
 
@@ -261,11 +262,15 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
 		outStats.connectTimeMs += threadStats.connectTimeMs;
-		outStats.copyStats.createReadTimeMs += threadStats.copyStats.createReadTimeMs;
-		outStats.copyStats.readTimeMs += threadStats.copyStats.readTimeMs;
-		outStats.copyStats.createWriteTimeMs += threadStats.copyStats.createWriteTimeMs;
-		outStats.copyStats.writeTimeMs += threadStats.copyStats.writeTimeMs;
-		outStats.copyStats.setLastWriteTimeTimeMs += threadStats.copyStats.setLastWriteTimeTimeMs;
+		outStats.ioStats.createReadMs += threadStats.ioStats.createReadMs;
+		outStats.ioStats.closeReadMs += threadStats.ioStats.closeReadMs;
+		outStats.ioStats.readMs += threadStats.ioStats.readMs;
+		outStats.ioStats.createWriteMs += threadStats.ioStats.createWriteMs;
+		outStats.ioStats.closeWriteMs += threadStats.ioStats.closeWriteMs;
+		outStats.ioStats.writeMs += threadStats.ioStats.writeMs;
+		outStats.ioStats.setLastWriteTimeMs += threadStats.ioStats.setLastWriteTimeMs;
+		outStats.ioStats.findFileMs += threadStats.ioStats.findFileMs;
+		outStats.ioStats.fileInfoMs += threadStats.ioStats.fileInfoMs;
 	}
 
 	outStats.compressionAverageLevel = outStats.copySize ? (float)((double)outStats.compressionLevelSum / outStats.copySize) : 0;
@@ -442,7 +447,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
 			{
-				if (copyFile(entry.src.c_str(), fullDst.c_str(), true, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), true, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -461,7 +466,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			if (existed || !tryCopyFirst)
 			{
 				FileInfo destInfo;
-				uint fileAttributes = getFileInfo(destInfo, fullDst.c_str());
+				uint fileAttributes = getFileInfo(destInfo, fullDst.c_str(), stats.ioStats);
 
 				// If no file attributes it might be that the file doesnt exist
 				if (!fileAttributes)
@@ -487,7 +492,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
 				}
 				
-				if (copyFile(entry.src.c_str(), fullDst.c_str(), false, existed, written, copyContext, stats.copyStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -547,7 +552,7 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 {
 	logDebugLinef(L"Worker started");
 
-	CopyStats copyStats;
+	IOStats ioStats;
 	uint filesProcessedCount = 0;
 
 	// Process file queue
@@ -656,11 +661,10 @@ Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const
 		if (!m_handledFiles.insert(relDir).second)
 			return true;
 
-		u64 startTime = getTimeMs();
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			if (ensureDirectory(newDestDirectory.c_str()))
+			if (ensureDirectory(newDestDirectory.c_str(), stats.ioStats))
 				break;
 
 			if (retryCount-- == 0)
@@ -673,7 +677,6 @@ Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const
 
 			++stats.retryCount;
 		}
-		stats.createDirTimeMs += getTimeMs() - startTime;
 		++stats.createDirCount;
 
 		if (m_settings.dirCopyFlags != 0)
@@ -690,7 +693,21 @@ Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const
 			return false;
 
 	// Find files to copy
-	return findFilesInDirectory(logContext, newSourceDirectory, newDestDirectory, wildcard, depthLeft, createDirectoryFunc, stats);
+	return traverseFilesInDirectory(logContext, newSourceDirectory, newDestDirectory, wildcard, depthLeft, createDirectoryFunc, stats);
+}
+
+bool
+Client::handleMissingFile(const wchar_t* fileName)
+	{
+	for (auto& optionalWildcard : m_settings.optionalWildcards)
+		if (PathMatchSpecW(fileName, optionalWildcard.c_str()))
+			return true;
+	for (auto& excludeWildcard : m_settings.excludeWildcards)
+		if (PathMatchSpecW(fileName, excludeWildcard.c_str()))
+			return true;
+	if (m_handledFiles.find(fileName) != m_handledFiles.end())
+		return true;
+	return false;
 }
 
 bool
@@ -720,7 +737,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 			else
 			{
 				FileInfo temp;
-				if (uint attr = getFileInfo(temp, fullFileName.c_str()))
+				if (uint attr = getFileInfo(temp, fullFileName.c_str(), stats.ioStats))
 				{
 					fileInfo = temp;
 					attributes = attr;
@@ -733,13 +750,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 
 			if (ERROR_FILE_NOT_FOUND == error || ERROR_PATH_NOT_FOUND == error)
 			{
-				for (auto& optionalWildcard : m_settings.optionalWildcards)
-					if (PathMatchSpecW(fileName, optionalWildcard.c_str()))
-						return true;
-				for (auto& excludeWildcard : m_settings.excludeWildcards)
-					if (PathMatchSpecW(fileName, excludeWildcard.c_str()))
-						return true;
-				if (m_handledFiles.find(fileName) != m_handledFiles.end())
+				if (handleMissingFile(fileName))
 					return true;
 				StringCbPrintfW(errorDesc, eacopy_sizeof_array(errorDesc), L"Can't find file/directory %ls", fullFileName.c_str());
 			}
@@ -762,6 +773,12 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 		}
 	}
 
+	return handlePath(logContext, stats, sourcePath, destPath, fileName, handleFileFunc, attributes, fileInfo);
+}
+
+bool
+Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc, uint attributes, const FileInfo& fileInfo)
+{
 	// Handle directory
 	if (attributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
@@ -796,7 +813,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 }
 
 bool
-Client::findFilesInDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
+Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
 {
 	if (isValid(m_sourceConnection))
 	{
@@ -837,132 +854,156 @@ Client::findFilesInDirectory(LogContext& logContext, const WString& sourcePath, 
 	}
 	else
 	{
-		{
-			WString searchStr = sourcePath;
+		WString searchStr = sourcePath;
+		if (wildcard.find('*') == std::string::npos)
 			searchStr += wildcard;
-			WString tempBuffer;
-			const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
-
-			FindFileData fd; 
-			FindFileHandle findFileHandle; 
-
-			int retryCount = m_settings.retryCount;
-			while (true)
-			{
-				findFileHandle = findFirstFile(validSearchStr, fd); 
-				if (findFileHandle != InvalidFindFileHandle)
-					break;
-
-				uint findFileError = GetLastError();
-
-				// If path is wildcard and file is not found it is still fine.. just skip find next
-				if (findFileError == ERROR_FILE_NOT_FOUND)
-				{
-					if (wildcard.find('*') != std::string::npos)
-						break;
-					logErrorf(L"Can't find file %ls", searchStr.c_str());
-				}
-				else
-					logErrorf(L"FindFirstFile %ls failed: %ls", searchStr.c_str(), getErrorText(findFileError).c_str());
-
-				if (retryCount-- == 0)
-					return false;
-
-				// Reset last error and try again!
-				logContext.resetLastError();
-				logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
-				Sleep(m_settings.retryWaitTimeMs);
-				++stats.retryCount;
-			}
-
-			//Handle all the files first
-			if (findFileHandle != InvalidFindFileHandle)
-			{
-				ScopeGuard _([&]() { findClose(findFileHandle); });
-
-				do
-				{
-					FileInfo fileInfo;
-					uint fileAttr = getFileInfo(fileInfo, fd);
-					if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
-						continue;
-
-					if (!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
-						if (!handleFile(sourcePath, destPath, getFileName(fd), fileInfo, handleFileFunc))
-							return false;
-				}
-				while (findNextFile(findFileHandle, fd));
-
-				uint findNextError = GetLastError();
-				if (findNextError != ERROR_NO_MORE_FILES)
-				{
-					logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
-					return false;
-				}
-			}
-		}
-
-		//Handle going through directories (navigate through all directories for the wild cards we care about)
-		WString dirSearchStr = sourcePath;
-		dirSearchStr += L"*.*";
+		else
+			searchStr += L"*.*";
 		WString tempBuffer;
-		const wchar_t* validDirSearchStr = convertToShortPath(dirSearchStr.c_str(), tempBuffer);
+		const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
 
-		FindFileData fdDir;
-		FindFileHandle findDirHandle;
+		FindFileData fd; 
+		FindFileHandle findFileHandle; 
+
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			findDirHandle = findFirstFile2(validDirSearchStr, fdDir);
-			if (findDirHandle != InvalidFindFileHandle)
+			findFileHandle = findFirstFile(validSearchStr, fd, stats.ioStats); 
+			if (findFileHandle != InvalidFindFileHandle)
 				break;
 
-			uint findDirError = GetLastError();
+			uint findFileError = GetLastError();
 
-			// If directory was just not found then its okay, but otherwise return false and error.
-			if (findDirError == ERROR_FILE_NOT_FOUND)
-				break;
+			// If path is wildcard and file is not found it is still fine.. just skip find next
+			if (findFileError == ERROR_FILE_NOT_FOUND)
+			{
+				if (wildcard.find('*') != std::string::npos)
+					break;
+				logErrorf(L"Can't find file %ls", searchStr.c_str());
+			}
+			else
+				logErrorf(L"FindFirstFile %ls failed: %ls", searchStr.c_str(), getErrorText(findFileError).c_str());
 
-			logErrorf(L"FindFirstFileEx %ls failed: %ls", dirSearchStr.c_str(), getErrorText(findDirError).c_str());
 			if (retryCount-- == 0)
 				return false;
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - FindFirstFileEx %ls failed, retrying in %i seconds", validDirSearchStr, m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 			++stats.retryCount;
 		}
 
-		if (findDirHandle != InvalidFindFileHandle)
+		//Handle all the files first
+		if (findFileHandle != InvalidFindFileHandle)
 		{
-			ScopeGuard _([&]() { findClose(findDirHandle); });
+			ScopeGuard _([&]() { findClose(findFileHandle, stats.ioStats); });
+
 			do
 			{
-				FileInfo dirinfo;
-				uint dirAttr = getFileInfo(dirinfo, fdDir);
-				if ((dirAttr & FILE_ATTRIBUTE_HIDDEN))
+				FileInfo fileInfo;
+				uint fileAttr = getFileInfo(fileInfo, fd);
+				if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
 					continue;
 
-				if ((dirAttr & FILE_ATTRIBUTE_DIRECTORY))
+				if (!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
+				{
+					wchar_t* fileName = getFileName(fd);
+					if (PathMatchSpecW(fileName, wildcard.c_str()))
+						if (!handleFile(sourcePath, destPath, getFileName(fd), fileInfo, handleFileFunc))
+							return false;
+				}
+				else //if (wildcardIncludesAll)
 				{
 					if (depthLeft)
 					{
-						const wchar_t* dirName = getFileName(fdDir);
+						const wchar_t* dirName = getFileName(fd);
 						if (!isDotOrDotDot(dirName))
 							if (!handleDirectory(logContext, sourcePath, destPath, dirName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
 								return false;
 					}
 				}
 			}
-			while (findNextFile(findDirHandle, fdDir));
+			while (findNextFile(findFileHandle, fd, stats.ioStats));
 
 			uint findNextError = GetLastError();
 			if (findNextError != ERROR_NO_MORE_FILES)
 			{
-				logErrorf(L"FindNextFileW failed for %ls: %ls", validDirSearchStr, getErrorText(findNextError).c_str());
+				logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
 				return false;
 			}
+		}
+	}
+	return true;
+}
+
+bool
+Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, const WString& path, ClientStats& stats)
+{
+	if (isValid(m_sourceConnection))
+	{
+		WString relPath;
+		if (path.size() > m_settings.sourceDirectory.size())
+			relPath.append(path.c_str() + m_settings.sourceDirectory.size());
+		WString searchStr = relPath + L"*.*";
+		return m_sourceConnection->sendFindFiles(searchStr.c_str(), outEntries, m_copyContext);
+	}
+	else
+	{
+		WString searchStr = path;
+		searchStr += L"*.*";
+		WString tempBuffer;
+		const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
+
+		FindFileData fd; 
+		FindFileHandle findFileHandle; 
+
+		int retryCount = m_settings.retryCount;
+		while (true)
+		{
+			findFileHandle = findFirstFile(validSearchStr, fd, stats.ioStats); 
+			if (findFileHandle != InvalidFindFileHandle)
+				break;
+
+			uint findFileError = GetLastError();
+
+			// If path is wildcard and file is not found it is still fine.. just skip find next
+			if (findFileError != ERROR_FILE_NOT_FOUND)
+				logErrorf(L"FindFirstFile %ls failed: %ls", searchStr.c_str(), getErrorText(findFileError).c_str());
+
+			if (retryCount-- == 0)
+				return false;
+
+			// Reset last error and try again!
+			logContext.resetLastError();
+			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
+			Sleep(m_settings.retryWaitTimeMs);
+			++stats.retryCount;
+		}
+
+		if (findFileHandle == InvalidFindFileHandle)
+			return true;
+
+		ScopeGuard _([&]() { findClose(findFileHandle, stats.ioStats); });
+
+		do
+		{
+			FileInfo fileInfo;
+			uint attr = getFileInfo(fileInfo, fd);
+			if ((attr & FILE_ATTRIBUTE_HIDDEN))
+				continue;
+			const wchar_t* fileName = getFileName(fd);
+			if ((attr & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fileName))
+				continue;
+			outEntries.push_back({fileName, fileInfo, attr});
+		}
+		while (findNextFile(findFileHandle, fd, stats.ioStats));
+
+		uint findNextError = GetLastError();
+		if (findNextError != ERROR_NO_MORE_FILES)
+		{
+			logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
+			return false;
 		}
 	}
 	return true;
@@ -1007,7 +1048,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		if (tryUseSourceConnection && isValid(m_sourceConnection))
 		{
 			// TODO: Should this use a temporary file? This file will now be leaked at destination!
-			ensureDirectory(destPath.c_str());
+			ensureDirectory(destPath.c_str(), stats.ioStats);
 			u64 fileSize;
 			u64 read;
 			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
@@ -1017,9 +1058,11 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 
 		FileHandle hFile;
-		if (!openFileRead(fullPath.c_str(), hFile, true))
-			continue;
-		ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile); });
+		{
+			if (!openFileRead(fullPath.c_str(), hFile, stats.ioStats, true))
+				continue;
+		}
+		ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile, AccessType_Read, stats.ioStats); });
 
 		char* buffer = (char*)m_copyContext.buffers[1]; // Important that we use '1'.. '0' is used by SendFindFiles command
 		uint left = 0;
@@ -1029,10 +1072,13 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		{
 			u64 read = 0;
 			u64 toRead = CopyContextBufferSize - left - 1;
-			if (!readFile(fullPath.c_str(), hFile, buffer + left, toRead, read))
 			{
-				logErrorf(L"Failed reading input file %ls: %ls (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);
-				continue;
+				TimerScope _(stats.ioStats.readMs);
+				if (!readFile(fullPath.c_str(), hFile, buffer + left, toRead, read, stats.ioStats))
+				{
+					logErrorf(L"Failed reading input file %ls: %ls (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);
+					continue;
+				}
 			}
 			totalRead += read;
 
@@ -1115,8 +1161,13 @@ Client::excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const W
 }
 
 bool
-Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath, const HandleFileFunc& handleFileFunc)
+Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath, const HandleFileFunc& handleFileFunc)
 {
+	// Do a find files in source paths to reduce number of kernel calls.. this can end up be a waste but in most cases most files are directly in the source root
+	// Essentially we avoid doing lots of getFileInfo by doing a find files and get the file info from there.
+	bool useFindFilesOptimization = m_settings.useOptimizedWildCardFileSearch;
+
+	// Function to handle each entry
 	auto executeFunc = [&](char* str) -> bool
 	{
 		bool handled = false;
@@ -1141,6 +1192,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		if (argc == 0)
 			return true;
 
+		bool modifiedRootPaths = false;
 		WString sourcePath = rootSourcePath;
 		WString destPath = rootDestPath;
 		convertSlashToBackslash(argv[0]);
@@ -1160,6 +1212,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 				convertSlashToBackslash(argv[0]);
 				convertSlashToBackslash(argv[1]);
 
+				modifiedRootPaths = true;
 				if (isAbsolutePath(argv[0]))
 					sourcePath = argv[0];
 				else
@@ -1169,11 +1222,10 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 				destPath += argv[1];
 				destPath +=  L"\\";
 
-				u64 startTime = getTimeMs();
 				int retryCount = m_settings.retryCount;
 				while (true)
 				{
-					if (ensureDirectory(destPath.c_str()))
+					if (ensureDirectory(destPath.c_str(), stats.ioStats))
 						break;
 
 					if (retryCount-- == 0)
@@ -1186,17 +1238,16 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 					++stats.retryCount;
 				}
-				stats.createDirTimeMs += getTimeMs() - startTime;
 				++stats.createDirCount;
 			}
 		}
 
-		// Parse options
+		// Parse options (right now only purge is handled)
 		for (int i=optionsStartIndex; i<argc; ++i)
 		{
 			if (_wcsnicmp(argv[i], L"/PURGE", 6) != 0)
 			{
-				logErrorf(L"Only '/PURGE' allowed after second separator in file list %ls", fileName.c_str());
+				logErrorf(L"Only '/PURGE' allowed after second separator in file list %ls.. feel free to add more support :)", fileName.c_str());
 				return false;
 			}
 			m_purgeDirs.insert(destPath + wpath + L'\\');
@@ -1233,10 +1284,8 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 					if (!m_handledFiles.insert(relativePath + L'\\').second)
 						return true;
 
-					u64 startTime = getTimeMs();
-					if (!ensureDirectory((destPath + relativePath).c_str()))
+					if (!ensureDirectory((destPath + relativePath).c_str(), stats.ioStats))
 						return false;
-					stats.createDirTimeMs += getTimeMs() - startTime;
 					++stats.createDirCount;
 					return true;
 				};
@@ -1244,14 +1293,84 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			}
 		}
 
-		return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), *overriddenHandleFileFunc);
+		if (modifiedRootPaths || !useFindFilesOptimization) // Optimized path can't handle modified root paths.. handle path inline without using findfiles optimization
+			return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), *overriddenHandleFileFunc);
+
+		if (const wchar_t* lastSlash = wcsrchr(wpath.c_str(), L'\\'))
+			findFileCache[WString(wpath.c_str(), lastSlash + 1)].insert(lastSlash + 1);
+		else
+			findFileCache[WString()].insert(std::move(wpath));
+		return true;
+
 	};
 
-	return handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc);
+	if (!handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc))
+		return false;
+
+	// Optimized path.. only populated if useFindFilesOptimization
+	for (auto& pe : findFileCache)
+	{
+		HandleFileFunc tempHandleFileFunc;
+		const HandleFileFunc* overriddenHandleFileFunc = &handleFileFunc;
+		bool handled = false;
+		if (!m_settings.flattenDestination)
+		{
+			if (!pe.first.empty())
+			{
+				tempHandleFileFunc = [&]()
+				{
+					if (handled)
+						return true;
+					handled = true;
+					if (!handleFileFunc())
+						return false;
+					const WString& relativePath = pe.first;
+					if (!m_handledFiles.insert(relativePath).second)
+						return true;
+
+					if (!ensureDirectory((rootDestPath + relativePath).c_str(), stats.ioStats))
+						return false;
+					++stats.createDirCount;
+					return true;
+				};
+				overriddenHandleFileFunc = &tempHandleFileFunc;
+			}
+		}
+
+		Vector<NameAndFileInfo> nafvec;
+		std::map<const wchar_t*, const NameAndFileInfo*, NoCaseWStringLess> lookup;
+		WString pathPath(rootSourcePath + pe.first);
+		if (!findFilesInDirectory(nafvec, logContext, pathPath, stats))
+			return false;
+		for (auto& entry : nafvec)
+			lookup.insert({entry.name.c_str(), &entry});
+		for (auto& e : pe.second)
+		{
+			WString relativePath(pe.first + e);
+			auto findIt = lookup.find(e.c_str());
+			if (findIt != lookup.end())
+			{
+				if (!handlePath(logContext, stats, rootSourcePath, rootDestPath, relativePath.c_str(), *overriddenHandleFileFunc, findIt->second->attributes, findIt->second->info))
+					return false;
+			}
+			else
+			{
+				wchar_t errorDesc[1024];
+				bool success = handleMissingFile(relativePath.c_str());
+				if (!success)
+				{
+					++stats.failCount;
+					logErrorf(L"Can't find file/directory %ls", (rootSourcePath + relativePath).c_str());
+					return false;
+				}
+			}
+		}
+	}
+	return true;
 }
 
 bool
-Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int depthLeft)
+Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int depthLeft, ClientStats& stats)
 {
 	// We don't enter symlinks for purging. Maybe this should be an command line option to treat symlinks just like normal directories
 	// but in the use cases we have at ea we don't want to enter symlinks for purging
@@ -1271,7 +1390,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 
     FindFileData fd; 
     WString searchStr = path + L"*.*";
-    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd); 
+    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd, stats.ioStats); 
     if(findHandle == InvalidFindFileHandle)
 	{
 		uint lastError = GetLastError();
@@ -1280,7 +1399,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 		logErrorf(L"FindFirstFile failed while purging with search string %ls: %ls", searchStr.c_str(), getErrorText(lastError).c_str());
 		return false;
 	}
-	ScopeGuard _([&]() { findClose(findHandle); });
+	ScopeGuard _([&]() { findClose(findHandle, stats.ioStats); });
 
 	bool errorOnMissingFile = false;
 	bool res = true;
@@ -1319,7 +1438,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 						res = false;
 					}
 				}
-				else if (!deleteDirectory(fullPath.c_str(), errorOnMissingFile))
+				else if (!deleteDirectory(fullPath.c_str(), stats.ioStats, errorOnMissingFile))
 					res = false;
 			}
 			else
@@ -1330,11 +1449,11 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 		}
         else if(isDir)
 		{
-			if (!purgeFilesInDirectory(path + fileName + L'\\', fileAttr, depthLeft - 1))
+			if (!purgeFilesInDirectory(path + fileName + L'\\', fileAttr, depthLeft - 1, stats))
 				res = false;
 		}
 
-	} while (findNextFile(findHandle, fd));
+	} while (findNextFile(findHandle, fd, stats.ioStats));
 
 	uint error = GetLastError();
 	if (error != ERROR_NO_MORE_FILES)
@@ -1347,7 +1466,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 }
 
 bool
-Client::ensureDirectory(const wchar_t* directory)
+Client::ensureDirectory(const wchar_t* directory, IOStats& ioStats)
 {
 	if (isValid(m_destConnection))
 	{
@@ -1358,7 +1477,7 @@ Client::ensureDirectory(const wchar_t* directory)
 	else
 	{
 		// Create directory through windows api
-		if (!eacopy::ensureDirectory(directory, true, m_settings.replaceSymLinksAtDestination, &m_createdDirs))
+		if (!eacopy::ensureDirectory(directory, ioStats, true, m_settings.replaceSymLinksAtDestination, &m_createdDirs))
 			return false;
 	}
 
@@ -1608,12 +1727,12 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			securityFile[41] = 0;
 			FileHandle hFile;
 			WString networkFilePath = m_settings.destDirectory + securityFile;
-			if (!openFileRead(networkFilePath.c_str(), hFile, true))
+			if (!openFileRead(networkFilePath.c_str(), hFile, stats.ioStats, true))
 				return nullptr;
-			ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile); });
+			ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile, AccessType_Read, stats.ioStats); });
 
 			u64 read = 0;
-			bool secretGuidRead = readFile(networkFilePath.c_str(), hFile, &m_secretGuid, sizeof(m_secretGuid),read) != 0;
+			bool secretGuidRead = readFile(networkFilePath.c_str(), hFile, &m_secretGuid, sizeof(m_secretGuid),read, stats.ioStats) != 0;
 
 			if (!sendData(sock, &m_secretGuid, sizeof(m_secretGuid)))
 				return nullptr;
@@ -1718,7 +1837,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	if (srcInfo.fileSize)
 		cmd.info = srcInfo;
 	else
-		if (getFileInfo(cmd.info, src) == 0)
+		if (getFileInfo(cmd.info, src, m_stats.ioStats) == 0)
 			return false;
 
 	outSize = cmd.info.fileSize;
@@ -1745,7 +1864,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
 
 		SendFileStats sendStats;
-		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionData, useBufferedIO, m_stats.copyStats, sendStats))
+		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionData, useBufferedIO, m_stats.ioStats, sendStats))
 			return false;
 		m_stats.sendTimeMs += sendStats.sendTimeMs;
 		m_stats.sendSize += sendStats.sendSize;
@@ -1771,7 +1890,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		bool existed;
 		u64 written;
 		WString fullDst = m_settings.destDirectory + dst;
-		bool success = copyFile(src, fullDst.c_str(), false, existed, written, copyContext, m_stats.copyStats, m_settings.useBufferedIO);
+		bool success = copyFile(src, srcInfo, fullDst.c_str(), false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO);
 		u8 copyResult = success ? 1 : 0;
 		if (!sendData(m_socket, &copyResult, sizeof(copyResult)))
 			return false;
@@ -1788,8 +1907,8 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 			return false;
 		m_stats.sendTimeMs += rsyncStats.sendTimeMs;
 		m_stats.sendSize += rsyncStats.sendSize;
-		m_stats.copyStats.readTimeMs += rsyncStats.readTimeMs;
-		//m_stats.copyStats.readSize += rsyncStats.readSize;
+		m_stats.ioStats.readMs += rsyncStats.readMs;
+		//m_stats.ioStats.readSize += rsyncStats.readSize;
 		m_stats.deltaCompressionTimeMs += rsyncStats.rsyncTimeMs;
 
 		u8 writeSuccess;
@@ -1839,7 +1958,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 	WString fullDest = m_settings.destDirectory + dst;
 
-	if (uint fileAttributes = getFileInfo(cmd.info, fullDest.c_str()))
+	if (uint fileAttributes = getFileInfo(cmd.info, fullDest.c_str(), m_stats.ioStats))
 		if (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			logErrorf(L"Trying to copy to file %ls which is a directory", fullDest.c_str());
@@ -1897,7 +2016,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 		// Read actual file from server
 		RecvFileStats recvStats;
-		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize, m_stats.copyStats, recvStats))
+		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize, m_stats.ioStats, recvStats))
 			return ReadFileResult_Error;
 		m_stats.recvTimeMs += recvStats.recvTimeMs;
 		m_stats.recvSize += recvStats.recvSize;
@@ -1912,7 +2031,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		bool existed;
 		u64 written;
 		WString fullSrc = m_settings.sourceDirectory + src;
-		if (!copyFile(fullSrc.c_str(), fullDest.c_str(), false, existed, written, copyContext, m_stats.copyStats, m_settings.useBufferedIO))
+		if (!copyFile(fullSrc.c_str(), srcInfo, fullDest.c_str(), false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO))
 			return ReadFileResult_Error;
 		outRead = written;
 		outSize = written;

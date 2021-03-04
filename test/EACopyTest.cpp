@@ -144,8 +144,9 @@ struct TestBase
 			}
 			wprintf(L"Running test %2u/%u '%ls'...", testIndex, count, name.c_str());
 			fflush(stdout);
-			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
-			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
+			IOStats stats;
+			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str(), stats));
+			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str(), stats));
 			EACOPY_ASSERT(ensureDirectory(testSourceDir.c_str()));
 			EACOPY_ASSERT(ensureDirectory(testDestDir.c_str()));
 			m_setupTime = 0;
@@ -161,8 +162,8 @@ struct TestBase
 			{
 				++s_skipCount;
 			}
-			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str()));
-			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str()));
+			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str(), stats));
+			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str(), stats));
 			if (log)
 			{
 				serverLog.deinit();
@@ -226,7 +227,7 @@ struct TestBase
 
 		FileInfo fileInfo;
 		fileInfo.fileSize = size;
-		EACOPY_ASSERT(createFile(fullFileName, fileInfo, data, true));
+		EACOPY_ASSERT(createFile(fullFileName, fileInfo, data, ioStats, true));
 
 		delete[] data;
 
@@ -257,6 +258,16 @@ struct TestBase
 		#endif	
 	}
 
+	uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName)
+	{
+		return eacopy::getFileInfo(outInfo, fullFileName, ioStats);
+	}
+
+	bool ensureDirectory(const wchar_t* directory)
+	{
+		return eacopy::ensureDirectory(directory, ioStats);
+	}
+
 	bool isEqual(const wchar_t* fileA, const wchar_t* fileB)
 	{
 		FileInfo a;
@@ -280,9 +291,9 @@ struct TestBase
 		FileHandle fileHandle;
 		(void)fileHandle; // suppress unused variable warning
 
-		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, true));
-		EACOPY_ASSERT(writeFile(fileName.c_str(), fileHandle, fileOrWildcard, strlen(fileOrWildcard)));
-		EACOPY_ASSERT(closeFile(fileName.c_str(), fileHandle));
+		EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, ioStats, true));
+		EACOPY_ASSERT(writeFile(fileName.c_str(), fileHandle, fileOrWildcard, strlen(fileOrWildcard), ioStats));
+		EACOPY_ASSERT(closeFile(fileName.c_str(), fileHandle, AccessType_Write, ioStats));
 	}
 
 	void setReadOnly(const wchar_t* file, bool readonly, bool source = true)
@@ -305,7 +316,7 @@ struct TestBase
 
 		FileInfo fileInfo;
 		fileInfo.fileSize = fileSize;
-		EACOPY_ASSERT(createFile(sourceFile, fileInfo, data, true));
+		EACOPY_ASSERT(createFile(sourceFile, fileInfo, data, ioStats, true));
 
 		delete[] data;
 	}
@@ -317,6 +328,7 @@ struct TestBase
 	WString testSourceDir;
 	WString testDestDir;
 	bool skipped = false;
+	IOStats ioStats;
 
 	static TestBase* s_firstTest;
 	static TestBase* s_lastTest;
@@ -415,7 +427,7 @@ EACOPY_TEST(SkipFile)
 	(void)existed; // suppress unused variable warning
 	(void)bytesCopied; // suppress unused variable warning
 
-	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), true, existed, bytesCopied, UseBufferedIO_Enabled));
+	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), true, existed, bytesCopied, ioStats, UseBufferedIO_Enabled));
 	EACOPY_ASSERT(!existed);
 	EACOPY_ASSERT(bytesCopied == 100);
 
@@ -513,7 +525,7 @@ EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 	EACOPY_ASSERT(!isSourceEqualDest(L"Foo.txt"));
 
 	FileHandle destFile;
-	openFileRead((testDestDir + L"Foo.txt").c_str(), destFile, true);
+	openFileRead((testDestDir + L"Foo.txt").c_str(), destFile, ioStats, true);
 	EACOPY_ASSERT(destFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -527,7 +539,7 @@ EACOPY_TEST(CopyFileDestLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		closeFile(L"", destFile);
+		closeFile(L"", destFile, AccessType_Read, ioStats);
 		return 0;
 	});
 
@@ -544,7 +556,7 @@ EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	FileHandle sourceFile;
-	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, ioStats, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -558,7 +570,7 @@ EACOPY_TEST(CopyFileSourceSharedReadLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		closeFile(L"", sourceFile);
+		closeFile(L"", sourceFile, AccessType_Read, ioStats);
 		return 0;
 	});
 
@@ -575,7 +587,7 @@ EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	FileHandle sourceFile;
-	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, ioStats, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -589,7 +601,7 @@ EACOPY_TEST(CopyFileSourceReadLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		closeFile(L"", sourceFile);
+		closeFile(L"", sourceFile, AccessType_Read, ioStats);
 		return 0;
 	});
 
@@ -606,7 +618,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 {
 	createTestFile(L"Foo.txt", 10);
 	FileHandle sourceFile;
-	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, true, nullptr, true, false);
+	openFileRead((testSourceDir + L"Foo.txt").c_str(), sourceFile, ioStats, true, nullptr, true, false);
 	EACOPY_ASSERT(sourceFile);
 
 	ClientSettings clientSettings(getDefaultClientSettings());
@@ -620,7 +632,7 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 	{
 		while (clientStats.retryCount == 0)
 			Sleep(10);
-		closeFile(L"", sourceFile);
+		closeFile(L"", sourceFile, AccessType_Read, ioStats);
 		return 0;
 	});
 
