@@ -264,13 +264,25 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.connectTimeMs += threadStats.connectTimeMs;
 		outStats.ioStats.createReadMs += threadStats.ioStats.createReadMs;
 		outStats.ioStats.closeReadMs += threadStats.ioStats.closeReadMs;
+		outStats.ioStats.closeReadCount += threadStats.ioStats.closeReadCount;
 		outStats.ioStats.readMs += threadStats.ioStats.readMs;
+		outStats.ioStats.readCount += threadStats.ioStats.readCount;
+		outStats.ioStats.createReadCount += threadStats.ioStats.createReadCount;
 		outStats.ioStats.createWriteMs += threadStats.ioStats.createWriteMs;
+		outStats.ioStats.createWriteCount += threadStats.ioStats.createWriteCount;
 		outStats.ioStats.closeWriteMs += threadStats.ioStats.closeWriteMs;
+		outStats.ioStats.closeWriteCount += threadStats.ioStats.closeWriteCount;
 		outStats.ioStats.writeMs += threadStats.ioStats.writeMs;
+		outStats.ioStats.writeCount += threadStats.ioStats.writeCount;
 		outStats.ioStats.setLastWriteTimeMs += threadStats.ioStats.setLastWriteTimeMs;
+		outStats.ioStats.setLastWriteTimeCount += threadStats.ioStats.setLastWriteTimeCount;
 		outStats.ioStats.findFileMs += threadStats.ioStats.findFileMs;
+		outStats.ioStats.findFileCount += threadStats.ioStats.findFileCount;
 		outStats.ioStats.fileInfoMs += threadStats.ioStats.fileInfoMs;
+		outStats.ioStats.fileInfoCount += threadStats.ioStats.fileInfoCount;
+		outStats.ioStats.createDirCount += threadStats.ioStats.createDirCount;
+		outStats.ioStats.createDirMs += threadStats.ioStats.createDirMs;
+
 	}
 
 	outStats.compressionAverageLevel = outStats.copySize ? (float)((double)outStats.compressionLevelSum / outStats.copySize) : 0;
@@ -1074,6 +1086,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			u64 toRead = CopyContextBufferSize - left - 1;
 			{
 				TimerScope _(stats.ioStats.readMs);
+				++stats.ioStats.readCount;
 				if (!readFile(fullPath.c_str(), hFile, buffer + left, toRead, read, stats.ioStats))
 				{
 					logErrorf(L"Failed reading input file %ls: %ls (Tried to read %u bytes after reading a total of %u bytes)", fullPath.c_str(), getLastErrorText().c_str(), toRead, totalRead);

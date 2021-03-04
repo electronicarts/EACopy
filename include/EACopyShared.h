@@ -190,14 +190,26 @@ struct IOStats
 	u64					createReadMs = 0;
 	u64					readMs = 0;
 	u64					closeReadMs = 0;
+	uint				createReadCount = 0;
+	uint				readCount = 0;
+	uint				closeReadCount = 0;
 
 	u64					createWriteMs = 0;
 	u64					writeMs = 0;
 	u64					closeWriteMs = 0;
+	uint				createWriteCount = 0;
+	uint				writeCount = 0;
+	uint				closeWriteCount = 0;
+
+
 	u64					setLastWriteTimeMs = 0;
 	u64					findFileMs = 0;
 	u64					fileInfoMs = 0;
 	u64					createDirMs = 0;
+	uint				setLastWriteTimeCount = 0;
+	uint				findFileCount = 0;
+	uint				fileInfoCount = 0;
+	uint				createDirCount = 0;
 };
 
 

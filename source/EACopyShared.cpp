@@ -668,6 +668,7 @@ bool isDotOrDotDot(const wchar_t* str)
 FindFileHandle
 findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioStats)
 {
+	++ioStats.findFileCount;
 	TimerScope _(ioStats.findFileMs);
 #if defined(_WIN32)
 	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
@@ -858,6 +859,7 @@ void removeTemporarySymlinks(const wchar_t* path)
 
 uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats)
 {
+	++ioStats.fileInfoCount;
 	TimerScope _(ioStats.fileInfoMs);
 
 	#if defined(_WIN32)
@@ -949,6 +951,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	if (expectCreationAndParentExists)
 	{
 		{
+			++ioStats.createDirCount;
 			TimerScope _(ioStats.createDirMs);
 			if (CreateDirectoryW(directory, NULL) != 0)
 			{
@@ -1033,6 +1036,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
 	{
+		++ioStats.createDirCount;
 		TimerScope _(ioStats.createDirMs);
 		if (CreateDirectoryW(validDirectory, NULL) != 0)
 		{
@@ -1196,6 +1200,7 @@ bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool isSequentialScan, bool sharedRead)
 {
 	TimerScope _(ioStats.createReadMs);
+	++ioStats.createReadCount;
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	uint sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
@@ -1234,6 +1239,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 	if (hidden)
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
 
+	++ioStats.createWriteCount;
 	TimerScope _(ioStats.createWriteMs);
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
@@ -1256,6 +1262,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 
 bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped)
 {
+	++ioStats.writeCount;
 	TimerScope _(ioStats.writeMs);
 	#if defined(_WIN32)
 	if (overlapped)
@@ -1310,6 +1317,7 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats)
 {
 	TimerScope _(ioStats.readMs);
+	++ioStats.readCount;
 	#if defined(_WIN32)
 	DWORD dwRead = 0;
 	bool success = ReadFile(file, destData, toRead, &dwRead, NULL) != 0;
@@ -1347,6 +1355,7 @@ bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime la
 	//	return false;
 	//}
 
+	++ioStats.setLastWriteTimeCount;
 	TimerScope _(ioStats.setLastWriteTimeMs);
 	#if defined(_WIN32)
 	if (SetFileTime(file, NULL, NULL, (FILETIME*)&lastWriteTime))
@@ -1382,6 +1391,7 @@ bool closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType,
 	if (file == InvalidFileHandle)
 		return true;
 
+	++(accessType == AccessType_Read ? ioStats.closeReadCount : ioStats.closeWriteCount);
 	TimerScope _(accessType == AccessType_Read ? ioStats.closeReadMs : ioStats.closeWriteMs);
 	#if defined(_WIN32)
 	bool success = CloseHandle(file) != 0;
@@ -1510,6 +1520,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		u64 startCreateReadTimeMs = getTimeMs();
 		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
 		ioStats.createReadMs += getTimeMs() - startCreateReadTimeMs;
+		++ioStats.createReadCount;
 
 		if (sourceFile == InvalidFileHandle)
 		{
@@ -1517,13 +1528,14 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			return false;
 		}
 
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); CloseHandle(sourceFile); });
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
 
 		OVERLAPPED osWrite = {0,0,0};
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 
+		++ioStats.createWriteCount;
 		u64 startCreateWriteTimeMs = getTimeMs();
 		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
 		ioStats.createWriteMs += getTimeMs() - startCreateWriteTimeMs;
@@ -1540,7 +1552,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			logErrorf(L"Failed to create file %ls: %ls", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
-		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); TimerScope _(ioStats.closeWriteMs); CloseHandle(destFile); });
+		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); ++ioStats.closeWriteCount; TimerScope _(ioStats.closeWriteMs); CloseHandle(destFile); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -1552,6 +1564,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		{
 			if (sizeFilled)
 			{
+				++ioStats.writeCount;
 				TimerScope _(ioStats.writeMs);
 
 				if (UseOverlappedCopy && WaitForSingleObject(osWrite.hEvent, INFINITE) != WAIT_OBJECT_0)
@@ -1586,6 +1599,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 
 			if (left)
 			{
+				++ioStats.readCount;
 				TimerScope _(ioStats.readMs);
 
 				uint toRead = (uint)std::min(left, u64(ReadChunkSize));
@@ -1635,12 +1649,14 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		}
 
 		{
-			TimerScope _(ioStats.closeReadMs); 
+			++ioStats.closeReadCount;
+			TimerScope _(ioStats.closeReadMs);
 			CloseHandle(sourceFile);
 			sourceFile = InvalidFileHandle;
 		}
 
 		{
+			++ioStats.closeWriteCount;
 			TimerScope _(ioStats.closeWriteMs); 
 			CloseHandle(destFile);
 			destFile = InvalidFileHandle;

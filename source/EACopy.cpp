@@ -353,21 +353,37 @@ const wchar_t* getPadding(const wchar_t* name)
 	return L"              " + wcslen(name);
 }
 
-void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms)
+void addCount(wchar_t* buf, uint offset, uint count)
+{
+	if (count)
+	{
+		wchar_t countBuf[32];
+		itow(count, countBuf, sizeof(countBuf));
+		uint len = wcslen(countBuf);
+
+		swprintf(buf + offset, L" (%u)%ls", count, L"      " + len);
+	}
+	else
+		wcscat(buf + offset, L"         ");
+}
+
+void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint count)
 {
 	if (!ms)
 		return;
 	wchar_t buf[1024];
-	swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
+	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
+	addCount(buf, size, count);
 	stats.push_back(buf);
 }
 
-void populateStatsSize(Vector<WString>& stats, const wchar_t* name, u64 size)
+void populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes)
 {
-	if (!size)
+	if (!bytes)
 		return;
 	wchar_t buf[1024];
-	swprintf(buf, L"  %ls:%ls%ls", name, getPadding(name), toPretty(size, 7).c_str());
+	uint size = swprintf(buf, L"  %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
+	addCount(buf, size, 0);
 	stats.push_back(buf);
 }
 void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value)
@@ -375,7 +391,8 @@ void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value
 	if (!value)
 		return;
 	wchar_t buf[1024];
-	swprintf(buf, L"  %ls:%ls%7.1f", name, getPadding(name), value);
+	uint size = swprintf(buf, L"  %ls:%ls%7.1f", name, getPadding(name), value);
+	addCount(buf, size, 0);
 	stats.push_back(buf);
 }
 
@@ -496,29 +513,29 @@ int main(int argc, char* argv_[])
 		stats.ioStats.writeMs += stats.ioStats.closeWriteMs + stats.ioStats.createWriteMs;
 
 		Vector<WString> statsVec;
-		populateStatsTime(statsVec, L"ConnectTime", stats.connectTimeMs);
-		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs);
-		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs);
-		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs);
-		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs);
-		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoMs);
-		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTimeMs);
-		populateStatsTime(statsVec, L"SendFile", stats.sendTimeMs);
-		populateStatsSize(statsVec, L"SendBytes", stats.sendSize);
-		populateStatsTime(statsVec, L"RecvFile", stats.recvTimeMs);
-		populateStatsSize(statsVec, L"RecvBytes", stats.recvSize);
-		populateStatsTime(statsVec, L"CompressFile", stats.compressTimeMs);
+		populateStatsTime(statsVec, L"ConnectTime", stats.connectTimeMs, 0);
+		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs, stats.ioStats.findFileCount);
+		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs, stats.ioStats.createReadCount);
+		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs, stats.ioStats.createWriteCount);
+		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs, stats.ioStats.createDirCount);
+		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoMs, stats.ioStats.fileInfoCount);
+		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTimeMs, stats.ioStats.setLastWriteTimeCount);
+		populateStatsTime(statsVec, L"SendFile", stats.sendTimeMs, 0);
+		populateStatsBytes(statsVec, L"SendBytes", stats.sendSize);
+		populateStatsTime(statsVec, L"RecvFile", stats.recvTimeMs, 0);
+		populateStatsBytes(statsVec, L"RecvBytes", stats.recvSize);
+		populateStatsTime(statsVec, L"CompressFile", stats.compressTimeMs, 0);
 		populateStatsValue(statsVec, L"CompressLevel", stats.compressionAverageLevel);
-		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTimeMs);
-		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTimeMs);
-		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTimeMs);
+		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTimeMs, 0);
+		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTimeMs, 0);
+		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTimeMs, 0);
 
 		logInfoLinef();
 
 		for (uint i=0; i<statsVec.size(); i += 2)
 		{
 			if (i + 1 < statsVec.size())
-				logInfoLinef(L"%ls   %ls", statsVec[i].c_str(), statsVec[i+1].c_str());
+				logInfoLinef(L"%ls%ls", statsVec[i].c_str(), statsVec[i+1].c_str());
 			else
 				logInfoLinef(L"%ls", statsVec[i].c_str());
 		}
