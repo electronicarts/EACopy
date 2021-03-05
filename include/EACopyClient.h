@@ -136,6 +136,7 @@ private:
 	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& sourcePath, const WString& fileName, const WString& destPath);
+	bool				processQueuedWildcardFileEntries(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& rootDestPath);
 	bool				purgeFilesInDirectory(const WString& destPath, uint destPathAttributes, int depthLeft, ClientStats& stats);
 	bool				ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;

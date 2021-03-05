@@ -153,6 +153,8 @@ Client::process(Log& log, ClientStats& outStats)
 			for (auto& file : m_settings.filesOrWildcardsFiles)
 				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir))
 					break;
+			if (!processQueuedWildcardFileEntries(logContext, outStats, findFileCache, sourceDir, destDir))
+				return false;
 		}
 		else
 		{
@@ -1292,8 +1294,12 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 	if (!handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc))
 		return false;
+	return true;
+}
 
-	// Optimized path.. only populated if useFindFilesOptimization
+bool
+Client::processQueuedWildcardFileEntries(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& rootDestPath)
+{
 	for (auto& pe : findFileCache)
 	{
 		Vector<NameAndFileInfo> nafvec;
