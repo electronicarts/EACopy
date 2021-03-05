@@ -110,7 +110,6 @@ private:
 
 	// Types
 	struct				CopyEntry { WString src; WString dst; FileInfo srcInfo; };
-	using				HandleFileFunc = Function<bool()>;
 	using				HandleFileOrWildcardFunc = Function<bool(char*)>;
 	using				CopyEntries = List<CopyEntry>;
 	using				CachedFindFileEntries = std::map<WString, Set<WString, NoCaseWStringLess>, NoCaseWStringLess>;
@@ -121,20 +120,21 @@ private:
 	void				resetWorkState(Log& log);
 	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
 	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
-	bool				connectToServer(const wchar_t* networkPath, uint connectionIndex, class Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
+	bool				connectToServer(const wchar_t* networkPath, uint connectionIndex, Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(uint connectionIndex, ClientStats& stats);
-	bool				traverseFilesInDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
+	bool				traverseFilesInDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats);
 	bool				findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, const WString& path, ClientStats& stats);
-	bool				handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc);
-	bool				handleDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats);
+	bool				addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, ClientStats& stats);
+	bool				handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, ClientStats& stats);
+	bool				handleDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, ClientStats& stats);
 	bool				handleMissingFile(const wchar_t* fileName);
-	bool				handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc);
-	bool				handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc, uint attributes, const FileInfo& fileInfo);
+	bool				handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName);
+	bool				handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo);
 	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
-	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileFunc& handleFileFunc);
+	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				purgeFilesInDirectory(const WString& destPath, uint destPathAttributes, int depthLeft, ClientStats& stats);
-	bool				ensureDirectory(const wchar_t* directory, IOStats& ioStats);
+	bool				ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
 	bool				isIgnoredDirectory(const wchar_t* directory);
@@ -156,7 +156,9 @@ private:
 	CriticalSection		m_copyEntriesCs;
 	CopyEntries			m_copyEntries;
 	FilesSet			m_handledFiles;
+	CriticalSection		m_handledFilesCs;
 	FilesSet			m_createdDirs;
+	CriticalSection		m_createdDirsCs;
 	FilesSet			m_purgeDirs;
 	CriticalSection		m_networkInitCs;
 	bool				m_networkWsaInitDone;

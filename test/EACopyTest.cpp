@@ -192,6 +192,7 @@ struct TestBase
 		settings.sourceDirectory = testSourceDir;
 		settings.destDirectory = testDestDir;
 		settings.useServer = UseServer_Disabled;
+		settings.retryCount = 0;
 		if (wildcard)
 			settings.filesOrWildcards.push_back(wildcard);
 		return settings;
@@ -647,7 +648,6 @@ EACOPY_TEST(CopyFileSourceWriteLockedAndThenUnlocked)
 EACOPY_TEST(CopyWildcardMissing)
 {
 	ClientSettings clientSettings = getDefaultClientSettings(L"Test.txt");
-	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
@@ -837,7 +837,6 @@ EACOPY_TEST(CopyFileListMissing)
 	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
 	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
 	Client client(clientSettings);
-	clientSettings.retryCount = 0;
 
 	EACOPY_ASSERT(client.process(clientLog) != 0);
 }
@@ -864,7 +863,6 @@ EACOPY_TEST(CopyFileListMissingAndFound)
 	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
 	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
 	Client client(clientSettings);
-	clientSettings.retryCount = 0;
 
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) != 0);
@@ -906,7 +904,6 @@ EACOPY_TEST(CopyFileListExcludeListError)
 	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
 	Client client(clientSettings);
 	clientSettings.threadCount = 2;
-	clientSettings.retryCount = 0;
 
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
@@ -969,7 +966,6 @@ EACOPY_TEST(CopyFileTargetDirectoryIsfile)
 	clientSettings.copySubdirDepth = 1;
 	clientSettings.copyEmptySubdirectories = true;
 	clientSettings.purgeDestination = true;
-	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 
 	EACOPY_ASSERT(client.process(clientLog) != 0);
@@ -1252,7 +1248,6 @@ EACOPY_TEST(ServerCopyMultiThreaded)
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
 		clientSettings.threadCount = 8;
-		clientSettings.retryCount = 0;
 		Client client(clientSettings);
 
 		ClientStats clientStats;
@@ -1277,8 +1272,7 @@ EACOPY_TEST(ServerCopyMultiClient)
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
-		clientSettings.destDirectory = testDestDir + L"\\" + iStr;
-		clientSettings.retryCount = 0;
+		clientSettings.destDirectory = testDestDir + iStr + L"\\";
 		Client client(clientSettings);
 
 		ClientStats clientStats;
@@ -1301,12 +1295,12 @@ EACOPY_TEST(ServerCopyLink)
 	Client client(clientSettings);
 
 	ClientStats clientStats1;
-	clientSettings.destDirectory = testDestDir + L"\\1";
+	clientSettings.destDirectory = testDestDir + L"1\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats1) == 0);
 	EACOPY_ASSERT(clientStats1.copyCount == 1);
 
 	ClientStats clientStats2;
-	clientSettings.destDirectory = testDestDir + L"\\2";
+	clientSettings.destDirectory = testDestDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats2) == 0);
 	EACOPY_ASSERT(clientStats2.linkCount == 1);
 }
@@ -1340,7 +1334,7 @@ EACOPY_TEST(ServerCopyExistingDestAndFoundLinkSomewhereElse)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
-	clientSettings.destDirectory = testDestDir + L"\\1";
+	clientSettings.destDirectory = testDestDir + L"1\\";
 	Client client(clientSettings);
 
 	ClientStats clientStats;
@@ -1349,7 +1343,7 @@ EACOPY_TEST(ServerCopyExistingDestAndFoundLinkSomewhereElse)
 
 	ClientSettings clientSettings2(getDefaultClientSettings());
 	clientSettings2.useServer = UseServer_Required;
-	clientSettings2.destDirectory = testDestDir + L"\\2";
+	clientSettings2.destDirectory = testDestDir + L"2\\";
 	Client client2(clientSettings2);
 	EACOPY_ASSERT(client2.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.linkCount == 1);
@@ -1370,7 +1364,6 @@ EACOPY_TEST(ServerCopyBadDest)
 	clientSettings.useServer = UseServer_Required;
 	clientSettings.destDirectory = L"\\\\localhost\\";
 	clientSettings.retryWaitTimeMs = 1;
-	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 
 	ClientStats clientStats;
@@ -1489,16 +1482,16 @@ EACOPY_TEST(ServerLinkNotExists)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
-	clientSettings.destDirectory = testDestDir + L"\\1";
+	clientSettings.destDirectory = testDestDir + L"1\\";
 
 	Client client(clientSettings);
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 
-	deleteFile((testDestDir + L"\\1\\Foo.txt").c_str());
+	deleteFile((testDestDir + L"1\\Foo.txt").c_str());
 
-	clientSettings.destDirectory = testDestDir + L"\\2";
+	clientSettings.destDirectory = testDestDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 2);
 }
@@ -1513,17 +1506,17 @@ EACOPY_TEST(ServerLinkModified)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
-	clientSettings.destDirectory = testDestDir + L"\\1";
+	clientSettings.destDirectory = testDestDir + L"1\\";
 
 	Client client(clientSettings);
 	ClientStats clientStats;
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 
-	deleteFile((testDestDir + L"\\1\\Foo.txt").c_str());
+	deleteFile((testDestDir + L"1\\Foo.txt").c_str());
 	createTestFile(L"1\\Foo.txt", 10, false);
 
-	clientSettings.destDirectory = testDestDir + L"\\2";
+	clientSettings.destDirectory = testDestDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 2);
 }
@@ -1540,7 +1533,7 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Test\\Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
 
@@ -1555,7 +1548,7 @@ EACOPY_TEST(CopyFileWithDoubleSlashPath2)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Test2\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Test\\Test2\\Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 }
 
@@ -1575,16 +1568,16 @@ EACOPY_TEST(CopyFileWithExplicitWildCardExtensionUnderDirectories)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Test\\Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == fileSize);
 
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Bar.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Bar.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == 100);
 
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test2\\Foo2.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Test2\\Foo2.txt").c_str()) != 0);
 	EACOPY_ASSERT(destFile.fileSize == 1000);
 
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\Test3\\NotFoo.xml").c_str()) == 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"Test3\\NotFoo.xml").c_str()) == 0);
 }
 #endif
 
@@ -1610,7 +1603,7 @@ EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 	clientSettings.deltaCompressionThreshold = 0;
 
 	{
-		clientSettings.destDirectory = testDestDir+ L"\\1";
+		clientSettings.destDirectory = testDestDir+ L"1\\";
 		Client client(clientSettings);
 		ClientStats clientStats;
 		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
@@ -1620,7 +1613,7 @@ EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 	writeRandomData((testSourceDir + L"Foo.txt").c_str(), fileSize);
 
 	{
-		clientSettings.destDirectory = testDestDir+ L"\\2";
+		clientSettings.destDirectory = testDestDir+ L"2\\";
 		Client client(clientSettings);
 		ClientStats clientStats;
 		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
@@ -1630,7 +1623,7 @@ EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 	FileInfo sourceFile;
 	EACOPY_ASSERT(getFileInfo(sourceFile, (testSourceDir + L"Foo.txt").c_str()) != 0);
 	FileInfo destFile;
-	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\2\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"2\\Foo.txt").c_str()) != 0);
 
 	EACOPY_ASSERT(destFile.fileSize == sourceFile.fileSize);
 	EACOPY_ASSERT(destFile.lastWriteTime.dwLowDateTime == sourceFile.lastWriteTime.dwLowDateTime && destFile.lastWriteTime.dwHighDateTime == sourceFile.lastWriteTime.dwHighDateTime);
@@ -1733,7 +1726,6 @@ EACOPY_TEST(ServerCopyMissingFileListDestIsLocal)
 	ClientSettings clientSettings = getDefaultClientSettings(nullptr);
 	clientSettings.useServer = UseServer_Required;
 	clientSettings.filesOrWildcardsFiles.push_back(L"FileList.txt");
-	clientSettings.retryCount = 0;
 
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) != 0);
@@ -1757,7 +1749,6 @@ EACOPY_TEST(CopyFileWithVeryLongPathDestIsLocal)
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
 	clientSettings.copySubdirDepth = 1000;
-	clientSettings.retryCount = 0;
 	Client client(clientSettings);
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
@@ -1769,7 +1760,7 @@ EACOPY_TEST(CopyLargeFile)
 	u64 fileSize = u64(INT_MAX) + 2*1024*1024 + 123;
 	createTestFile(L"Foo.txt", fileSize);
 	FileInfo sourceFile;
-	EACOPY_ASSERT(getFileInfo(sourceFile, (testSourceDir + L"\\Foo.txt").c_str()) != 0);
+	EACOPY_ASSERT(getFileInfo(sourceFile, (testSourceDir + L"Foo.txt").c_str()) != 0);
 	EACOPY_ASSERT(sourceFile.fileSize == fileSize);
 
 	for (uint i=0; i!=1; ++i)
@@ -1806,13 +1797,13 @@ EACOPY_TEST(ServerCopyLargeFile)
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
-		clientSettings.destDirectory = testDestDir+ L"\\" + iStr + L'\\';
+		clientSettings.destDirectory = testDestDir + iStr + L'\\';
 
 		Client client(clientSettings);
 		EACOPY_ASSERT(client.process(clientLog) == 0);
 
 		FileInfo destFile;
-		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\" + iStr + L"\\Foo.txt").c_str()) != 0);
+		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + iStr + L"\\Foo.txt").c_str()) != 0);
 		EACOPY_ASSERT(destFile.fileSize == fileSize);
 	}
 }
@@ -1833,7 +1824,7 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
-		clientSettings.destDirectory = testDestDir+ L"\\" + iStr + L'\\';
+		clientSettings.destDirectory = testDestDir + iStr + L'\\';
 		clientSettings.compressionEnabled = true;
 		clientSettings.compressionLevel = 4;
 
@@ -1841,7 +1832,7 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 		EACOPY_ASSERT(client.process(clientLog) == 0);
 
 		FileInfo destFile;
-		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + L"\\" + iStr + L"\\Foo.txt").c_str()) != 0);
+		EACOPY_ASSERT(getFileInfo(destFile, (testDestDir + iStr + L"\\Foo.txt").c_str()) != 0);
 		EACOPY_ASSERT(destFile.fileSize == fileSize);
 	}
 }
@@ -1866,12 +1857,11 @@ EACOPY_TEST(ServerTestMemory)
 
 		ClientSettings clientSettings;
 		clientSettings.sourceDirectory = testSourceDir;
-		clientSettings.destDirectory = testDestDir + L"\\" + iStr + L'\\';
+		clientSettings.destDirectory = testDestDir + iStr + L'\\';
 		clientSettings.filesOrWildcards.push_back(L"*.*");
 		clientSettings.copySubdirDepth = 100;
 		clientSettings.useServer = UseServer_Required;
 		clientSettings.threadCount = 8;
-		clientSettings.retryCount = 0;
 		clientSettings.compressionEnabled = true;
 
 		Client client(clientSettings);
@@ -2149,6 +2139,8 @@ int main(int argc, char* argv_[])
 		std::replace(g_testDestDir.begin(), g_testDestDir.end(), '/', '\\');
 #endif
 	}
+
+	testServerLinkNotExists();
 
 	// Run all the tests
 	TestBase::runAll();

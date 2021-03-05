@@ -146,45 +146,18 @@ Client::process(Log& log, ClientStats& outStats)
 			break;
 
 	{
-		// Lazily create destination root directory based on if it is needed
-		bool destDirCreated = false;
-		auto createDirectoryFunc = [&]()
-		{
-			if (destDirCreated)
-				return true;
-			destDirCreated = true;
-
-			int retryCount = m_settings.retryCount;
-			while (true)
-			{
-				if (ensureDirectory(destDir.c_str(), outStats.ioStats))
-					return true;
-
-				if (retryCount-- == 0)
-					return false;
-
-				// Reset last error and try again!
-				logContext.resetLastError();
-				logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destDir.c_str(), m_settings.retryWaitTimeMs/1000);
-				Sleep(m_settings.retryWaitTimeMs);
-
-				++outStats.retryCount;
-			}
-			++outStats.createDirCount;
-		};
-
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination directories needed.
 		if (!m_settings.filesOrWildcardsFiles.empty())
 		{
 			CachedFindFileEntries findFileCache;
 			for (auto& file : m_settings.filesOrWildcardsFiles)
-				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir, createDirectoryFunc))
+				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir))
 					break;
 		}
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-				if (!traverseFilesInDirectory(logContext, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, createDirectoryFunc, outStats))
+				if (!traverseFilesInDirectory(logContext, m_destConnection, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, outStats))
 					break;
 		}
 	}
@@ -606,13 +579,67 @@ Client::workerThread(uint connectionIndex, ClientStats& stats)
 }
 
 bool
-Client::handleFile(const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, const HandleFileFunc& handleFileFunc)
+Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, ClientStats& stats)
+{
+	WString destFile = destFullPath.c_str() + m_settings.destDirectory.size();
+
+	uint lastSlashIndex = destFile.find_last_of(L'\\');
+	if (lastSlashIndex != WString::npos)
+	{
+		bool first = true;
+		WString destPath(destFile, 0, lastSlashIndex+1);
+		while (true)
+		{
+			ScopedCriticalSection cs(m_handledFilesCs); // Need to cover entire thing to make sure directory is always created
+
+			if (!m_handledFiles.insert(destPath).second)
+				break;
+			if (first)
+			{
+				WString destFullPath2(destFullPath);
+				destFullPath2.resize(destFullPath2.find_last_of(L'\\') + 1);
+				int retryCount = m_settings.retryCount;
+				while (true)
+				{
+					if (ensureDirectory(destConnection, destFullPath2.c_str(), stats.ioStats))
+						break;
+
+					if (retryCount-- == 0)
+						return false;
+
+					// Reset last error and try again!
+					logContext.resetLastError();
+					logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destFullPath2.c_str(), m_settings.retryWaitTimeMs/1000);
+					Sleep(m_settings.retryWaitTimeMs);
+
+					++stats.retryCount;
+				}
+				++stats.createDirCount;
+			}
+			first = false;
+			if (destPath.empty())
+				break;
+			destPath.resize(destPath.size()-1);
+			lastSlashIndex = destPath.find_last_of(L'\\');
+			if (lastSlashIndex == WString::npos)
+				break;
+			destPath.resize(lastSlashIndex + 1);
+		}
+
+	}
+	return true;
+}
+
+bool
+Client::handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, ClientStats& stats)
 {
 	const wchar_t* destFileName = fileName;
 
+	const wchar_t* lastSlash = wcsrchr(fileName, L'\\');
+
 	// If destination is flatten we remove relative path
 	if (m_settings.flattenDestination)
-		if (const wchar_t* lastSlash = wcsrchr(fileName, L'\\'))
+		if (lastSlash)
 			destFileName = lastSlash + 1;
 
 	WString destFullPath = destPath + destFileName;
@@ -622,17 +649,18 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 		if (PathMatchSpecW(destFullPath.c_str(), excludeWildcard.c_str()))
 			return true;
 
+	// This is the path of the dest file relative root directory
 	WString destFile = destFullPath.c_str() + m_settings.destDirectory.size();
 
 	// Keep track of handled files so we don't do duplicated work
-	if (!m_handledFiles.insert(destFile).second)
-		return true;
+	{
+		ScopedCriticalSection cs(m_handledFilesCs);
+		if (!m_handledFiles.insert(destFile).second)
+			return true;
+	}
 
-	// Call handler now when we've decided to copy file (will create directories on target side etc)
-	if (handleFileFunc)
-		if (!handleFileFunc())
-			return false;
-
+	if (!addDirectoryToHandledFiles(logContext, destConnection, destFullPath, stats))
+		return false;
 	WString srcFile = sourcePath + fileName;
 
 	// Add entry (workers will pick this up as soon as possible )
@@ -646,7 +674,7 @@ Client::handleFile(const WString& sourcePath, const WString& destPath, const wch
 }
 
 bool
-Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
+Client::handleDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, ClientStats& stats)
 {
 	if (isIgnoredDirectory(directory))
  		return true;
@@ -656,56 +684,12 @@ Client::handleDirectory(LogContext& logContext, const WString& sourcePath, const
 	if (!m_settings.flattenDestination && *directory)
 		newDestDirectory = newDestDirectory + directory + L'\\';
 	
-	bool firstFound = m_settings.flattenDestination;
-
-	// Lambda to create directory if decided to write file(s) in there
-	auto createDirectoryFunc = [&]()
-	{
-		if (handleFileFunc)
-			if (!handleFileFunc())
-				return false;
-
-		if (firstFound)
-			return true;
-		firstFound = true;
-
-		const wchar_t* relDir = newDestDirectory.c_str() + m_settings.destDirectory.size();
-		if (!m_handledFiles.insert(relDir).second)
-			return true;
-
-		int retryCount = m_settings.retryCount;
-		while (true)
-		{
-			if (ensureDirectory(newDestDirectory.c_str(), stats.ioStats))
-				break;
-
-			if (retryCount-- == 0)
-				return false;
-
-			// Reset last error and try again!
-			logContext.resetLastError();
-			logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", newDestDirectory.c_str(), m_settings.retryWaitTimeMs/1000);
-			Sleep(m_settings.retryWaitTimeMs);
-
-			++stats.retryCount;
-		}
-		++stats.createDirCount;
-
-		if (m_settings.dirCopyFlags != 0)
-		{
-			// TODO: Implement this
-		}
-
-		return true;
-	};
-
-	// Create directories regardless if there are files or not in there
 	if (m_settings.copyEmptySubdirectories)
-		if (!createDirectoryFunc())
+		if (!addDirectoryToHandledFiles(logContext, destConnection, newDestDirectory, stats))
 			return false;
 
 	// Find files to copy
-	return traverseFilesInDirectory(logContext, newSourceDirectory, newDestDirectory, wildcard, depthLeft, createDirectoryFunc, stats);
+	return traverseFilesInDirectory(logContext, destConnection, newSourceDirectory, newDestDirectory, wildcard, depthLeft, stats);
 }
 
 bool
@@ -717,13 +701,14 @@ Client::handleMissingFile(const wchar_t* fileName)
 	for (auto& excludeWildcard : m_settings.excludeWildcards)
 		if (PathMatchSpecW(fileName, excludeWildcard.c_str()))
 			return true;
+	ScopedCriticalSection cs(m_handledFilesCs);
 	if (m_handledFiles.find(fileName) != m_handledFiles.end())
 		return true;
 	return false;
 }
 
 bool
-Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc)
+Client::handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName)
 {
 	WString fullFileName = sourcePath;
 	if (fileName[0])
@@ -785,16 +770,16 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 		}
 	}
 
-	return handlePath(logContext, stats, sourcePath, destPath, fileName, handleFileFunc, attributes, fileInfo);
+	return handlePath(logContext, destConnection, stats, sourcePath, destPath, fileName, attributes, fileInfo);
 }
 
 bool
-Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const HandleFileFunc& handleFileFunc, uint attributes, const FileInfo& fileInfo)
+Client::handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo)
 {
 	// Handle directory
 	if (attributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
-		if (!handleDirectory(logContext, sourcePath, destPath, fileName, L"*.*", m_settings.copySubdirDepth, handleFileFunc, stats))
+		if (!handleDirectory(logContext, destConnection, sourcePath, destPath, fileName, L"*.*", m_settings.copySubdirDepth, stats))
 			return false;
 	}
 	else //if (attributes & FILE_ATTRIBUTE_NORMAL) // Handle file
@@ -811,12 +796,12 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 
 			WString newSourcePath(sourcePath.c_str(), lastSlash + 1);
 			fileName = lastSlash + 1;
-			if (!handleFile(newSourcePath, destPath, fileName, fileInfo, handleFileFunc))
+			if (!handleFile(logContext, destConnection, newSourcePath, destPath, fileName, fileInfo, stats))
 				return false;
 		}
 		else
 		{
-			if (!handleFile(sourcePath, destPath, fileName, fileInfo, handleFileFunc))
+			if (!handleFile(logContext, destConnection, sourcePath, destPath, fileName, fileInfo, stats))
 				return false;
 		}
 	}
@@ -825,7 +810,7 @@ Client::handlePath(LogContext& logContext, ClientStats& stats, const WString& so
 }
 
 bool
-Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, const HandleFileFunc& handleFileFunc, ClientStats& stats)
+Client::traverseFilesInDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats)
 {
 	if (isValid(m_sourceConnection))
 	{
@@ -842,7 +827,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePa
 		{
 			if(!(file.attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
-				if (!handleFile(sourcePath, destPath, file.name.c_str(), file.info, handleFileFunc))
+				if (!handleFile(logContext, destConnection, sourcePath, destPath, file.name.c_str(), file.info, stats))
 					return false;
 			}
 		}
@@ -858,7 +843,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePa
 			{
 				if (depthLeft)
 				{
-					if (!handleDirectory(logContext, sourcePath, destPath, directory.name.c_str(), wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+					if (!handleDirectory(logContext, destConnection, sourcePath, destPath, directory.name.c_str(), wildcard.c_str(), depthLeft - 1, stats))
 						return false;
 				}
 			}
@@ -922,7 +907,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePa
 				{
 					wchar_t* fileName = getFileName(fd);
 					if (PathMatchSpecW(fileName, wildcard.c_str()))
-						if (!handleFile(sourcePath, destPath, getFileName(fd), fileInfo, handleFileFunc))
+						if (!handleFile(logContext, destConnection, sourcePath, destPath, getFileName(fd), fileInfo, stats))
 							return false;
 				}
 				else //if (wildcardIncludesAll)
@@ -931,7 +916,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, const WString& sourcePa
 					{
 						const wchar_t* dirName = getFileName(fd);
 						if (!isDotOrDotDot(dirName))
-							if (!handleDirectory(logContext, sourcePath, destPath, dirName, wildcard.c_str(), depthLeft - 1, handleFileFunc, stats))
+							if (!handleDirectory(logContext, destConnection, sourcePath, destPath, dirName, wildcard.c_str(), depthLeft - 1, stats))
 								return false;
 					}
 				}
@@ -1060,7 +1045,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		if (tryUseSourceConnection && isValid(m_sourceConnection))
 		{
 			// TODO: Should this use a temporary file? This file will now be leaked at destination!
-			ensureDirectory(destPath.c_str(), stats.ioStats);
+			ensureDirectory(m_destConnection, destPath, stats.ioStats);
 			u64 fileSize;
 			u64 read;
 			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
@@ -1166,7 +1151,7 @@ Client::excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const W
 			logErrorf(L"Wildcards not supported in exclude list file %ls", fileName.c_str());
 			return false;
 		}
-		m_handledFiles.insert(WString(str, str + strlen(str)));
+		m_handledFiles.insert(WString(str, str + strlen(str))); // Does not need to be protected, happens before parallel
 		return true;
 	};
 
@@ -1174,7 +1159,7 @@ Client::excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const W
 }
 
 bool
-Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath, const HandleFileFunc& handleFileFunc)
+Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& fileName, const WString& rootDestPath)
 {
 	// Do a find files in source paths to reduce number of kernel calls.. this can end up be a waste but in most cases most files are directly in the source root
 	// Essentially we avoid doing lots of getFileInfo by doing a find files and get the file info from there.
@@ -1234,24 +1219,6 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 				destPath += argv[1];
 				destPath +=  L"\\";
-
-				int retryCount = m_settings.retryCount;
-				while (true)
-				{
-					if (ensureDirectory(destPath.c_str(), stats.ioStats))
-						break;
-
-					if (retryCount-- == 0)
-						return false;
-
-					// Reset last error and try again!
-					logContext.resetLastError();
-					logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destPath.c_str(), m_settings.retryWaitTimeMs/1000);
-					Sleep(m_settings.retryWaitTimeMs);
-
-					++stats.retryCount;
-				}
-				++stats.createDirCount;
 			}
 		}
 
@@ -1280,34 +1247,8 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			}
 		}
 
-		HandleFileFunc tempHandleFileFunc;
-		const HandleFileFunc* overriddenHandleFileFunc = &handleFileFunc;
-		if (!m_settings.flattenDestination)
-		{
-			if (const wchar_t* lastSlash = wcsrchr(wpath.c_str(), L'\\'))
-			{
-				tempHandleFileFunc = [&]()
-				{
-					if (handled)
-						return true;
-					handled = true;
-					if (!handleFileFunc())
-						return false;
-					WString relativePath(wpath.c_str(), lastSlash);
-					if (!m_handledFiles.insert(relativePath + L'\\').second)
-						return true;
-
-					if (!ensureDirectory((destPath + relativePath).c_str(), stats.ioStats))
-						return false;
-					++stats.createDirCount;
-					return true;
-				};
-				overriddenHandleFileFunc = &tempHandleFileFunc;
-			}
-		}
-
 		if (modifiedRootPaths || !useFindFilesOptimization) // Optimized path can't handle modified root paths.. handle path inline without using findfiles optimization
-			return handlePath(logContext, stats, sourcePath, destPath, wpath.c_str(), *overriddenHandleFileFunc);
+			return handlePath(logContext, m_destConnection, stats, sourcePath, destPath, wpath.c_str());
 
 		if (const wchar_t* lastSlash = wcsrchr(wpath.c_str(), L'\\'))
 			findFileCache[WString(wpath.c_str(), lastSlash + 1)].insert(lastSlash + 1);
@@ -1323,33 +1264,6 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 	// Optimized path.. only populated if useFindFilesOptimization
 	for (auto& pe : findFileCache)
 	{
-		HandleFileFunc tempHandleFileFunc;
-		const HandleFileFunc* overriddenHandleFileFunc = &handleFileFunc;
-		bool handled = false;
-		if (!m_settings.flattenDestination)
-		{
-			if (!pe.first.empty())
-			{
-				tempHandleFileFunc = [&]()
-				{
-					if (handled)
-						return true;
-					handled = true;
-					if (!handleFileFunc())
-						return false;
-					const WString& relativePath = pe.first;
-					if (!m_handledFiles.insert(relativePath).second)
-						return true;
-
-					if (!ensureDirectory((rootDestPath + relativePath).c_str(), stats.ioStats))
-						return false;
-					++stats.createDirCount;
-					return true;
-				};
-				overriddenHandleFileFunc = &tempHandleFileFunc;
-			}
-		}
-
 		Vector<NameAndFileInfo> nafvec;
 		std::map<const wchar_t*, const NameAndFileInfo*, NoCaseWStringLess> lookup;
 		WString pathPath(rootSourcePath + pe.first);
@@ -1363,7 +1277,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			auto findIt = lookup.find(e.c_str());
 			if (findIt != lookup.end())
 			{
-				if (!handlePath(logContext, stats, rootSourcePath, rootDestPath, relativePath.c_str(), *overriddenHandleFileFunc, findIt->second->attributes, findIt->second->info))
+				if (!handlePath(logContext, m_destConnection, stats, rootSourcePath, rootDestPath, relativePath.c_str(), findIt->second->attributes, findIt->second->info))
 					return false;
 			}
 			else
@@ -1479,20 +1393,31 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 }
 
 bool
-Client::ensureDirectory(const wchar_t* directory, IOStats& ioStats)
+Client::ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats)
 {
-	if (isValid(m_destConnection))
+	if (directory[directory.size() - 1] != L'\\')
+	{
+		logErrorf(L"ensureDirectory must get path ending with '\\'");
+		return false;
+	}
+
+	FilesSet createdDirs;
+
+	if (isValid(destConnection))
 	{
 		// Ask connection to create new directory.
-		if (!m_destConnection->sendCreateDirectoryCommand(directory, m_createdDirs))
+		if (!destConnection->sendCreateDirectoryCommand(directory.c_str(), createdDirs))
 			return false;
 	}
 	else
 	{
 		// Create directory through windows api
-		if (!eacopy::ensureDirectory(directory, ioStats, true, m_settings.replaceSymLinksAtDestination, &m_createdDirs))
+		if (!eacopy::ensureDirectory(directory.c_str(), ioStats, true, m_settings.replaceSymLinksAtDestination, &createdDirs))
 			return false;
 	}
+
+	ScopedCriticalSection cs(m_createdDirsCs);
+	m_createdDirs.insert(createdDirs.begin(), createdDirs.end());
 
 	return true;
 }
