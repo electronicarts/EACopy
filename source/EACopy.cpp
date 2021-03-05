@@ -54,13 +54,15 @@ void printHelp()
 	logInfoLinef(L"           /SERVER :: must connect to Server. Fails copy if not succeed");
 	logInfoLinef(L"  /SERVERADDR addr :: Address used to connect to Server. This is only needed if using a proxy EACopyServer sitting on the side");
 	logInfoLinef(L"     /SERVERPORT:n :: Port used to connect to Server (default %u).", DefaultPort);
-	logInfoLinef(L"           /C[:n]  :: use Compression. No value provided will auto adjust level");
+	logInfoLinef(L"           /C[:n]  :: use Compression. No value provided will auto adjust level. Only works with server");
 	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (uses zstd)");
 	#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
 	logInfoLinef(L"           /DC[:b] :: use DeltaCompression. Provide value to set min file size");
 	logInfoLinef(L"                      b defaults to %ls (uses rsync algorithm)", toPretty(DefaultDeltaCompressionThreshold).c_str());
-	logInfoLinef();
 	#endif
+	logInfoLinef();
+	logInfoLinef(L"/LINK [dir]...     :: will try to create file links when files are the same. Provide extra dirs to link to");
+	logInfoLinef();
 	logInfoLinef(L"/DCOPY:copyflag[s] :: what to COPY for directories (default is /DCOPY:DA).");
 	logInfoLinef(L"                      (copyflags : D=Data, A=Attributes, T=Timestamps).");
 	logInfoLinef();
@@ -220,6 +222,11 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			activeCommand = L"OF";
 		}
+		else if (startsWithIgnoreCase(arg, L"/LINK"))
+		{
+			outSettings.useFileLinks = true;
+			activeCommand = L"LINK";
+		}
 		else if (startsWithIgnoreCase(arg, L"/DCOPY:"))
 		{
 			outSettings.dirCopyFlags = 0;
@@ -303,6 +310,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			else if (equalsIgnoreCase(activeCommand, L"XD"))
 			{
 				outSettings.excludeWildcardDirectories.push_back(arg);
+			}
+			else if (equalsIgnoreCase(activeCommand, L"link"))
+			{
+				outSettings.additionalLinkDirectories.push_back(getCleanedupPath(arg));
 			}
 			else if (equalsIgnoreCase(activeCommand, L"OF"))
 			{
@@ -517,6 +528,7 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs, stats.ioStats.findFileCount);
 		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs, stats.ioStats.createReadCount);
 		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs, stats.ioStats.createWriteCount);
+		populateStatsTime(statsVec, L"LinkFile", stats.ioStats.createLinkMs, stats.ioStats.createLinkCount);
 		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileMs, stats.ioStats.deleteFileCount);
 		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs, stats.ioStats.createDirCount);
 		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirMs, stats.ioStats.removeDirCount);

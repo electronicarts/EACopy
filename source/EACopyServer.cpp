@@ -26,23 +26,6 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool Server::FileKey::operator<(const FileKey& o) const
-{
-	// Sort by name first (we need this for delta-copy)
-	int cmp = wcscmp(name.c_str(), o.name.c_str());
-	if (cmp != 0)
-		return cmp < 0;
-
-	// Sort by write time first (we need this for delta-copy)
-	LONG timeDiff = CompareFileTime((FILETIME*)&lastWriteTime, (FILETIME*)&o.lastWriteTime);
-	if (timeDiff != 0)
-		return timeDiff < 0;
-
-	return fileSize < o.fileSize;
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 void
 Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus)
 {
@@ -175,28 +158,14 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 					continue;
 				}
 				assert(i->socket.socket == INVALID_SOCKET);
-				delete i->thread;
 				i = connections.erase(i);
 				--m_activeConnectionCount;
 			}
 
 			// When there are no connections active we take the opportunity to shrink history if overflowed
 			if (connections.empty())
-			{
-				ScopedCriticalSection cs(m_localFilesCs);
-				if (m_localFilesHistory.size() > settings.maxHistory)
-				{
-					uint removeCount = (uint)m_localFilesHistory.size() - settings.maxHistory;
-					uint it = removeCount;
-					while (it--)
-					{
-						m_localFiles.erase(m_localFilesHistory.front());
-						m_localFilesHistory.pop_front();
-					}
+				if (uint removeCount = m_database.garbageCollect(settings.maxHistory))
 					logDebugLinef(L"History overflow. Removed %u entries", removeCount);
-
-				}
-			}
 			continue;
 		}
 
@@ -248,49 +217,8 @@ Server::primeDirectory(const wchar_t* directory)
 		return false;
 	if (*serverDir.rbegin() != '\\')
 		serverDir += '\\';
-	return primeDirectoryRecursive(serverDir);
-}
-
-
-bool
-Server::primeDirectoryRecursive(const WString& directory)
-{
-    WIN32_FIND_DATAW fd; 
-    WString searchStr = directory + L"*.*";
-    HANDLE hFind = ::FindFirstFileW(searchStr.c_str(), &fd); 
-    if(hFind == InvalidFileHandle)
-	{
-		logErrorf(L"FindFirstFile failed with search string %ls", searchStr.c_str());
-		return false;
-	}
-	ScopeGuard _([&]() { FindClose(hFind); });
-    do
-	{
-		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
-			continue;
-
-		if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
-		{
-			if (isDotOrDotDot(fd.cFileName))
-				continue;
-			if (!primeDirectoryRecursive(directory + fd.cFileName + L'\\'))
-				return false;
-		}
-		else
-		{
-			addToLocalFilesHistory({ fd.cFileName, *(FileTime*)&fd.ftLastWriteTime, ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow }, directory + fd.cFileName);
-		}
-	} 
-	while(FindNextFileW(hFind, &fd)); 
-
-	uint error = GetLastError();
-	if (error != ERROR_NO_MORE_FILES)
-	{
-		logErrorf(L"FindNextFile failed for %ls: %ls", searchStr.c_str(), getErrorText(error).c_str());
-		return false;
-	}
-
-	return true;
+	IOStats ioStats;
+	return m_database.primeDirectory(serverDir, ioStats, true);
 }
 
 uint
@@ -506,13 +434,7 @@ Server::connectionThread(ConnectionInfo& info)
 					FileKey key { fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 
 					// Check if a file with the same key has already been copied at some point
-					FileRec localFile;
-					m_localFilesCs.scoped([&]()
-						{
-							auto findIt = m_localFiles.find(key);
-							if (findIt != m_localFiles.end())
-								localFile = findIt->second;
-						});
+					FileDatabase::FileRec localFile = m_database.getRecord(key);
 
 					WriteResponse writeResponse = isServerPathExternal ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
 
@@ -581,7 +503,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (writeResponse == WriteResponse_Link || writeResponse == WriteResponse_Skip)
 					{
 						InterlockedAdd64((LONG64*)(writeResponse != WriteResponse_Skip ? &m_bytesLinked : &m_bytesSkipped), cmd.info.fileSize);
-						addToLocalFilesHistory(key, fullPath);
+						m_database.addToLocalFilesHistory(key, fullPath);
 						break;
 					}
 
@@ -616,7 +538,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (success)
 					{
-						addToLocalFilesHistory(key, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
+						m_database.addToLocalFilesHistory(key, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
 						InterlockedAdd64((LONG64*)&m_bytesCopied, cmd.info.fileSize);
 						InterlockedAdd64((LONG64*)&m_bytesReceived, totalReceivedSize);
 					}
@@ -886,8 +808,7 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_RequestReport:
 				{
 					u64 uptimeMs = getTimeMs() - m_startTime;
-					uint historySize;
-					m_localFilesCs.scoped([&]() { historySize = (uint)m_localFiles.size(); });
+					uint historySize = m_database.getHistorySize();
 					
 					PROCESS_MEMORY_COUNTERS memCounters;
 					memCounters.cb = sizeof(memCounters);
@@ -971,18 +892,6 @@ Server::connectionThread(ConnectionInfo& info)
 	return 0;
 }
 
-void
-Server::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
-{
-	ScopedCriticalSection cs(m_localFilesCs);
-	auto insres = m_localFiles.insert({key, FileRec()});
-	if (!insres.second)
-		m_localFilesHistory.erase(insres.first->second.historyIt);
-	m_localFilesHistory.push_back(key);
-	insres.first->second.name = fullFileName;
-	insres.first->second.historyIt = --m_localFilesHistory.end();
-}
-
 bool
 Server::getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory)
 {
@@ -1018,21 +927,6 @@ Server::getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirector
 
 	NetApiBufferFree(shareInfo);
 	return true;
-}
-
-bool
-Server::findFileForDeltaCopy(WString& outFile, const FileKey& key)
-{
-	FileKey searchKey { key.name, 0, 0 };
-	auto searchIt = m_localFiles.lower_bound(searchKey);
-	while (searchIt != m_localFiles.end())
-	{
-		if (searchIt->first.name != key.name)
-			return false;
-		outFile = searchIt->second.name;
-		return true;
-	}
-	return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

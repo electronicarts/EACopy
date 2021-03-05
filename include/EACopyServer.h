@@ -10,7 +10,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr char ServerVersion[] = "0.935" CFG_STR; // Version of server
+constexpr char ServerVersion[] = "0.936" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -51,21 +51,11 @@ public:
 
 private:
 	struct			ConnectionInfo;
-	struct			FileKey;
 
 	uint			connectionThread(ConnectionInfo& info);
-	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
 	bool			getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory);
-	bool			primeDirectoryRecursive(const WString& directory);
-	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 
-	using			FilesHistory = List<FileKey>;
-	struct			FileRec { WString name; FilesHistory::iterator historyIt; };
-	using			FilesMap = Map<FileKey, FileRec>;
-
-	FilesMap		m_localFiles;
-	FilesHistory	m_localFilesHistory;
-	CriticalSection	m_localFilesCs;
+	FileDatabase	m_database;
 
 	struct			GuidLess { bool operator()(const Guid& a, const Guid& b) const { return memcmp(&a, &b, sizeof(Guid)) < 0; } };
 	using			GuidSet = Set<Guid, GuidLess>;
@@ -102,20 +92,12 @@ private:
 struct Server::ConnectionInfo
 {
 	ConnectionInfo(Log& l, const ServerSettings& s, Socket so) : log(l), settings(s), socket(so) {}
+	~ConnectionInfo() { delete thread; }
 
 	Log& log;
 	const ServerSettings& settings;
 	Thread* thread = nullptr;
 	Socket socket;
-};
-
-struct Server::FileKey
-{
-	WString name;
-	FileTime lastWriteTime;
-	u64 fileSize;
-
-	bool operator<(const FileKey& o) const;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -1042,6 +1042,28 @@ EACOPY_TEST(CopyFileWithVeryLongPath)
 	EACOPY_ASSERT(isSourceEqualDest(longPath.c_str()));
 }
 
+EACOPY_TEST(CopyUsingLink)
+{
+	createTestFile(L"Foo.txt", 100);
+
+	auto originalTestDir = testDestDir;
+	testDestDir = originalTestDir + L"1\\";
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.destDirectory = testDestDir;
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+
+	clientSettings.useFileLinks = true;
+	clientSettings.additionalLinkDirectories.push_back(testDestDir);
+
+	testDestDir = originalTestDir + L"2\\";
+	clientSettings.destDirectory = testDestDir;
+	Client client2(clientSettings);
+	EACOPY_ASSERT(client2.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
 #if defined(_WIN32)
 EACOPY_TEST(ServerCopyAttemptFallback)
 {

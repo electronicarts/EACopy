@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.9993" CFG_STR; // Version of client (visible when printing help info)
+constexpr char ClientVersion[] = "0.9994" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -51,6 +51,8 @@ struct ClientSettings
 	UseBufferedIO		useBufferedIO				= UseBufferedIO_Auto;
 	bool				replaceSymLinksAtDestination= true; // When writing to destination and a directory is a symlink we remove symlink and create real directory
 	bool				useOptimizedWildCardFileSearch = true;
+	bool				useFileLinks				= false;
+	StringList			additionalLinkDirectories;
 };
 
 
@@ -174,6 +176,7 @@ private:
 	AddrInfo*			m_serverAddrInfo;
 	Guid				m_secretGuid;
 	CriticalSection		m_secretGuidCs;
+	FileDatabase		m_fileDatabase;
 
 						Client(const Client&) = delete;
 	void				operator=(const Client&) = delete;

@@ -76,7 +76,7 @@ public:
 	template<class Functor> void scoped(const Functor& f) { enter(); f(); leave(); }
 
 private:
-	u8					data[40];
+	u64					data[5];
 };
 
 class ScopedCriticalSection 
@@ -202,12 +202,14 @@ struct IOStats
 	uint				closeWriteCount = 0;
 
 
+	u64					createLinkMs = 0;
 	u64					deleteFileMs = 0;
 	u64					removeDirMs = 0;
 	u64					setLastWriteTimeMs = 0;
 	u64					findFileMs = 0;
 	u64					fileInfoMs = 0;
 	u64					createDirMs = 0;
+	uint				createLinkCount = 0;
 	uint				deleteFileCount = 0;
 	uint				removeDirCount = 0;
 	uint				setLastWriteTimeCount = 0;
@@ -263,6 +265,49 @@ bool					findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats
 void					findClose(FindFileHandle handle, IOStats& ioStats);
 uint					getFileInfo(FileInfo& outInfo, FindFileData& findFileData);
 wchar_t*				getFileName(FindFileData& findFileData);
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// FileDatabase
+
+struct FileKey
+{
+	WString name;
+	FileTime lastWriteTime;
+	u64 fileSize;
+
+	bool operator<(const FileKey& o) const;
+};
+
+class FileDatabase
+{
+public:
+	using			FilesHistory = List<FileKey>;
+	struct			FileRec { WString name; FilesHistory::iterator historyIt; };
+	using			FilesMap = Map<FileKey, FileRec>;
+	using			PrimeDirs = List<WString>;
+
+	FileRec			getRecord(const FileKey& key);
+	uint			getHistorySize();
+	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
+
+	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
+	uint			garbageCollect(uint maxHistory);
+
+	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool flush);
+	bool			primeUpdate(IOStats& ioStats);
+	bool			primeWait(IOStats& ioStats);
+
+	CriticalSection	m_primeDirsCs;
+	PrimeDirs		m_primeDirs;
+	uint			m_primeActive = 0;
+
+	FilesMap		m_localFiles;
+	FilesHistory	m_localFilesHistory;
+	CriticalSection	m_localFilesCs;
+};
+
 
 
 

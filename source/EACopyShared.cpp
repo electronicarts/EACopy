@@ -1438,9 +1438,12 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 {
 	outSkip = false;
 	#if defined(_WIN32)
-	if (CreateHardLinkW(fullPath, sourcePath, NULL))
-		return true;
-
+	{
+		ioStats.createLinkCount;
+		TimerScope _(ioStats.createLinkMs);
+		if (CreateHardLinkW(fullPath, sourcePath, NULL))
+			return true;
+	}
 	uint error = GetLastError();
 	if (error == ERROR_ALREADY_EXISTS)
 	{
@@ -2090,6 +2093,175 @@ void itow(int value, wchar_t* dst, uint dstCapacity)
 int stringEquals(const wchar_t* a, const wchar_t* b) { return wcscmp(a, b) == 0; }
 int	stringEquals(const char* a, const char* b) { return strcmp(a, b) == 0; }
 bool stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source) { return wcscpy_s(dest, destCapacity, source) == 0; }
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool
+FileKey::operator<(const FileKey& o) const
+{
+	// Sort by name first (we need this for delta-copy)
+	int cmp = wcscmp(name.c_str(), o.name.c_str());
+	if (cmp != 0)
+		return cmp < 0;
+
+	// Sort by write time first (we need this for delta-copy)
+	LONG timeDiff = CompareFileTime((FILETIME*)&lastWriteTime, (FILETIME*)&o.lastWriteTime);
+	if (timeDiff != 0)
+		return timeDiff < 0;
+
+	return fileSize < o.fileSize;
+}
+
+FileDatabase::FileRec
+FileDatabase::getRecord(const FileKey& key)
+{
+	ScopedCriticalSection cs(m_localFilesCs);
+	auto findIt = m_localFiles.find(key);
+	if (findIt != m_localFiles.end())
+		return findIt->second;
+	return FileRec();
+}
+
+uint
+FileDatabase::getHistorySize()
+{
+	ScopedCriticalSection cs(m_localFilesCs);
+	return (uint)m_localFiles.size();
+}
+
+bool
+FileDatabase::findFileForDeltaCopy(WString& outFile, const FileKey& key)
+{
+	ScopedCriticalSection cs(m_localFilesCs);
+	FileKey searchKey { key.name, 0, 0 };
+	auto searchIt = m_localFiles.lower_bound(searchKey);
+	while (searchIt != m_localFiles.end())
+	{
+		if (searchIt->first.name != key.name)
+			return false;
+		outFile = searchIt->second.name;
+		return true;
+	}
+	return false;
+}
+
+void
+FileDatabase::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
+{
+	ScopedCriticalSection cs(m_localFilesCs);
+	auto insres = m_localFiles.insert({key, FileRec()});
+	if (!insres.second)
+		m_localFilesHistory.erase(insres.first->second.historyIt);
+	m_localFilesHistory.push_back(key);
+	insres.first->second.name = fullFileName;
+	insres.first->second.historyIt = --m_localFilesHistory.end();
+}
+
+uint
+FileDatabase::garbageCollect(uint maxHistory)
+{
+	ScopedCriticalSection cs(m_localFilesCs);
+	if (m_localFilesHistory.size() < maxHistory)
+		return 0;
+	uint removeCount = (uint)m_localFilesHistory.size() - maxHistory;
+	uint it = removeCount;
+	while (it--)
+	{
+		m_localFiles.erase(m_localFilesHistory.front());
+		m_localFilesHistory.pop_front();
+	}
+	return removeCount;
+}
+
+bool
+FileDatabase::primeDirectory(const WString& directory, IOStats& ioStats, bool flush)
+{
+	ScopedCriticalSection cs(m_primeDirsCs);
+	m_primeDirs.push_back(directory);
+	if (!flush)
+		return true;
+	while (primeUpdate(ioStats))
+		;
+	return true;
+}
+
+bool
+FileDatabase::primeUpdate(IOStats& ioStats)
+{
+	WString directory;
+	m_primeDirsCs.scoped([&]()
+		{
+			if (!m_primeDirs.empty())
+			{
+				directory = std::move(m_primeDirs.front());
+				m_primeDirs.pop_front();
+				++m_primeActive;
+			}
+		});
+
+	// If no new directory queued
+	if (directory.empty())
+		return false;
+
+	ScopeGuard activeGuard([this]()
+		{
+			m_primeDirsCs.scoped([this]() { --m_primeActive; });
+		});
+
+    FindFileData fd; 
+    WString searchStr = directory + L"*.*";
+    FindFileHandle fh = findFirstFile(searchStr.c_str(), fd, ioStats); 
+    if(fh == InvalidFileHandle)
+	{
+		logErrorf(L"FindFirstFile failed with search string %ls", searchStr.c_str());
+		return false;
+	}
+
+	ScopeGuard _([&]() { findClose(fh, ioStats); });
+    do
+	{
+		FileInfo fileInfo;
+		uint attr = getFileInfo(fileInfo, fd);
+		if ((attr & FILE_ATTRIBUTE_HIDDEN))
+			continue;
+		const wchar_t* fileName = getFileName(fd);
+		if ((attr & FILE_ATTRIBUTE_DIRECTORY) != 0)
+		{
+			if (isDotOrDotDot(fileName))
+				continue;
+			ScopedCriticalSection cs(m_primeDirsCs);
+			m_primeDirs.push_back(directory + fileName + L'\\');
+		}
+		else
+		{
+			addToLocalFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, directory + fileName);
+		}
+	} 
+	while(findNextFile(fh, fd, ioStats)); 
+
+	uint error = GetLastError();
+	if (error != ERROR_NO_MORE_FILES)
+	{
+		logErrorf(L"FindNextFile failed for %ls: %ls", searchStr.c_str(), getErrorText(error).c_str());
+		return false;
+	}
+
+	return true;
+}
+
+bool
+FileDatabase::primeWait(IOStats& ioStats)
+{
+	while (true)
+	{
+		if (primeUpdate(ioStats))
+			continue;
+		ScopedCriticalSection cs(m_primeDirsCs);
+		if (m_primeActive == 0 && m_primeDirs.empty())
+			break;
+	}
+	return true;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

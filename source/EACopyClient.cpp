@@ -109,6 +109,10 @@ Client::process(Log& log, ClientStats& outStats)
 		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 	#endif
 
+	// Add all link directories to primeQueue
+	for (auto& primeDir : m_settings.additionalLinkDirectories)
+		m_fileDatabase.primeDirectory(primeDir, outStats.ioStats, false);
+
 	// Spawn worker threads that will copy the files
 	struct WorkerThreadData { ClientStats stats; Client* client; uint connectionIndex; };
 	Vector<WorkerThreadData> workerThreadDataList(m_settings.threadCount);
@@ -144,6 +148,9 @@ Client::process(Log& log, ClientStats& outStats)
 	for (auto& file : m_settings.filesExcludeFiles)
 		if (!excludeFilesFromFile(logContext, outStats, sourceDir, file, destDir))
 			break;
+
+	// Help out flush out all primed directories
+	m_fileDatabase.primeWait(outStats.ioStats);
 
 	{
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination directories needed.
@@ -250,6 +257,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.ioStats.writeCount += threadStats.ioStats.writeCount;
 		outStats.ioStats.removeDirMs += threadStats.ioStats.removeDirMs;
 		outStats.ioStats.removeDirCount += threadStats.ioStats.removeDirCount;
+		outStats.ioStats.createLinkMs += threadStats.ioStats.createLinkMs;
+		outStats.ioStats.createLinkCount += threadStats.ioStats.createLinkCount;
 		outStats.ioStats.setLastWriteTimeMs += threadStats.ioStats.setLastWriteTimeMs;
 		outStats.ioStats.setLastWriteTimeCount += threadStats.ioStats.setLastWriteTimeCount;
 		outStats.ioStats.findFileMs += threadStats.ioStats.findFileMs;
@@ -450,11 +459,43 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		}
 		else
 		{
+			u64 startTimeMs = getTimeMs();
+
+			if (m_settings.useFileLinks)
+			{
+				WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
+				FileKey key { fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
+				FileDatabase::FileRec localFile = m_fileDatabase.getRecord(key);
+				if (!localFile.name.empty())
+				{
+					bool skip;
+					if (createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats))
+					{
+						if (skip)
+						{
+							if (m_settings.logProgress)
+								logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
+							stats.skipTimeMs += getTimeMs() - startTimeMs;
+							++stats.skipCount;
+							stats.skipSize += entry.srcInfo.fileSize;
+						}
+						else
+						{
+							if (m_settings.logProgress)
+								logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
+							stats.linkTimeMs += getTimeMs() - startTimeMs;
+							++stats.linkCount;
+							stats.linkSize += entry.srcInfo.fileSize;
+						}
+						return true;
+					}
+				}
+			}
+
 			bool tryCopyFirst = m_tryCopyFirst;
 
 			bool existed = false;
 			u64 written;
-			u64 startTimeMs = getTimeMs();
 
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
@@ -570,6 +611,8 @@ Client::processQueues(LogContext& logContext, Connection* sourceConnection, Conn
 	// Process file queue
 	while (!m_workDone.isSet(0))
 	{
+		if (m_fileDatabase.primeUpdate(stats.ioStats))
+			continue;
 		if (processDir(logContext, sourceConnection, destConnection, copyContext, stats))
 			continue;
 		if (processFile(logContext, sourceConnection, destConnection, copyContext, stats))
