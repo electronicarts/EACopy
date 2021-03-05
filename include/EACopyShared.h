@@ -83,7 +83,7 @@ class ScopedCriticalSection
 {
 public:
 	ScopedCriticalSection(CriticalSection& cs) : m_cs(cs), m_active(true) { cs.enter(); }
-	~ScopedCriticalSection() { m_cs.leave(); }
+	~ScopedCriticalSection() { leave(); }
 	void leave() { if (!m_active) return; m_cs.leave(); m_active = false; }
 private:
 	CriticalSection& m_cs;
