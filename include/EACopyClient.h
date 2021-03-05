@@ -110,26 +110,29 @@ private:
 
 	// Types
 	struct				CopyEntry { WString src; WString dst; FileInfo srcInfo; };
+	struct				DirEntry { 	WString sourceDir; WString destDir; WString wildcard; int depthLeft; };
 	using				HandleFileOrWildcardFunc = Function<bool(char*)>;
 	using				CopyEntries = List<CopyEntry>;
+	using				DirEntries = List<DirEntry>;
 	using				CachedFindFileEntries = std::map<WString, Set<WString, NoCaseWStringLess>, NoCaseWStringLess>;
 	class				Connection;
 	struct				NameAndFileInfo { WString name; FileInfo info; uint attributes; };
 
 	// Methods
 	void				resetWorkState(Log& log);
+	bool				processDir(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
 	bool				processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats);
-	bool				processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
+	bool				processQueues(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread);
 	bool				connectToServer(const wchar_t* networkPath, uint connectionIndex, Connection*& outConnection, bool& failedToConnect, ClientStats& stats);
 	int					workerThread(uint connectionIndex, ClientStats& stats);
-	bool				traverseFilesInDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats);
-	bool				findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, const WString& path, ClientStats& stats);
+	bool				traverseFilesInDirectory(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats);
+	bool				findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, Connection* connection, NetworkCopyContext& copyContext, const WString& path, ClientStats& stats);
 	bool				addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, ClientStats& stats);
 	bool				handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, ClientStats& stats);
 	bool				handleDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, ClientStats& stats);
 	bool				handleMissingFile(const wchar_t* fileName);
-	bool				handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName);
-	bool				handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo);
+	bool				handlePath(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName);
+	bool				handlePath(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo);
 	bool				handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath, const HandleFileOrWildcardFunc& func);
 	bool				excludeFilesFromFile(LogContext& logContext, ClientStats& stats, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& sourcePath, const WString& fileName, const WString& destPath);
@@ -155,6 +158,8 @@ private:
 	Connection*			m_destConnection;
 	CriticalSection		m_copyEntriesCs;
 	CopyEntries			m_copyEntries;
+	CriticalSection		m_dirEntriesCs;
+	DirEntries			m_dirEntries;
 	FilesSet			m_handledFiles;
 	CriticalSection		m_handledFilesCs;
 	FilesSet			m_createdDirs;

@@ -157,14 +157,14 @@ Client::process(Log& log, ClientStats& outStats)
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
-				if (!traverseFilesInDirectory(logContext, m_destConnection, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, outStats))
+				if (!traverseFilesInDirectory(logContext, m_sourceConnection, m_destConnection, m_copyContext, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, outStats))
 					break;
 		}
 	}
 
 
-	// Process files (worker threads are doing the same right now)
-	if (!processFiles(logContext, m_sourceConnection, m_destConnection, m_copyContext, outStats, true))
+	// Process dirs and files (worker threads are doing the same right now)
+	if (!processQueues(logContext, m_sourceConnection, m_destConnection, m_copyContext, outStats, true))
 		return -1;
 	
 
@@ -329,6 +329,30 @@ Client::resetWorkState(Log& log)
 }
 
 bool
+Client::processDir(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats)
+{
+	// Pop first entry off the queue
+	DirEntry entry;
+	m_dirEntriesCs.scoped([&]()
+		{
+			if (!m_dirEntries.empty())
+			{
+				entry = std::move(m_dirEntries.front());
+				m_dirEntries.pop_front();
+			}
+		});
+
+	// If no new entry queued, sleep a bit and return in order to try again
+	if (entry.destDir.empty())
+		return false;
+
+
+	traverseFilesInDirectory(logContext, sourceConnection, destConnection, copyContext, entry.sourceDir, entry.destDir, entry.wildcard, entry.depthLeft, stats);
+
+	return true;
+}
+
+bool
 Client::processFile(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats)
 {
 	// Pop first entry off the queue
@@ -337,7 +361,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		{
 			if (!m_copyEntries.empty())
 			{
-				entry = m_copyEntries.front();
+				entry = std::move(m_copyEntries.front());
 				m_copyEntries.pop_front();
 			}
 		});
@@ -533,7 +557,7 @@ Client::connectToServer(const wchar_t* networkPath, uint connectionIndex, Connec
 }
 
 bool
-Client::processFiles(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread)
+Client::processQueues(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats, bool isMainThread)
 {
 	logDebugLinef(L"Worker started");
 
@@ -543,6 +567,8 @@ Client::processFiles(LogContext& logContext, Connection* sourceConnection, Conne
 	// Process file queue
 	while (!m_workDone.isSet(0))
 	{
+		if (processDir(logContext, sourceConnection, destConnection, copyContext, stats))
+			continue;
 		if (processFile(logContext, sourceConnection, destConnection, copyContext, stats))
 			++filesProcessedCount;
 		else if (isMainThread)
@@ -573,7 +599,7 @@ Client::workerThread(uint connectionIndex, ClientStats& stats)
 	// Help process the files
 	LogContext logContext(*m_log);
 	NetworkCopyContext copyContext;
-	processFiles(logContext, sourceConnection, destConnection, copyContext, stats, false);
+	processQueues(logContext, sourceConnection, destConnection, copyContext, stats, false);
 
 	return logContext.getLastError();
 }
@@ -688,8 +714,14 @@ Client::handleDirectory(LogContext& logContext, Connection* destConnection, cons
 		if (!addDirectoryToHandledFiles(logContext, destConnection, newDestDirectory, stats))
 			return false;
 
-	// Find files to copy
-	return traverseFilesInDirectory(logContext, destConnection, newSourceDirectory, newDestDirectory, wildcard, depthLeft, stats);
+	ScopedCriticalSection cs(m_dirEntriesCs);
+	m_dirEntries.push_back(DirEntry());
+	DirEntry& dirEntry = m_dirEntries.back();
+	dirEntry.sourceDir = newSourceDirectory;
+	dirEntry.destDir = newDestDirectory;
+	dirEntry.wildcard = wildcard;
+	dirEntry.depthLeft = depthLeft;
+	return true;
 }
 
 bool
@@ -708,7 +740,7 @@ Client::handleMissingFile(const wchar_t* fileName)
 }
 
 bool
-Client::handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName)
+Client::handlePath(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName)
 {
 	WString fullFileName = sourcePath;
 	if (fileName[0])
@@ -724,9 +756,9 @@ Client::handlePath(LogContext& logContext, Connection* destConnection, ClientSta
 			uint error = 0;
 
 			// Get file attributes (and allow retry if fails)
-			if (isValid(m_sourceConnection))
+			if (isValid(sourceConnection))
 			{
-				if (!m_sourceConnection->sendGetFileAttributes(fileName, fileInfo, attributes, error))
+				if (!sourceConnection->sendGetFileAttributes(fileName, fileInfo, attributes, error))
 					return false;
 				if (!error)
 					break;
@@ -770,11 +802,11 @@ Client::handlePath(LogContext& logContext, Connection* destConnection, ClientSta
 		}
 	}
 
-	return handlePath(logContext, destConnection, stats, sourcePath, destPath, fileName, attributes, fileInfo);
+	return handlePath(logContext, sourceConnection, destConnection, stats, sourcePath, destPath, fileName, attributes, fileInfo);
 }
 
 bool
-Client::handlePath(LogContext& logContext, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo)
+Client::handlePath(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, uint attributes, const FileInfo& fileInfo)
 {
 	// Handle directory
 	if (attributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -810,9 +842,9 @@ Client::handlePath(LogContext& logContext, Connection* destConnection, ClientSta
 }
 
 bool
-Client::traverseFilesInDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats)
+Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats)
 {
-	if (isValid(m_sourceConnection))
+	if (isValid(sourceConnection))
 	{
 		WString relPath;
 		if (sourcePath.size() > m_settings.sourceDirectory.size())
@@ -821,7 +853,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* destConnect
 		WString searchStr = relPath + wildcard;
 
 		Vector<NameAndFileInfo> files;
-		if (!m_sourceConnection->sendFindFiles(searchStr.c_str(), files, m_copyContext))
+		if (!sourceConnection->sendFindFiles(searchStr.c_str(), files, copyContext))
 			return false;
 		for (auto& file : files)
 		{
@@ -835,7 +867,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* destConnect
 		// Handle directories separately
 		Vector<NameAndFileInfo> directories;
 		WString dirSearchStr = relPath + L"*.*";
-		if (!m_sourceConnection->sendFindFiles(dirSearchStr.c_str(), directories, m_copyContext))
+		if (!sourceConnection->sendFindFiles(dirSearchStr.c_str(), directories, copyContext))
 			return false;
 		for (auto& directory : directories)
 		{
@@ -935,15 +967,15 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* destConnect
 }
 
 bool
-Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, const WString& path, ClientStats& stats)
+Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, Connection* connection, NetworkCopyContext& copyContext, const WString& path, ClientStats& stats)
 {
-	if (isValid(m_sourceConnection))
+	if (isValid(connection))
 	{
 		WString relPath;
 		if (path.size() > m_settings.sourceDirectory.size())
 			relPath.append(path.c_str() + m_settings.sourceDirectory.size());
 		WString searchStr = relPath + L"*.*";
-		return m_sourceConnection->sendFindFiles(searchStr.c_str(), outEntries, m_copyContext);
+		return connection->sendFindFiles(searchStr.c_str(), outEntries, copyContext);
 	}
 	else
 	{
@@ -1248,7 +1280,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		}
 
 		if (modifiedRootPaths || !useFindFilesOptimization) // Optimized path can't handle modified root paths.. handle path inline without using findfiles optimization
-			return handlePath(logContext, m_destConnection, stats, sourcePath, destPath, wpath.c_str());
+			return handlePath(logContext, m_sourceConnection, m_destConnection, stats, sourcePath, destPath, wpath.c_str());
 
 		if (const wchar_t* lastSlash = wcsrchr(wpath.c_str(), L'\\'))
 			findFileCache[WString(wpath.c_str(), lastSlash + 1)].insert(lastSlash + 1);
@@ -1267,7 +1299,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		Vector<NameAndFileInfo> nafvec;
 		std::map<const wchar_t*, const NameAndFileInfo*, NoCaseWStringLess> lookup;
 		WString pathPath(rootSourcePath + pe.first);
-		if (!findFilesInDirectory(nafvec, logContext, pathPath, stats))
+		if (!findFilesInDirectory(nafvec, logContext, m_sourceConnection, m_copyContext, pathPath, stats))
 			return false;
 		for (auto& entry : nafvec)
 			lookup.insert({entry.name.c_str(), &entry});
@@ -1277,7 +1309,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			auto findIt = lookup.find(e.c_str());
 			if (findIt != lookup.end())
 			{
-				if (!handlePath(logContext, m_destConnection, stats, rootSourcePath, rootDestPath, relativePath.c_str(), findIt->second->attributes, findIt->second->info))
+				if (!handlePath(logContext, m_sourceConnection, m_destConnection, stats, rootSourcePath, rootDestPath, relativePath.c_str(), findIt->second->attributes, findIt->second->info))
 					return false;
 			}
 			else
