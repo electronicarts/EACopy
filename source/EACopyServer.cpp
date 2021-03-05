@@ -453,7 +453,7 @@ Server::connectionThread(ConnectionInfo& info)
 							FileInfo fileInfo;
 							fileInfo.fileSize = sizeof(secretGuid);
 							WString securityFilePath = serverPath + filename;
-							ScopeGuard deleteFileGuard([&]() { deleteFile(securityFilePath.c_str(), false); });
+							ScopeGuard deleteFileGuard([&]() { deleteFile(securityFilePath.c_str(), ioStats, false); });
 							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, ioStats, true, true))
 								break;
 

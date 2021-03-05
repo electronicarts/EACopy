@@ -369,7 +369,7 @@ void addCount(wchar_t* buf, uint offset, uint count)
 
 void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint count)
 {
-	if (!ms)
+	if (!ms && !count)
 		return;
 	wchar_t buf[512];
 	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
@@ -517,7 +517,9 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs, stats.ioStats.findFileCount);
 		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs, stats.ioStats.createReadCount);
 		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs, stats.ioStats.createWriteCount);
+		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileMs, stats.ioStats.deleteFileCount);
 		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs, stats.ioStats.createDirCount);
+		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirMs, stats.ioStats.removeDirCount);
 		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoMs, stats.ioStats.fileInfoCount);
 		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTimeMs, stats.ioStats.setLastWriteTimeCount);
 		populateStatsTime(statsVec, L"SendFile", stats.sendTimeMs, 0);

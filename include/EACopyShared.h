@@ -202,10 +202,14 @@ struct IOStats
 	uint				closeWriteCount = 0;
 
 
+	u64					deleteFileMs = 0;
+	u64					removeDirMs = 0;
 	u64					setLastWriteTimeMs = 0;
 	u64					findFileMs = 0;
 	u64					fileInfoMs = 0;
 	u64					createDirMs = 0;
+	uint				deleteFileCount = 0;
+	uint				removeDirCount = 0;
 	uint				setLastWriteTimeCount = 0;
 	uint				findFileCount = 0;
 	uint				fileInfoCount = 0;
@@ -242,7 +246,7 @@ bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* d
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
-bool					deleteFile(const wchar_t* fullPath, bool errorOnMissingFile = true);
+bool					deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					setFileWritable(const wchar_t* fullPath, bool writable);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);

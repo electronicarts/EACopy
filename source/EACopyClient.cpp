@@ -248,6 +248,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.ioStats.closeWriteCount += threadStats.ioStats.closeWriteCount;
 		outStats.ioStats.writeMs += threadStats.ioStats.writeMs;
 		outStats.ioStats.writeCount += threadStats.ioStats.writeCount;
+		outStats.ioStats.removeDirMs += threadStats.ioStats.removeDirMs;
+		outStats.ioStats.removeDirCount += threadStats.ioStats.removeDirCount;
 		outStats.ioStats.setLastWriteTimeMs += threadStats.ioStats.setLastWriteTimeMs;
 		outStats.ioStats.setLastWriteTimeCount += threadStats.ioStats.setLastWriteTimeCount;
 		outStats.ioStats.findFileMs += threadStats.ioStats.findFileMs;
@@ -1405,7 +1407,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 			}
 			else
 			{
-				if (!deleteFile(fullPath.c_str(), errorOnMissingFile))
+				if (!deleteFile(fullPath.c_str(), stats.ioStats, errorOnMissingFile))
 					res = false;
 			}
 		}

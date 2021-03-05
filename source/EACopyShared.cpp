@@ -918,7 +918,7 @@ bool equals(const FileInfo& a, const FileInfo& b)
 	return memcmp(&a, &b, sizeof(FileInfo)) == 0;
 }
 
-bool replaceIfSymLink(const wchar_t* directory, uint attributes)
+bool replaceIfSymLink(const wchar_t* directory, uint attributes, IOStats& ioStats)
 {
 	bool isDir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 	if (!isDir)
@@ -931,13 +931,19 @@ bool replaceIfSymLink(const wchar_t* directory, uint attributes)
 	if (!isSymlink)
 		return true;
 
-	// Delete reparsepoint and treat path as not existing
-	if (!RemoveDirectoryW(directory))
 	{
-		logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getLastErrorText().c_str());
-		return false;
+		// Delete reparsepoint and treat path as not existing
+		++ioStats.removeDirCount;
+		TimerScope _(ioStats.removeDirMs);
+		if (!RemoveDirectoryW(directory))
+		{
+			logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getLastErrorText().c_str());
+			return false;
+		}
 	}
 
+	++ioStats.createDirCount;
+	TimerScope _(ioStats.createDirMs);
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
 
@@ -977,7 +983,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 			}
 
 			if (replaceIfSymlink)
-				if (!replaceIfSymLink(directory, destDirAttributes))
+				if (!replaceIfSymLink(directory, destDirAttributes, ioStats))
 					return false;
 			return true;
 		}
@@ -1006,7 +1012,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	if (destDirAttributes & FILE_ATTRIBUTE_DIRECTORY)
 	{
 		if (replaceIfSymlink)
-			if (!replaceIfSymLink(directory, destDirAttributes))
+			if (!replaceIfSymLink(directory, destDirAttributes, ioStats))
 				return false;
 		return true;
 	}
@@ -1102,7 +1108,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 						return false;
 					}
 
-			if (!deleteFile(fullName.c_str(), errorOnMissingFile))
+			if (!deleteFile(fullName.c_str(), ioStats, errorOnMissingFile))
 				return false;
 		}
 		else if (!isDotOrDotDot(fileName))
@@ -1112,6 +1118,8 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 			if (isSymlink)
 			{
 				// Delete reparsepoint and treat path as not existing
+				++ioStats.removeDirCount;
+				TimerScope _(ioStats.removeDirMs);
 				if (!RemoveDirectoryW(fullName.c_str()))
 				{
 					uint error = GetLastError();
@@ -1161,6 +1169,8 @@ bool deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMis
 	WString tempBuffer;
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
+	++ioStats.removeDirCount;
+	TimerScope _(ioStats.removeDirMs);
 	if (RemoveDirectoryW(validDirectory))
 		return true;
 
@@ -1781,8 +1791,10 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 	#endif
 }
 
-bool deleteFile(const wchar_t* fullPath, bool errorOnMissingFile)
+bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile)
 {
+	++ioStats.deleteFileCount;
+	TimerScope _(ioStats.deleteFileMs);
 	WString tempBuffer;
 	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer);
 

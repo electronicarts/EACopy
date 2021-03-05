@@ -1489,7 +1489,7 @@ EACOPY_TEST(ServerLinkNotExists)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 
-	deleteFile((testDestDir + L"1\\Foo.txt").c_str());
+	deleteFile((testDestDir + L"1\\Foo.txt").c_str(), ioStats);
 
 	clientSettings.destDirectory = testDestDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
@@ -1513,7 +1513,7 @@ EACOPY_TEST(ServerLinkModified)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 1);
 
-	deleteFile((testDestDir + L"1\\Foo.txt").c_str());
+	deleteFile((testDestDir + L"1\\Foo.txt").c_str(), ioStats);
 	createTestFile(L"1\\Foo.txt", 10, false);
 
 	clientSettings.destDirectory = testDestDir + L"2\\";
@@ -2010,7 +2010,7 @@ EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 
 	{
 		WString externalDest = g_testExternalDestDir + L"\\A\\";
-		deleteFile((externalDest + file).c_str(), false);
+		deleteFile((externalDest + file).c_str(), ioStats, false);
 		clientSettings.destDirectory = externalDest;
 		Client client(clientSettings);
 
@@ -2021,7 +2021,7 @@ EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 	}
 	{
 		WString externalDest = g_testExternalDestDir + L"\\B\\";
-		deleteFile((externalDest + file).c_str(), false);
+		deleteFile((externalDest + file).c_str(), ioStats, false);
 		clientSettings.destDirectory = externalDest;
 		Client client(clientSettings);
 
