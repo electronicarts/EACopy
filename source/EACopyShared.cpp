@@ -1439,7 +1439,7 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 	outSkip = false;
 	#if defined(_WIN32)
 	{
-		ioStats.createLinkCount;
+		++ioStats.createLinkCount;
 		TimerScope _(ioStats.createLinkMs);
 		if (CreateHardLinkW(fullPath, sourcePath, NULL))
 			return true;
