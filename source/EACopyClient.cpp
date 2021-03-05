@@ -137,7 +137,7 @@ Client::process(Log& log, ClientStats& outStats)
 	// Connect to source if no destination is set
 	if (!m_destConnection)
 		if (!connectToServer(m_settings.sourceDirectory.c_str(), true, m_sourceConnection, m_useSourceServerFailed, outStats))
-			return false;
+			return -1;
 	ScopeGuard sourceConnectionGuard([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
 
 	// Collect exclusions provided through file
@@ -153,8 +153,7 @@ Client::process(Log& log, ClientStats& outStats)
 			for (auto& file : m_settings.filesOrWildcardsFiles)
 				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir))
 					break;
-			if (!processQueuedWildcardFileEntries(logContext, outStats, findFileCache, sourceDir, destDir))
-				return false;
+			processQueuedWildcardFileEntries(logContext, outStats, findFileCache, sourceDir, destDir);
 		}
 		else
 		{
@@ -344,7 +343,7 @@ Client::processDir(LogContext& logContext, Connection* sourceConnection, Connect
 			}
 		});
 
-	// If no new entry queued, sleep a bit and return in order to try again
+	// If no new entry queued
 	if (entry.destDir.empty())
 		return false;
 
@@ -1292,9 +1291,7 @@ Client::gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 	};
 
-	if (!handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc))
-		return false;
-	return true;
+	return handleFilesOrWildcardsFromFile(logContext, stats, rootSourcePath, fileName, rootDestPath, executeFunc);
 }
 
 bool
