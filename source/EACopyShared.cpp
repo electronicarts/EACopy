@@ -1512,24 +1512,6 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		uint nobufferingFlag = getUseBufferedIO(useBufferedIO, sourceInfo.fileSize) ? 0 : FILE_FLAG_NO_BUFFERING;
 		uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
-		OVERLAPPED osRead  = {0,0,0};
-		osRead.Offset = 0;
-		osRead.OffsetHigh = 0;
-		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-
-		u64 startCreateReadTimeMs = getTimeMs();
-		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
-		ioStats.createReadMs += getTimeMs() - startCreateReadTimeMs;
-		++ioStats.createReadCount;
-
-		if (sourceFile == InvalidFileHandle)
-		{
-			logErrorf(L"Failed to open file %ls for read: %ls", source, getErrorText(source, GetLastError()).c_str());
-			return false;
-		}
-
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
-
 		OVERLAPPED osWrite = {0,0,0};
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
@@ -1553,6 +1535,24 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			return false;
 		}
 		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); ++ioStats.closeWriteCount; TimerScope _(ioStats.closeWriteMs); CloseHandle(destFile); });
+
+		OVERLAPPED osRead  = {0,0,0};
+		osRead.Offset = 0;
+		osRead.OffsetHigh = 0;
+		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+		u64 startCreateReadTimeMs = getTimeMs();
+		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
+		ioStats.createReadMs += getTimeMs() - startCreateReadTimeMs;
+		++ioStats.createReadCount;
+
+		if (sourceFile == InvalidFileHandle)
+		{
+			logErrorf(L"Failed to open file %ls for read: %ls", source, getErrorText(source, GetLastError()).c_str());
+			return false;
+		}
+
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
