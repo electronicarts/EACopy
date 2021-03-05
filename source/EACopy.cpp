@@ -350,6 +350,8 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		outSettings.sourceDirectory = optimizeUncPath(outSettings.sourceDirectory.c_str(), temp);
 		#ifndef _DEBUG
 		outSettings.destDirectory = optimizeUncPath(outSettings.destDirectory.c_str(), temp, outSettings.useServer != UseServer_Required);
+		for (WString& dir : outSettings.additionalLinkDirectories)
+			dir = optimizeUncPath(dir.c_str(), temp, outSettings.useServer != UseServer_Required);
 		#endif
 	}
 
