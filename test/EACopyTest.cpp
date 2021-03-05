@@ -2140,8 +2140,6 @@ int main(int argc, char* argv_[])
 #endif
 	}
 
-	testServerLinkNotExists();
-
 	// Run all the tests
 	TestBase::runAll();
 
