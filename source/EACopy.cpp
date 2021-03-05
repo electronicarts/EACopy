@@ -358,7 +358,7 @@ void addCount(wchar_t* buf, uint offset, uint count)
 	if (count)
 	{
 		wchar_t countBuf[32];
-		itow(count, countBuf, sizeof(countBuf));
+		itow(count, countBuf, eacopy_sizeof_array(countBuf));
 		uint len = wcslen(countBuf);
 
 		swprintf(buf + offset, L" (%u)%ls", count, L"      " + len);
@@ -371,7 +371,7 @@ void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint
 {
 	if (!ms)
 		return;
-	wchar_t buf[1024];
+	wchar_t buf[512];
 	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
 	addCount(buf, size, count);
 	stats.push_back(buf);
@@ -381,7 +381,7 @@ void populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes)
 {
 	if (!bytes)
 		return;
-	wchar_t buf[1024];
+	wchar_t buf[512];
 	uint size = swprintf(buf, L"  %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
 	addCount(buf, size, 0);
 	stats.push_back(buf);
@@ -390,7 +390,7 @@ void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value
 {
 	if (!value)
 		return;
-	wchar_t buf[1024];
+	wchar_t buf[512];
 	uint size = swprintf(buf, L"  %ls:%ls%7.1f", name, getPadding(name), value);
 	addCount(buf, size, 0);
 	stats.push_back(buf);
