@@ -395,7 +395,7 @@ void populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes)
 	if (!bytes)
 		return;
 	wchar_t buf[512];
-	uint size = swprintf(buf, L"  %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
+	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
 	addCount(buf, size, 0);
 	stats.push_back(buf);
 }
@@ -404,7 +404,7 @@ void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value
 	if (!value)
 		return;
 	wchar_t buf[512];
-	uint size = swprintf(buf, L"  %ls:%ls%7.1f", name, getPadding(name), value);
+	uint size = swprintf(buf, L"   %ls:%ls%8.1f", name, getPadding(name), value);
 	addCount(buf, size, 0);
 	stats.push_back(buf);
 }
