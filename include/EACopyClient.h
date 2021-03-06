@@ -63,27 +63,27 @@ struct ClientStats
 {
 	u64					copyCount					= 0;
 	u64					copySize					= 0;
-	u64					copyTimeMs					= 0;
+	u64					copyTime					= 0;
 	u64					skipCount					= 0;
 	u64					skipSize					= 0;
-	u64					skipTimeMs					= 0;
+	u64					skipTime					= 0;
 	u64					linkCount					= 0;
 	u64					linkSize					= 0;
-	u64					linkTimeMs					= 0;
+	u64					linkTime					= 0;
 	u64					createDirCount				= 0;
 	u64					failCount					= 0;
 	u64					retryCount					= 0;
-	u64					connectTimeMs				= 0;
-	u64					sendTimeMs					= 0;
+	u64					connectTime					= 0;
+	u64					sendTime					= 0;
 	u64					sendSize					= 0;
-	u64					recvTimeMs					= 0;
+	u64					recvTime					= 0;
 	u64					recvSize					= 0;
-	u64					purgeTimeMs					= 0;
-	u64					compressTimeMs				= 0;
+	u64					purgeTime					= 0;
+	u64					compressTime				= 0;
 	u64					compressionLevelSum			= 0;
 	float				compressionAverageLevel		= 0;
-	u64					decompressTimeMs			= 0;
-	u64					deltaCompressionTimeMs		= 0;
+	u64					decompressTime				= 0;
+	u64					deltaCompressionTime		= 0;
 	IOStats				ioStats;
 
 	bool				destServerUsed				= false;

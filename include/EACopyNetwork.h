@@ -200,9 +200,9 @@ struct CompressionData
 
 struct SendFileStats
 {
-	u64			sendTimeMs = 0;
+	u64			sendTime = 0;
 	u64			sendSize = 0;
-	u64			compressTimeMs = 0;
+	u64			compressTime = 0;
 	u64			compressionLevelSum = 0;
 };
 
@@ -221,9 +221,9 @@ struct NetworkCopyContext : CopyContext
 
 struct RecvFileStats
 {
-	u64			recvTimeMs = 0;
+	u64			recvTime = 0;
 	u64			recvSize = 0;
-	u64			decompressTimeMs = 0;
+	u64			decompressTime = 0;
 };
 
 bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useUnbufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, IOStats& ioStats, RecvFileStats& recvStats);

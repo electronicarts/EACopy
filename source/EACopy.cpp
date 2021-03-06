@@ -430,7 +430,7 @@ int main(int argc, char* argv_[])
 	}
 #endif
 
-	u64 startTimeMs = getTimeMs();
+	u64 startTime = getTime();
 
 	if (argc <= 2 || equalsIgnoreCase(argv[1], L"/?"))
 	{
@@ -506,11 +506,11 @@ int main(int argc, char* argv_[])
 		return -1;
 	}
 
-	u64 endTimeMs = getTimeMs();
+	u64 endTime = getTime();
 
 	if (settings.printJobSummary)
 	{
-		u64 totalTimeMs = endTimeMs - startTimeMs;
+		u64 totalTime = endTime - startTime;
 		auto totalCount = stats.copyCount+stats.linkCount+stats.skipCount;
 		auto totalSize = stats.copySize+stats.linkSize+stats.skipSize;
 
@@ -519,32 +519,32 @@ int main(int argc, char* argv_[])
 		//logInfoLinef(L"    Dirs:      %7i   %7i   %7i   %7i   %7i   %7i", 1, 2, 3, 4, 5, 6);
 		logInfoLinef(L"   Files:      %7i   %7i   %7i   %7i   %7i   %7i   %7i", totalCount, stats.copyCount, stats.linkCount, stats.skipCount, 0, stats.failCount, stats.createDirCount);
 		logInfoLinef(L"   Bytes:     %ls  %ls  %ls  %ls   %7i   %7i   %7i", toPretty(totalSize, 7).c_str(), toPretty(stats.copySize, 7).c_str(), toPretty(stats.linkSize, 7).c_str(), toPretty(stats.skipSize, 7).c_str(), 0, 0, 0);
-		logInfoLinef(L"   Times:     %ls  %ls  %ls  %ls  %ls  %ls  %ls", toHourMinSec(totalTimeMs, 7).c_str(), toHourMinSec(stats.copyTimeMs, 7).c_str(), toHourMinSec(stats.linkTimeMs, 7).c_str(), toHourMinSec(stats.skipTimeMs, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.ioStats.createDirMs, 7).c_str());
+		logInfoLinef(L"   Times:     %ls  %ls  %ls  %ls  %ls  %ls  %ls", toHourMinSec(totalTime, 7).c_str(), toHourMinSec(stats.copyTime, 7).c_str(), toHourMinSec(stats.linkTime, 7).c_str(), toHourMinSec(stats.skipTime, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(0, 7).c_str(), toHourMinSec(stats.ioStats.createDirTime, 7).c_str());
 
 		// Include close in read and write
-		stats.ioStats.readMs += stats.ioStats.closeReadMs + stats.ioStats.createReadMs;
-		stats.ioStats.writeMs += stats.ioStats.closeWriteMs + stats.ioStats.createWriteMs;
+		stats.ioStats.readTime += stats.ioStats.closeReadTime + stats.ioStats.createReadTime;
+		stats.ioStats.writeTime += stats.ioStats.closeWriteTime + stats.ioStats.createWriteTime;
 
 		Vector<WString> statsVec;
-		populateStatsTime(statsVec, L"ConnectTime", stats.connectTimeMs, 0);
-		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileMs, stats.ioStats.findFileCount);
-		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readMs, stats.ioStats.createReadCount);
-		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeMs, stats.ioStats.createWriteCount);
-		populateStatsTime(statsVec, L"LinkFile", stats.ioStats.createLinkMs, stats.ioStats.createLinkCount);
-		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileMs, stats.ioStats.deleteFileCount);
-		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirMs, stats.ioStats.createDirCount);
-		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirMs, stats.ioStats.removeDirCount);
-		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoMs, stats.ioStats.fileInfoCount);
-		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTimeMs, stats.ioStats.setLastWriteTimeCount);
-		populateStatsTime(statsVec, L"SendFile", stats.sendTimeMs, 0);
+		populateStatsTime(statsVec, L"ConnectTime", stats.connectTime, 0);
+		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileTime, stats.ioStats.findFileCount);
+		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readTime, stats.ioStats.createReadCount);
+		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeTime, stats.ioStats.createWriteCount);
+		populateStatsTime(statsVec, L"LinkFile", stats.ioStats.createLinkTime, stats.ioStats.createLinkCount);
+		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileTime, stats.ioStats.deleteFileCount);
+		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirTime, stats.ioStats.createDirCount);
+		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirTime, stats.ioStats.removeDirCount);
+		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoTime, stats.ioStats.fileInfoCount);
+		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTime, stats.ioStats.setLastWriteTimeCount);
+		populateStatsTime(statsVec, L"SendFile", stats.sendTime, 0);
 		populateStatsBytes(statsVec, L"SendBytes", stats.sendSize);
-		populateStatsTime(statsVec, L"RecvFile", stats.recvTimeMs, 0);
+		populateStatsTime(statsVec, L"RecvFile", stats.recvTime, 0);
 		populateStatsBytes(statsVec, L"RecvBytes", stats.recvSize);
-		populateStatsTime(statsVec, L"CompressFile", stats.compressTimeMs, 0);
+		populateStatsTime(statsVec, L"CompressFile", stats.compressTime, 0);
 		populateStatsValue(statsVec, L"CompressLevel", stats.compressionAverageLevel);
-		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTimeMs, 0);
-		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTimeMs, 0);
-		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTimeMs, 0);
+		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTime, 0);
+		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTime, 0);
+		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTime, 0);
 
 		logInfoLinef();
 
@@ -561,7 +561,7 @@ int main(int argc, char* argv_[])
 		if (stats.destServerUsed || stats.sourceServerUsed)
 			logInfoLinef(L"   Server found and used!");
 		else if (stats.serverAttempt && !stats.destServerUsed)
-			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTimeMs/std::max(1, (int)settings.threadCount)).c_str());
+			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/std::max(1, (int)settings.threadCount)).c_str());
 		else
 			logInfoLinef(L"   No server used!");
 	}
@@ -570,11 +570,11 @@ int main(int argc, char* argv_[])
 	{
 		if (settings.printJobSummary)
 		{
-			u64 endLogTimeMs = getTimeMs();
-			if (endLogTimeMs - endTimeMs > 100)
+			u64 endLogTime = getTime();
+			if (endLogTime - endTime > 100)
 			{
 				logInfoLinef();
-				logInfoLinef(L"   Spent %.1f seconds waiting for log output to finish (Consider using /LOG:file or /LOGMIN)", float(endLogTimeMs - endTimeMs)*0.001f);
+				logInfoLinef(L"   Spent %ls seconds waiting for log output to finish (Consider using /LOG:file or /LOGMIN)", toHourMinSec(endLogTime - endTime).c_str());
 			}
 		}
 	});

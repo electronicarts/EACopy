@@ -297,7 +297,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			u64 left = fileSize - pos;
 			uint toWrite = (uint)std::min(left, u64(INT_MAX-1));
 
-			u64 startSendMs = getTimeMs();
+			u64 startSendTime = getTime();
 			if (!TransmitFile(socket.socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
 			{
 				int error = getLastNetworkError();
@@ -316,7 +316,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					return false;
 				}
 			}
-			sendStats.sendTimeMs += getTimeMs() - startSendMs;
+			sendStats.sendTime += getTime() - startSendTime;
 			sendStats.sendSize += toWrite;
 
 			pos += toWrite;
@@ -346,10 +346,10 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				}
 			}
 
-			u64 startSendMs = getTimeMs();
+			u64 startSendTime = getTime();
 			if (!sendData(socket, copyContext.buffers[0], read))
 				return false;
-			sendStats.sendTimeMs += getTimeMs() - startSendMs;
+			sendStats.sendTime += getTime() - startSendTime;
 			sendStats.sendSize += read;
 
 			left -= read;
@@ -381,7 +381,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
-			u64 startCompressMs = getTimeMs();
+			u64 startCompressTime = getTime();
 			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, NetworkTransferChunkSize - 4, copyContext.buffers[0], read, compressionData.level);
 			if (ZSTD_isError(compressedSize))
 			{
@@ -389,14 +389,14 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				return false;
 			}
 
-			u64 compressTimeMs = getTimeMs() - startCompressMs;
+			u64 compressTime = getTime() - startCompressTime;
 
 			*(uint*)destBuf =  uint(compressedSize);
 
-			u64 startSendMs = getTimeMs();
+			u64 startSendTime = getTime();
 			if (!sendData(socket, destBuf, compressedSize + 4))
 				return false;
-			u64 sendTimeMs = getTimeMs() - startSendMs;
+			u64 sendTime = getTime() - startSendTime;
 
 			sendStats.compressionLevelSum += read * compressionData.level;
 
@@ -406,7 +406,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				// We then look at if we compressed more or less last time and if time went up or down.
 				// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
 
-				u64 compressWeight = ((compressTimeMs + sendTimeMs) * 10000000) / read;
+				u64 compressWeight = ((compressTime + sendTime) * 10000) / read;
 
 				u64 lastCompressWeight = compressionData.lastWeight;
 				compressionData.lastWeight = compressWeight;
@@ -423,8 +423,8 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					compressionData.level = std::max(1, compressionData.level - 1);
 			}
 
-			sendStats.compressTimeMs += compressTimeMs;
-			sendStats.sendTimeMs += sendTimeMs;
+			sendStats.compressTime += compressTime;
+			sendStats.sendTime += sendTime;
 			sendStats.sendSize += compressedSize + 4;
 
 			left -= read;
@@ -473,7 +473,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		while (read != fileSize)
 		{
-			u64 startRecvTimeMs = getTimeMs();
+			u64 startRecvTime = getTime();
 			u64 left = fileSize - read;
 			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
 			WSABUF wsabuf;
@@ -494,7 +494,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			}
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-			recvStats.recvTimeMs += getTimeMs() - startRecvTimeMs;
+			recvStats.recvTime += getTime() - startRecvTime;
 			recvStats.recvSize += recvBytes;
 
 			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], recvBytes, ioStats, &osWrite);
@@ -505,9 +505,9 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		totalReceivedSize += read;
 
-		u64 startWriteTimeMs = getTimeMs();
+		u64 startWriteTime = getTime();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		ioStats.writeMs = getTimeMs() - startWriteTimeMs;
+		ioStats.writeTime = getTime() - startWriteTime;
 		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
 		outSuccess = outSuccess && closeFile(validFullPath, file, AccessType_Write, ioStats);
 	}
@@ -538,7 +538,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		while (read != fileSize)
 		{
-			u64 startRecvTimeMs = getTimeMs();
+			u64 startRecvTime = getTime();
 
 			uint compressedSize;
 			if (!receiveData(socket, &compressedSize, sizeof(uint)))
@@ -571,13 +571,13 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				return false;
 			}
 
-			recvStats.recvTimeMs += getTimeMs() - startRecvTimeMs;
+			recvStats.recvTime += getTime() - startRecvTime;
 			recvStats.recvSize += recvBytes;
 
 			if (!copyContext.compContext)
 				copyContext.compContext = ZSTD_createDCtx();
 
-			u64 startDecompressTimeMs = getTimeMs();
+			u64 startDecompressTime = getTime();
 			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], recvBytes);
 			if (outSuccess)
 			{
@@ -589,7 +589,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				}
 			}
 
-			recvStats.decompressTimeMs = getTimeMs() - startDecompressTimeMs;
+			recvStats.decompressTime = getTime() - startDecompressTime;
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 
@@ -599,9 +599,9 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
 		}
 
-		u64 startWriteTimeMs = getTimeMs();
+		u64 startWriteTime = getTime();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
-		ioStats.writeMs = getTimeMs() - startWriteTimeMs;
+		ioStats.writeTime = getTime() - startWriteTime;
 		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
 		outSuccess = outSuccess && closeFile(validFullPath, file, AccessType_Write, ioStats);
 	}

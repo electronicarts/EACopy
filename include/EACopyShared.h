@@ -137,7 +137,8 @@ private:
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Misc
 
-u64						getTimeMs();
+u64						getTime();
+inline u64				getTimeMs() { return getTime() / 10000; }
 bool					equalsIgnoreCase(const wchar_t* a, const wchar_t* b);
 bool					lessIgnoreCase(const wchar_t* a, const wchar_t* b);
 bool					startsWithIgnoreCase(const wchar_t* str, const wchar_t* substr);
@@ -146,7 +147,7 @@ WString					getErrorText(const wchar_t* resourceName, uint error);
 WString					getLastErrorText();
 WString					getProcessesUsingResource(const wchar_t* resourceName);
 WString					toPretty(u64 bytes, uint alignment = 0);
-WString					toHourMinSec(u64 timeMs, uint alignment = 0);
+WString					toHourMinSec(u64 time, uint alignment = 0);
 String					toString(const wchar_t* str);
 void					itow(int value, wchar_t* dst, uint dstCapacity);
 int						stringEquals(const wchar_t* a, const wchar_t* b);
@@ -157,8 +158,8 @@ bool					stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source);
 
 struct TimerScope
 {
-	TimerScope(u64& t) : timer(t), start(getTimeMs()) {}
-	~TimerScope() { timer += getTimeMs() - start; }
+	TimerScope(u64& t) : timer(t), start(getTime()) {}
+	~TimerScope() { timer += getTime() - start; }
 	u64& timer;
 	u64 start;
 };
@@ -187,28 +188,28 @@ struct CopyContext
 
 struct IOStats
 {
-	u64					createReadMs = 0;
-	u64					readMs = 0;
-	u64					closeReadMs = 0;
+	u64					createReadTime = 0;
+	u64					readTime = 0;
+	u64					closeReadTime = 0;
 	uint				createReadCount = 0;
 	uint				readCount = 0;
 	uint				closeReadCount = 0;
 
-	u64					createWriteMs = 0;
-	u64					writeMs = 0;
-	u64					closeWriteMs = 0;
+	u64					createWriteTime = 0;
+	u64					writeTime = 0;
+	u64					closeWriteTime = 0;
 	uint				createWriteCount = 0;
 	uint				writeCount = 0;
 	uint				closeWriteCount = 0;
 
 
-	u64					createLinkMs = 0;
-	u64					deleteFileMs = 0;
-	u64					removeDirMs = 0;
-	u64					setLastWriteTimeMs = 0;
-	u64					findFileMs = 0;
-	u64					fileInfoMs = 0;
-	u64					createDirMs = 0;
+	u64					createLinkTime = 0;
+	u64					deleteFileTime = 0;
+	u64					removeDirTime = 0;
+	u64					setLastWriteTime = 0;
+	u64					findFileTime = 0;
+	u64					fileInfoTime = 0;
+	u64					createDirTime = 0;
 	uint				createLinkCount = 0;
 	uint				deleteFileCount = 0;
 	uint				removeDirCount = 0;

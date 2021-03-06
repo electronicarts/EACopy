@@ -150,9 +150,9 @@ struct TestBase
 			EACOPY_ASSERT(ensureDirectory(testSourceDir.c_str()));
 			EACOPY_ASSERT(ensureDirectory(testDestDir.c_str()));
 			m_setupTime = 0;
-			u64 startTime = getTimeMs();
+			u64 startTime = getTime();
 			runImpl(loopIndex);
-			u64 endTime = getTimeMs();
+			u64 endTime = getTime();
 			if (!skipped)
 			{
 				wprintf(L"Done (%ls)\n", toHourMinSec(endTime - startTime - m_setupTime).c_str());
@@ -205,7 +205,7 @@ struct TestBase
 	}
 	void createTestFile(const wchar_t* dir_, const wchar_t* name, u64 size, bool source = true)
 	{
-		u64 startSetupTime = getTimeMs();
+		u64 startSetupTime = getTime();
 
 		WString dir(dir_);
 		const wchar_t* lastSlash = wcsrchr(name, L'\\');
@@ -232,7 +232,7 @@ struct TestBase
 
 		delete[] data;
 
-		m_setupTime += getTimeMs() - startSetupTime;
+		m_setupTime += getTime() - startSetupTime;
 	}
 
 	bool getGeneralFileExists(const wchar_t* fullFilePath)

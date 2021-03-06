@@ -193,7 +193,7 @@ Client::process(Log& log, ClientStats& outStats)
 			return threadExitCode;
 	}
 
-	u64 startPurgeTimeMs = getTimeMs();
+	u64 startPurgeTime = getTime();
 
 	// If purge feature is enabled.. traverse destination and remove unwanted files/directories
 	if (m_settings.purgeDestination)
@@ -211,7 +211,7 @@ Client::process(Log& log, ClientStats& outStats)
 				return -1;
 		}
 
-	outStats.purgeTimeMs = getTimeMs() - startPurgeTimeMs;
+	outStats.purgeTime = getTime() - startPurgeTime;
 
 
 	// Merge stats from all threads
@@ -226,47 +226,49 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.linkSize += threadStats.linkSize;
 		outStats.serverAttempt |= threadStats.serverAttempt;
 
-		//outStats.copyTimeMs += threadStats.copyTimeMs; // Only use main thread for time
-		//outStats.skipTimeMs += threadStats.skipTimeMs; // Only use main thread for time
-		//outStats.linkTimeMs += threadStats.linkTimeMs; // Only use main thread for time
-		//outStats.createDirTimeMs += threadStats.createDirTimeMs; // Only use main thread for time
-		//outStats.purgeTimeMs += threadStats.purgeTimeMs; // Only use main thread for time
+		//outStats.copyTime += threadStats.copyTime; // Only use main thread for time
+		//outStats.skipTime += threadStats.skipTime; // Only use main thread for time
+		//outStats.linkTime += threadStats.linkTime; // Only use main thread for time
+		//outStats.createDirTime += threadStats.createDirTime; // Only use main thread for time
+		//outStats.purgeTime += threadStats.purgeTime; // Only use main thread for time
 
 		outStats.createDirCount += threadStats.createDirCount;
-		outStats.compressTimeMs += threadStats.compressTimeMs;
-		outStats.deltaCompressionTimeMs += threadStats.deltaCompressionTimeMs;
-		outStats.sendTimeMs += threadStats.sendTimeMs;
+		outStats.compressTime += threadStats.compressTime;
+		outStats.deltaCompressionTime += threadStats.deltaCompressionTime;
+		outStats.sendTime += threadStats.sendTime;
 		outStats.sendSize += threadStats.sendSize;
-		outStats.recvTimeMs += threadStats.recvTimeMs;
+		outStats.recvTime += threadStats.recvTime;
 		outStats.recvSize += threadStats.recvSize;
 		outStats.compressionLevelSum += threadStats.compressionLevelSum;
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
-		outStats.connectTimeMs += threadStats.connectTimeMs;
-		outStats.ioStats.createReadMs += threadStats.ioStats.createReadMs;
-		outStats.ioStats.closeReadMs += threadStats.ioStats.closeReadMs;
+		outStats.connectTime += threadStats.connectTime;
+		outStats.ioStats.createReadTime += threadStats.ioStats.createReadTime;
+		outStats.ioStats.closeReadTime += threadStats.ioStats.closeReadTime;
 		outStats.ioStats.closeReadCount += threadStats.ioStats.closeReadCount;
-		outStats.ioStats.readMs += threadStats.ioStats.readMs;
+		outStats.ioStats.readTime += threadStats.ioStats.readTime;
 		outStats.ioStats.readCount += threadStats.ioStats.readCount;
 		outStats.ioStats.createReadCount += threadStats.ioStats.createReadCount;
-		outStats.ioStats.createWriteMs += threadStats.ioStats.createWriteMs;
+		outStats.ioStats.createWriteTime += threadStats.ioStats.createWriteTime;
 		outStats.ioStats.createWriteCount += threadStats.ioStats.createWriteCount;
-		outStats.ioStats.closeWriteMs += threadStats.ioStats.closeWriteMs;
+		outStats.ioStats.closeWriteTime += threadStats.ioStats.closeWriteTime;
 		outStats.ioStats.closeWriteCount += threadStats.ioStats.closeWriteCount;
-		outStats.ioStats.writeMs += threadStats.ioStats.writeMs;
+		outStats.ioStats.writeTime += threadStats.ioStats.writeTime;
 		outStats.ioStats.writeCount += threadStats.ioStats.writeCount;
-		outStats.ioStats.removeDirMs += threadStats.ioStats.removeDirMs;
+		outStats.ioStats.removeDirTime += threadStats.ioStats.removeDirTime;
 		outStats.ioStats.removeDirCount += threadStats.ioStats.removeDirCount;
-		outStats.ioStats.createLinkMs += threadStats.ioStats.createLinkMs;
+		outStats.ioStats.deleteFileTime += threadStats.ioStats.deleteFileTime;
+		outStats.ioStats.deleteFileCount += threadStats.ioStats.deleteFileCount;
+		outStats.ioStats.createLinkTime += threadStats.ioStats.createLinkTime;
 		outStats.ioStats.createLinkCount += threadStats.ioStats.createLinkCount;
-		outStats.ioStats.setLastWriteTimeMs += threadStats.ioStats.setLastWriteTimeMs;
+		outStats.ioStats.setLastWriteTime += threadStats.ioStats.setLastWriteTime;
 		outStats.ioStats.setLastWriteTimeCount += threadStats.ioStats.setLastWriteTimeCount;
-		outStats.ioStats.findFileMs += threadStats.ioStats.findFileMs;
+		outStats.ioStats.findFileTime += threadStats.ioStats.findFileTime;
 		outStats.ioStats.findFileCount += threadStats.ioStats.findFileCount;
-		outStats.ioStats.fileInfoMs += threadStats.ioStats.fileInfoMs;
+		outStats.ioStats.fileInfoTime += threadStats.ioStats.fileInfoTime;
 		outStats.ioStats.fileInfoCount += threadStats.ioStats.fileInfoCount;
 		outStats.ioStats.createDirCount += threadStats.ioStats.createDirCount;
-		outStats.ioStats.createDirMs += threadStats.ioStats.createDirMs;
+		outStats.ioStats.createDirTime += threadStats.ioStats.createDirTime;
 
 	}
 
@@ -395,7 +397,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		// Use connection to server if available
 		if (isValid(destConnection))
 		{
-			u64 startTimeMs = getTimeMs();
+			u64 startTime = getTime();
 			u64 size;
 			u64 written;
 			bool linked;
@@ -407,7 +409,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"%ls   %ls", linked ? L"Link File" : L"New File ", getRelativeSourceFile(entry.src));
-					(linked ? stats.linkTimeMs : stats.copyTimeMs) += getTimeMs() - startTimeMs;
+					(linked ? stats.linkTime : stats.copyTime) += getTime() - startTime;
 					++(linked ? stats.linkCount : stats.copyCount);
 					(linked ? stats.linkSize : stats.copySize) += written;
 				}
@@ -415,7 +417,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-					stats.skipTimeMs += getTimeMs() - startTimeMs;
+					stats.skipTime += getTime() - startTime;
 					++stats.skipCount;
 					stats.skipSize += size;
 				}
@@ -424,7 +426,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		}
 		else if (isValid(sourceConnection))
 		{
-			u64 startTimeMs = getTimeMs();
+			u64 startTime = getTime();
 			u64 size;
 			u64 read;
 			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
@@ -434,7 +436,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"%ls   %ls", L"New File ", getRelativeSourceFile(entry.src));
-					stats.copyTimeMs += getTimeMs() - startTimeMs;
+					stats.copyTime += getTime() - startTime;
 					++stats.copyCount;
 					stats.copySize += size;
 				}
@@ -442,7 +444,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-					stats.skipTimeMs += getTimeMs() - startTimeMs;
+					stats.skipTime += getTime() - startTime;
 					++stats.skipCount;
 					stats.skipSize += size;
 				}
@@ -459,7 +461,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		}
 		else
 		{
-			u64 startTimeMs = getTimeMs();
+			u64 startTime = getTime();
 
 			if (m_settings.useFileLinks)
 			{
@@ -475,7 +477,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						{
 							if (m_settings.logProgress)
 								logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-							stats.skipTimeMs += getTimeMs() - startTimeMs;
+							stats.skipTime += getTime() - startTime;
 							++stats.skipCount;
 							stats.skipSize += entry.srcInfo.fileSize;
 						}
@@ -483,7 +485,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						{
 							if (m_settings.logProgress)
 								logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
-							stats.linkTimeMs += getTimeMs() - startTimeMs;
+							stats.linkTime += getTime() - startTime;
 							++stats.linkCount;
 							stats.linkSize += entry.srcInfo.fileSize;
 						}
@@ -504,7 +506,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
-					stats.copyTimeMs += getTimeMs() - startTimeMs;
+					stats.copyTime += getTime() - startTime;
 					++stats.copyCount;
 					stats.copySize += written;
 					return true;
@@ -531,7 +533,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-					stats.skipTimeMs += getTimeMs() - startTimeMs;
+					stats.skipTime += getTime() - startTime;
 					++stats.skipCount;
 					stats.skipSize += destInfo.fileSize;
 
@@ -550,7 +552,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
 
-					stats.copyTimeMs += getTimeMs() - startTimeMs;
+					stats.copyTime += getTime() - startTime;
 					++stats.copyCount;
 					stats.copySize += written;
 
@@ -587,10 +589,10 @@ Client::connectToServer(const wchar_t* networkPath, uint connectionIndex, Connec
 	// Set temporary log context to swallow potential errors when trying to connect
 	LogContext logContext(*m_log);
 
-	u64 startConnect = getTimeMs();
+	u64 startConnect = getTime();
 	stats.serverAttempt = true;
 	outConnection = createConnection(networkPath, connectionIndex, stats, failedToConnect, true);
-	stats.connectTimeMs += getTimeMs() - startConnect;
+	stats.connectTime += getTime() - startConnect;
 
 	if (failedToConnect && m_settings.useServer == UseServer_Required)
 	{
@@ -1148,7 +1150,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			u64 read = 0;
 			u64 toRead = CopyContextBufferSize - left - 1;
 			{
-				TimerScope _(stats.ioStats.readMs);
+				TimerScope _(stats.ioStats.readTime);
 				++stats.ioStats.readCount;
 				if (!readFile(fullPath.c_str(), hFile, buffer + left, toRead, read, stats.ioStats))
 				{
@@ -1517,7 +1519,7 @@ Client::getRelativeSourceFile(const WString& sourcePath) const
 Client::Connection*
 Client::createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck)
 {
-	u64 startTime = getTimeMs();
+	u64 startTime = getTime();
 
 	ScopedCriticalSection networkInitScope(m_networkInitCs);
 
@@ -1655,7 +1657,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		break;
 	}
 
-	u64 endTime = getTimeMs();
+	u64 endTime = getTime();
 	logDebugLinef(L"Connect to server %ls. (%.1f seconds)", sock.socket != INVALID_SOCKET ? L"SUCCESS" : L"FAILED", float(endTime - startTime)/1000.0f);
 
 	if (sock.socket == INVALID_SOCKET)
@@ -1884,9 +1886,9 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		SendFileStats sendStats;
 		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionData, useBufferedIO, m_stats.ioStats, sendStats))
 			return false;
-		m_stats.sendTimeMs += sendStats.sendTimeMs;
+		m_stats.sendTime += sendStats.sendTime;
 		m_stats.sendSize += sendStats.sendSize;
-		m_stats.compressTimeMs += sendStats.compressTimeMs;
+		m_stats.compressTime += sendStats.compressTime;
 		m_stats.compressionLevelSum += sendStats.compressionLevelSum;
 
 		u8 writeSuccess;
@@ -1923,11 +1925,11 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		RsyncStats rsyncStats;
 		if (!clientHandleRsync(m_socket, src, rsyncStats))
 			return false;
-		m_stats.sendTimeMs += rsyncStats.sendTimeMs;
+		m_stats.sendTime += rsyncStats.sendTime;
 		m_stats.sendSize += rsyncStats.sendSize;
-		m_stats.ioStats.readMs += rsyncStats.readMs;
+		m_stats.ioStats.readTime += rsyncStats.readTime;
 		//m_stats.ioStats.readSize += rsyncStats.readSize;
-		m_stats.deltaCompressionTimeMs += rsyncStats.rsyncTimeMs;
+		m_stats.deltaCompressionTime += rsyncStats.rsyncTime;
 
 		u8 writeSuccess;
 		if (!receiveData(m_socket, &writeSuccess, sizeof(writeSuccess)))
@@ -2036,9 +2038,9 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		RecvFileStats recvStats;
 		if (!receiveFile(success, m_socket, fullDest.c_str(), newFileSize, newFileLastWriteTime, writeType, useBufferedIO, copyContext, nullptr, 0, commandSize, m_stats.ioStats, recvStats))
 			return ReadFileResult_Error;
-		m_stats.recvTimeMs += recvStats.recvTimeMs;
+		m_stats.recvTime += recvStats.recvTime;
 		m_stats.recvSize += recvStats.recvSize;
-		m_stats.decompressTimeMs += recvStats.decompressTimeMs;
+		m_stats.decompressTime += recvStats.decompressTime;
 
 		outRead = newFileSize;
 		outSize = newFileSize;

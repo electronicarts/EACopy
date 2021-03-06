@@ -29,7 +29,7 @@ namespace eacopy
 void
 Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportServerStatus reportStatus)
 {
-	m_startTime = getTimeMs();
+	m_startTime = getTime();
 	m_isConsole = isConsole;
 
 	LogContext logContext(log);
@@ -807,7 +807,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 			case CommandType_RequestReport:
 				{
-					u64 uptimeMs = getTimeMs() - m_startTime;
+					u64 upTime = getTime() - m_startTime;
 					uint historySize = m_database.getHistorySize();
 					
 					PROCESS_MEMORY_COUNTERS memCounters;
@@ -841,7 +841,7 @@ Server::connectionThread(ConnectionInfo& info)
 						L"   %ls linked\n"
 						L"   %ls skipped\n"
 						, ServerVersion, ProtocolVersion, m_isConsole ? L"Console" : L"Service"
-						, toHourMinSec(uptimeMs).c_str()
+						, toHourMinSec(upTime).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
 						, toPretty(freeVolumeSpace).c_str(), toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());
 

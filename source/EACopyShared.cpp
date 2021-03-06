@@ -669,7 +669,7 @@ FindFileHandle
 findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioStats)
 {
 	++ioStats.findFileCount;
-	TimerScope _(ioStats.findFileMs);
+	TimerScope _(ioStats.findFileTime);
 #if defined(_WIN32)
 	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
 	return FindFirstFileExW(searchStr, FindExInfoBasic, (WIN32_FIND_DATAW*)&findFileData, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
@@ -708,7 +708,7 @@ findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioS
 bool
 findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats& ioStats)
 {
-	TimerScope _(ioStats.findFileMs);
+	TimerScope _(ioStats.findFileTime);
 #if defined(_WIN32)
 	return FindNextFileW(handle, (WIN32_FIND_DATAW*)&findFileData);
 #else
@@ -733,7 +733,7 @@ findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats& ioStats
 void
 findClose(FindFileHandle handle, IOStats& ioStats)
 {
-	TimerScope _(ioStats.findFileMs);
+	TimerScope _(ioStats.findFileTime);
 #if defined(_WIN32)
 	FindClose(handle);
 #else
@@ -860,7 +860,7 @@ void removeTemporarySymlinks(const wchar_t* path)
 uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats)
 {
 	++ioStats.fileInfoCount;
-	TimerScope _(ioStats.fileInfoMs);
+	TimerScope _(ioStats.fileInfoTime);
 
 	#if defined(_WIN32)
 	WString tempBuffer;
@@ -934,7 +934,7 @@ bool replaceIfSymLink(const wchar_t* directory, uint attributes, IOStats& ioStat
 	{
 		// Delete reparsepoint and treat path as not existing
 		++ioStats.removeDirCount;
-		TimerScope _(ioStats.removeDirMs);
+		TimerScope _(ioStats.removeDirTime);
 		if (!RemoveDirectoryW(directory))
 		{
 			logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getLastErrorText().c_str());
@@ -943,7 +943,7 @@ bool replaceIfSymLink(const wchar_t* directory, uint attributes, IOStats& ioStat
 	}
 
 	++ioStats.createDirCount;
-	TimerScope _(ioStats.createDirMs);
+	TimerScope _(ioStats.createDirTime);
 	if (CreateDirectoryW(directory, NULL) != 0)
 		return true;
 
@@ -958,7 +958,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	{
 		{
 			++ioStats.createDirCount;
-			TimerScope _(ioStats.createDirMs);
+			TimerScope _(ioStats.createDirTime);
 			if (CreateDirectoryW(directory, NULL) != 0)
 			{
 				if (outCreatedDirs)
@@ -1043,7 +1043,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 
 	{
 		++ioStats.createDirCount;
-		TimerScope _(ioStats.createDirMs);
+		TimerScope _(ioStats.createDirTime);
 		if (CreateDirectoryW(validDirectory, NULL) != 0)
 		{
 			if (outCreatedDirs)
@@ -1119,7 +1119,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 			{
 				// Delete reparsepoint and treat path as not existing
 				++ioStats.removeDirCount;
-				TimerScope _(ioStats.removeDirMs);
+				TimerScope _(ioStats.removeDirTime);
 				if (!RemoveDirectoryW(fullName.c_str()))
 				{
 					uint error = GetLastError();
@@ -1170,7 +1170,7 @@ bool deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMis
 	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 
 	++ioStats.removeDirCount;
-	TimerScope _(ioStats.removeDirMs);
+	TimerScope _(ioStats.removeDirTime);
 	if (RemoveDirectoryW(validDirectory))
 		return true;
 
@@ -1209,7 +1209,7 @@ bool getUseBufferedIO(UseBufferedIO use, u64 fileSize)
 
 bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool isSequentialScan, bool sharedRead)
 {
-	TimerScope _(ioStats.createReadMs);
+	TimerScope _(ioStats.createReadTime);
 	++ioStats.createReadCount;
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
@@ -1250,7 +1250,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
 
 	++ioStats.createWriteCount;
-	TimerScope _(ioStats.createWriteMs);
+	TimerScope _(ioStats.createWriteTime);
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
@@ -1273,7 +1273,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped)
 {
 	++ioStats.writeCount;
-	TimerScope _(ioStats.writeMs);
+	TimerScope _(ioStats.writeTime);
 	#if defined(_WIN32)
 	if (overlapped)
 	{
@@ -1326,7 +1326,7 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 
 bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats)
 {
-	TimerScope _(ioStats.readMs);
+	TimerScope _(ioStats.readTime);
 	++ioStats.readCount;
 	#if defined(_WIN32)
 	DWORD dwRead = 0;
@@ -1366,7 +1366,7 @@ bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime la
 	//}
 
 	++ioStats.setLastWriteTimeCount;
-	TimerScope _(ioStats.setLastWriteTimeMs);
+	TimerScope _(ioStats.setLastWriteTime);
 	#if defined(_WIN32)
 	if (SetFileTime(file, NULL, NULL, (FILETIME*)&lastWriteTime))
 		return true;
@@ -1402,7 +1402,7 @@ bool closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType,
 		return true;
 
 	++(accessType == AccessType_Read ? ioStats.closeReadCount : ioStats.closeWriteCount);
-	TimerScope _(accessType == AccessType_Read ? ioStats.closeReadMs : ioStats.closeWriteMs);
+	TimerScope _(accessType == AccessType_Read ? ioStats.closeReadTime : ioStats.closeWriteTime);
 	#if defined(_WIN32)
 	bool success = CloseHandle(file) != 0;
 	file = InvalidFileHandle;
@@ -1440,7 +1440,7 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 	#if defined(_WIN32)
 	{
 		++ioStats.createLinkCount;
-		TimerScope _(ioStats.createLinkMs);
+		TimerScope _(ioStats.createLinkTime);
 		if (CreateHardLinkW(fullPath, sourcePath, NULL))
 			return true;
 	}
@@ -1531,9 +1531,9 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 
 		++ioStats.createWriteCount;
-		u64 startCreateWriteTimeMs = getTimeMs();
+		u64 startCreateWriteTime = getTime();
 		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
-		ioStats.createWriteMs += getTimeMs() - startCreateWriteTimeMs;
+		ioStats.createWriteTime += getTime() - startCreateWriteTime;
 
 		if (destFile == InvalidFileHandle)
 		{
@@ -1547,16 +1547,16 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			logErrorf(L"Failed to create file %ls: %ls", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
-		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); ++ioStats.closeWriteCount; TimerScope _(ioStats.closeWriteMs); CloseHandle(destFile); });
+		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); ++ioStats.closeWriteCount; TimerScope _(ioStats.closeWriteTime); CloseHandle(destFile); });
 
 		OVERLAPPED osRead  = {0,0,0};
 		osRead.Offset = 0;
 		osRead.OffsetHigh = 0;
 		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
-		u64 startCreateReadTimeMs = getTimeMs();
+		u64 startCreateReadTime = getTime();
 		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
-		ioStats.createReadMs += getTimeMs() - startCreateReadTimeMs;
+		ioStats.createReadTime += getTime() - startCreateReadTime;
 		++ioStats.createReadCount;
 
 		if (sourceFile == InvalidFileHandle)
@@ -1565,7 +1565,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			return false;
 		}
 
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadMs); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadTime); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -1578,7 +1578,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			if (sizeFilled)
 			{
 				++ioStats.writeCount;
-				TimerScope _(ioStats.writeMs);
+				TimerScope _(ioStats.writeTime);
 
 				if (UseOverlappedCopy && WaitForSingleObject(osWrite.hEvent, INFINITE) != WAIT_OBJECT_0)
 				{
@@ -1613,7 +1613,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			if (left)
 			{
 				++ioStats.readCount;
-				TimerScope _(ioStats.readMs);
+				TimerScope _(ioStats.readTime);
 
 				uint toRead = (uint)std::min(left, u64(ReadChunkSize));
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
@@ -1663,14 +1663,14 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 
 		{
 			++ioStats.closeReadCount;
-			TimerScope _(ioStats.closeReadMs);
+			TimerScope _(ioStats.closeReadTime);
 			CloseHandle(sourceFile);
 			sourceFile = InvalidFileHandle;
 		}
 
 		{
 			++ioStats.closeWriteCount;
-			TimerScope _(ioStats.closeWriteMs); 
+			TimerScope _(ioStats.closeWriteTime); 
 			CloseHandle(destFile);
 			destFile = InvalidFileHandle;
 		}
@@ -1797,7 +1797,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile)
 {
 	++ioStats.deleteFileCount;
-	TimerScope _(ioStats.deleteFileMs);
+	TimerScope _(ioStats.deleteFileTime);
 	WString tempBuffer;
 	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer);
 
@@ -1866,7 +1866,7 @@ void convertSlashToBackslash(char* path, size_t size)
 			*path = '\\';
 }
 
-u64 getTimeMs()
+u64 getTime()
 {
 	#if defined(_WIN32)
 	FILETIME ft;
@@ -1875,7 +1875,7 @@ u64 getTimeMs()
 	LARGE_INTEGER li;
 	li.LowPart = ft.dwLowDateTime;
 	li.HighPart = ft.dwHighDateTime;
-	return (li.QuadPart - 116444736000000000LL) / 10000;
+	return (li.QuadPart - 116444736000000000LL);
 	#else
 	timeval tv;
     u64 result = 11644473600LL;
@@ -2025,9 +2025,10 @@ WString toPretty(u64 bytes, uint alignment)
 	return dest;
 }
 
-WString toHourMinSec(u64 timeMs, uint alignment)
+WString toHourMinSec(u64 time, uint alignment)
 {
-	u64 timeSec = timeMs / 1000;
+	u64 timeMs = time / 10000;
+	u64 timeSec = timeMs / (1000 * 10000);
 	u64 days = timeSec / (24*60*60);
 	timeSec -= days * (24*60*60);
 	u64 hours = timeSec / (60*60);
