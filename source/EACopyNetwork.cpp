@@ -458,7 +458,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
 		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
-		ScopeGuard fileGuard([&]() { closeFile(validFullPath, file, AccessType_Write, ioStats); CloseHandle(osWrite.hEvent); });
+		ScopeGuard fileGuard([&]() { if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; CloseHandle(osWrite.hEvent); });
 
 		u64 read = 0;
 
@@ -511,7 +511,6 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 		ioStats.writeTime = getTime() - startWriteTime;
 		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
-		outSuccess = outSuccess && closeFile(validFullPath, file, AccessType_Write, ioStats);
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
