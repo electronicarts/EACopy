@@ -193,7 +193,7 @@ bool receiveData(Socket& socket, void* buffer, uint size)
 
 	while (left)
 	{
-		int res = ::recv(socket.socket, pos, left, MSG_WAITALL);
+		int res = ::recv(socket.socket, pos, left, 0);
 		if (res < 0)
 		{
 			int lastError = getLastNetworkError();
@@ -455,10 +455,10 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		memset(&osWrite, 0, sizeof(osWrite));
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
-
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
+
 		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
-		ScopeGuard fileGuard([&]() { if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; CloseHandle(osWrite.hEvent); });
+		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
 
 		u64 read = 0;
 
@@ -482,7 +482,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
 			uint recvBytes = 0;
-			uint flags = MSG_WAITALL;
+			uint flags = 0;
 			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
@@ -519,10 +519,10 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		memset(&osWrite, 0, sizeof(osWrite));
 		osWrite.Offset = 0xFFFFFFFF;
 		osWrite.OffsetHigh = 0xFFFFFFFF;
-
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
+
 		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
-		ScopeGuard fileGuard([&]() { if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; CloseHandle(osWrite.hEvent); });
+		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
 
 		u64 read = 0;
 
@@ -561,7 +561,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				wsabuf.len = toRead;
 				wsabuf.buf = (char*)copyContext.buffers[2];
 				uint recvBytes = 0;
-				uint flags = MSG_WAITALL;
+				uint flags = 0;
 				int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 				if (fileRes != 0)
 				{
