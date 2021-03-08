@@ -1297,8 +1297,9 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 		if (!WriteFile(file, data, toWrite, &written, nullptr))
 		{
 			logErrorf(L"Trying to write data to %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
-			CloseHandle(file);
-			file = InvalidFileHandle;
+			if (!overlapped)
+				if (CloseHandle(file))
+					file = InvalidFileHandle;
 			return false;
 		}
 		(char*&)data += written;
@@ -1371,8 +1372,8 @@ bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime la
 	if (SetFileTime(file, NULL, NULL, (FILETIME*)&lastWriteTime))
 		return true;
 	logErrorf(L"Failed to set file time on %ls", fullPath);
-	CloseHandle(file);
-	file = InvalidFileHandle;
+	if (CloseHandle(file))
+		file = InvalidFileHandle;
 	return false;
 	#else
 	EACOPY_NOT_IMPLEMENTED
@@ -1547,7 +1548,10 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			logErrorf(L"Failed to create file %ls: %ls", dest, getErrorText(dest, error).c_str());
 			return false;
 		}
-		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); ++ioStats.closeWriteCount; TimerScope _(ioStats.closeWriteTime); CloseHandle(destFile); });
+
+		bool result = true;
+		
+		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); result &= closeFile(validDest, destFile, AccessType_Write, ioStats); });
 
 		OVERLAPPED osRead  = {0,0,0};
 		osRead.Offset = 0;
@@ -1565,7 +1569,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			return false;
 		}
 
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); TimerScope _(ioStats.closeReadTime); ++ioStats.closeReadCount; CloseHandle(sourceFile); });
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); result &= closeFile(validSource, sourceFile, AccessType_Read, ioStats); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -1661,23 +1665,9 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			SetEndOfFile(destFile);
 		}
 
-		{
-			++ioStats.closeReadCount;
-			TimerScope _(ioStats.closeReadTime);
-			CloseHandle(sourceFile);
-			sourceFile = InvalidFileHandle;
-		}
-
-		{
-			++ioStats.closeWriteCount;
-			TimerScope _(ioStats.closeWriteTime); 
-			CloseHandle(destFile);
-			destFile = InvalidFileHandle;
-		}
-
 		outBytesCopied = sourceInfo.fileSize;
 
-		return true;
+		return result;
 	}
 	else
 	{
