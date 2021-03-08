@@ -267,7 +267,8 @@ Server::connectionThread(ConnectionInfo& info)
 
 	IOStats ioStats;
 	NetworkCopyContext copyContext;
-	CompressionData	compressionData;
+	CompressionStats compressionStats;
+	CompressionData	compressionData{compressionStats};
 
 	uint recvPos = 0;
 	WString serverPath;

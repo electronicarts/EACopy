@@ -340,6 +340,9 @@ Client::resetWorkState(Log& log)
 	m_sourceConnection = nullptr;
 	m_destConnection = nullptr;
 	m_secretGuid = {0};
+
+	m_compressionStats.fixedLevel = m_settings.compressionLevel != 0;
+	m_compressionStats.level = std::min(std::max(m_settings.compressionLevel, 1), 22);
 }
 
 bool
@@ -1703,7 +1706,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 
 	// Connection is ready, cancel socket cleanup and create connection object
 	socketCleanup.cancel();
-	auto connection = new Connection(m_settings, stats, sock);
+	auto connection = new Connection(m_settings, stats, sock, m_compressionStats);
 	ScopeGuard connectionGuard([&] { delete connection; });
 
 	{
@@ -1786,14 +1789,13 @@ Client::isValid(Connection* connection)
 	return connection && isValidSocket(connection->m_socket);
 }
 
-Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s)
+Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s, CompressionStats& compressionStats)
 :	m_settings(settings)
 ,	m_stats(stats)
 ,	m_socket(s)
+,	m_compressionData({compressionStats})
 {
 	m_compressionEnabled = settings.compressionEnabled;
-	m_compressionData.fixedLevel = settings.compressionLevel != 0;
-	m_compressionData.level = std::min(std::max(settings.compressionLevel, 1), 22);
 }
 
 Client::Connection::~Connection()

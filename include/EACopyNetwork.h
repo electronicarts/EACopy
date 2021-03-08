@@ -186,14 +186,28 @@ bool			isValidSocket(Socket& socket);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+struct CompressionStats
+{
+	CriticalSection		lock;
+	u64					sendTime[8] = { 0 };
+	uint				sendBytes[8] = { 0 };
+	u64					activeSendTime = 0;
+	u64					activeSendBytes = 0;
+
+	u64					currentSendTime = 0;
+	u64					currentSendBytes = 0;
+	uint				currentIndex = 0;
+
+	u64					lastTimeUnitPerBytes = 0;
+
+	bool				fixedLevel = false;
+	int					level = 0;
+};
+
 struct CompressionData
 {
-	bool		fixedLevel = false;
-	int			level = 0;
-	void*		context = nullptr;
-
-	int			lastLevel = 0;
-	u64			lastWeight = 0;
+	CompressionStats&	compressionStats;
+	void*				context = nullptr;
 
 	~CompressionData();
 };

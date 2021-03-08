@@ -178,6 +178,8 @@ private:
 	CriticalSection		m_secretGuidCs;
 	FileDatabase		m_fileDatabase;
 
+	CompressionStats	m_compressionStats;
+
 						Client(const Client&) = delete;
 	void				operator=(const Client&) = delete;
 };
@@ -189,7 +191,7 @@ private:
 class Client::Connection
 {
 public:
-						Connection(const ClientSettings& settings, ClientStats& stats, Socket s);
+						Connection(const ClientSettings& settings, ClientStats& stats, Socket s, CompressionStats& compressionStats);
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);

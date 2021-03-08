@@ -193,7 +193,7 @@ bool receiveData(Socket& socket, void* buffer, uint size)
 
 	while (left)
 	{
-		int res = ::recv(socket.socket, pos, left, 0);
+		int res = ::recv(socket.socket, pos, left, MSG_WAITALL);
 		if (res < 0)
 		{
 			int lastError = getLastNetworkError();
@@ -277,7 +277,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 	const wchar_t* validSrc = convertToShortPath(src, tempBuffer1);
 
 	FileHandle sourceFile;
-	if (!openFileRead(validSrc, sourceFile, ioStats, useBufferedIO))
+	if (!openFileRead(validSrc, sourceFile, ioStats, useBufferedIO, nullptr, true))
 		return false;
 
 	ScopeGuard closeSourceFile([&]() { closeFile(validSrc, sourceFile, AccessType_Read, ioStats); });
@@ -357,7 +357,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
-		enum { CompressedNetworkTransferChunkSize = NetworkTransferChunkSize };
+		enum { CompressedNetworkTransferChunkSize = NetworkTransferChunkSize/4 };
 
 		u64 left = fileSize;
 		while (left)
@@ -381,48 +381,52 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			if (!compressionData.context)
 				compressionData.context = ZSTD_createCCtx();
 
+			CompressionStats& cs = compressionData.compressionStats;
+
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressTime = getTime();
-			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CompressedNetworkTransferChunkSize - 4, copyContext.buffers[0], read, compressionData.level);
+			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CompressedNetworkTransferChunkSize - 4, copyContext.buffers[0], read, cs.level);
 			if (ZSTD_isError(compressedSize))
 			{
 				logErrorf(L"Fail compressing file %ls: %ls", validSrc, ZSTD_getErrorName(compressedSize));
 				return false;
 			}
-
 			u64 compressTime = getTime() - startCompressTime;
 
 			*(uint*)destBuf =  uint(compressedSize);
 
+			uint sendBytes = compressedSize + 4;
 			u64 startSendTime = getTime();
-			if (!sendData(socket, destBuf, compressedSize + 4))
+			if (!sendData(socket, destBuf, sendBytes))
 				return false;
 			u64 sendTime = getTime() - startSendTime;
 
-			sendStats.compressionLevelSum += read * compressionData.level;
+			sendStats.compressionLevelSum += read * cs.level;
 
-			if (!compressionData.fixedLevel)
+			if (!cs.fixedLevel)
 			{
-				// This is a bit fuzzy logic. Essentially we compared how much time per byte we spent last loop (compress + send)
-				// We then look at if we compressed more or less last time and if time went up or down.
-				// If time went up when we increased compression, we decrease it again. If it went down we increase compression even more.
+				ScopedCriticalSection _(cs.lock);
 
-				u64 compressWeight = ((compressTime + sendTime) * 1000) / read;
+				cs.activeSendTime += sendTime;
+				cs.activeSendBytes += sendBytes;
+				if (cs.activeSendTime > 100000)
+				{
+					cs.currentIndex = (cs.currentIndex + 1) % eacopy_sizeof_array(cs.sendTime);
+					cs.currentSendTime += cs.activeSendTime - cs.sendTime[cs.currentIndex];
+					cs.currentSendBytes += cs.activeSendBytes - cs.sendBytes[cs.currentIndex];
+					cs.sendTime[cs.currentIndex] = cs.activeSendTime;
+					cs.sendBytes[cs.currentIndex] = cs.activeSendBytes;
+					cs.activeSendTime = 0;
+					cs.activeSendBytes = 0;
 
-				u64 lastCompressWeight = compressionData.lastWeight;
-				compressionData.lastWeight = compressWeight;
-
-				int lastCompressionLevel = compressionData.lastLevel;
-				compressionData.lastLevel = compressionData.level;
-
-				bool increaseCompression = compressWeight < lastCompressWeight && lastCompressionLevel <= compressionData.level || 
-											compressWeight >= lastCompressWeight && lastCompressionLevel > compressionData.level;
-
-				if (increaseCompression)
-					compressionData.level = std::min(22, compressionData.level + 1);
-				else
-					compressionData.level = std::max(1, compressionData.level - 1);
+					u64 timeUnitsPerBytes = (cs.currentSendTime * 1000000) / cs.currentSendBytes;
+					if (timeUnitsPerBytes < cs.lastTimeUnitPerBytes)
+						cs.level = std::min(14, cs.level + 1);
+					else
+						cs.level = std::max(1, cs.level - 1);
+					cs.lastTimeUnitPerBytes = timeUnitsPerBytes;
+				}
 			}
 
 			sendStats.compressTime += compressTime;
