@@ -486,7 +486,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
 			uint recvBytes = 0;
-			uint flags = 0;
+			uint flags = MSG_WAITALL;
 			int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 			if (fileRes != 0)
 			{
@@ -565,7 +565,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				wsabuf.len = toRead;
 				wsabuf.buf = (char*)copyContext.buffers[2];
 				uint recvBytes = 0;
-				uint flags = 0;
+				uint flags = MSG_WAITALL;
 				int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
 				if (fileRes != 0)
 				{
