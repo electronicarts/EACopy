@@ -1136,7 +1136,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 
 		FileHandle hFile;
 		{
-			if (!openFileRead(fullPath.c_str(), hFile, stats.ioStats, true))
+			if (!openFileRead(fullPath.c_str(), hFile, stats.ioStats, true, nullptr, true))
 				continue;
 		}
 		ScopeGuard fileGuard([&]() { closeFile(fullPath.c_str(), hFile, AccessType_Read, stats.ioStats); });
@@ -1747,7 +1747,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			securityFile[41] = 0;
 			FileHandle hFile;
 			WString networkFilePath = m_settings.destDirectory + securityFile;
-			if (!openFileRead(networkFilePath.c_str(), hFile, stats.ioStats, true))
+			if (!openFileRead(networkFilePath.c_str(), hFile, stats.ioStats, true, nullptr, true))
 				return nullptr;
 			ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile, AccessType_Read, stats.ioStats); });
 
