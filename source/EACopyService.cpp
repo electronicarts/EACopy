@@ -9,12 +9,16 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// If port is changed from default, name will change to include port. (Like EACopyService1339 if port is set to 1339)
 #if defined(_DEBUG)
-#define SERVICENAME        L"EACopyServiceDEBUG"
+#define DEFAULTSERVICENAME        L"EACopyServiceDEBUG"
 #else
-#define SERVICENAME        L"EACopyService"
+#define DEFAULTSERVICENAME        L"EACopyService"
 #endif
-#define SERVICEDISPLAYNAME L"EACopy Accelerator Service"
+#define DEFAULTSERVICEDISPLAYNAME L"EACopy Accelerator Service"
+
+wchar_t g_serviceName[1024];
+wchar_t g_serviceDisplayName[1024];
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -111,18 +115,34 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 	return true;
 }
 
+void initializeServiceName()
+{
+	wcscpy(g_serviceName, DEFAULTSERVICENAME);
+	wcscpy(g_serviceDisplayName, DEFAULTSERVICEDISPLAYNAME);
+	for (uint i=1; i!=g_argc; ++i)
+	{
+		if (!startsWithIgnoreCase(g_argv[i], L"/P:"))
+			continue;
+		wcscat(g_serviceName, g_argv[i] + 3);
+		wcscat(g_serviceDisplayName, L" (port ");
+		wcscat(g_serviceDisplayName, g_argv[i] + 3);
+		wcscat(g_serviceDisplayName, L")");
+		break;
+	}
+}
+
 void addLastErrorToMessageLog(const wchar_t* lpszMsg)
 {
 	if (!g_runningAsService)
 		return;
 
 	g_dwErr = GetLastError();
-	HANDLE hEventSource = RegisterEventSourceW(NULL, SERVICENAME);
+	HANDLE hEventSource = RegisterEventSourceW(NULL, g_serviceName);
 	if (!hEventSource)
 		return;
 
-	wchar_t szMsg[eacopy_sizeof_array(SERVICENAME) + 100 ];
-	swprintf_s(szMsg,eacopy_sizeof_array(SERVICENAME) + 100, L"%ls error: %d", SERVICENAME, g_dwErr);
+	wchar_t szMsg[eacopy_sizeof_array(g_serviceName) + 100 ];
+	swprintf_s(szMsg,eacopy_sizeof_array(g_serviceName) + 100, L"%ls error: %d", g_serviceName, g_dwErr);
 	const wchar_t* lpszStrings[2] = { szMsg, lpszMsg };
 	ReportEventW(hEventSource, EVENTLOG_ERROR_TYPE, 0, 0, NULL, 2, 0, &lpszStrings[0], NULL);
 	DeregisterEventSource(hEventSource);
@@ -132,7 +152,7 @@ VOID addInfoToMessageLog(const wchar_t* lpszMsg)
 {
 	if (!g_runningAsService)
 		return;
-	HANDLE hEventSource = RegisterEventSourceW(NULL, SERVICENAME);
+	HANDLE hEventSource = RegisterEventSourceW(NULL, g_serviceName);
 	if (!hEventSource)
 		return;
 	const wchar_t* lpszStrings[1] = { lpszMsg };
@@ -222,9 +242,11 @@ DWORD WINAPI serviceControl(DWORD dwControl, DWORD dwEventType, LPVOID lpEventDa
 
 void WINAPI serviceMain(DWORD dwArgc, LPWSTR *lpszArgv)
 {
+	initializeServiceName();
+
 	// register our service control handler:
 	//
-	g_sshStatusHandle = RegisterServiceCtrlHandlerExW(SERVICENAME, serviceControl, NULL);
+	g_sshStatusHandle = RegisterServiceCtrlHandlerExW(g_serviceName, serviceControl, NULL);
 
 	if (!g_sshStatusHandle)
 	{
@@ -280,7 +302,7 @@ int installService(int argc, wchar_t** argv)
 	wchar_t szPath[512];
 	if (GetModuleFileNameW(NULL, szPath, eacopy_sizeof_array(szPath)) == 0)
 	{
-		logErrorf(L"Unable to install %ls - %ls", SERVICEDISPLAYNAME, getLastErrorText().c_str());
+		logErrorf(L"Unable to install %ls - %ls", g_serviceDisplayName, getLastErrorText().c_str());
 		return -1;
 	}
 
@@ -310,12 +332,12 @@ int installService(int argc, wchar_t** argv)
 	if (!settings.password.empty())
 		password = settings.password.c_str();
 
-	SC_HANDLE service = CreateServiceW(manager, SERVICENAME, SERVICEDISPLAYNAME, 
+	SC_HANDLE service = CreateServiceW(manager, g_serviceName, g_serviceDisplayName, 
 							SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
 							SERVICE_ERROR_NORMAL, szPath, NULL, NULL, L"", username, password);
 
 	if (!service)
-		service = OpenServiceW(manager, SERVICENAME, SERVICE_ALL_ACCESS);
+		service = OpenServiceW(manager, g_serviceName, SERVICE_ALL_ACCESS);
 
 	if (!service)
 	{
@@ -355,7 +377,7 @@ int installService(int argc, wchar_t** argv)
 		return -1;
 	}
 
-	logInfoLinef(L"%ls installed. commandline = %ls", SERVICEDISPLAYNAME, szPath );
+	logInfoLinef(L"%ls installed. commandline = %ls", g_serviceDisplayName, szPath );
 
 	// Autostart server
 	if (!StartServiceA(service, argc, (LPCSTR*)argv))
@@ -382,7 +404,7 @@ int removeService()
 	}
 	ScopeGuard managerGuard([&]() { CloseServiceHandle(manager); });
 
-	SC_HANDLE service = OpenServiceW(manager, SERVICENAME, DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS);
+	SC_HANDLE service = OpenServiceW(manager, g_serviceName, DELETE | SERVICE_STOP | SERVICE_QUERY_STATUS);
 
 	if (!service)
 	{
@@ -393,7 +415,7 @@ int removeService()
 
 	if (ControlService(service, SERVICE_CONTROL_STOP, &g_ssStatus))
 	{
-		logInfof(L"Stopping %ls.", SERVICEDISPLAYNAME);
+		logInfof(L"Stopping %ls.", g_serviceDisplayName);
 		Sleep(1000);
 
 		while (QueryServiceStatus(service, &g_ssStatus))
@@ -407,11 +429,11 @@ int removeService()
 		logInfoLinef();
 		if (g_ssStatus.dwCurrentState != SERVICE_STOPPED)
 		{
-			logErrorf(L"%ls failed to stop.", SERVICEDISPLAYNAME);
+			logErrorf(L"%ls failed to stop.", g_serviceDisplayName);
 			return -1;
 		}
 			
-		logInfoLinef(L"%ls stopped.", SERVICEDISPLAYNAME);
+		logInfoLinef(L"%ls stopped.", g_serviceDisplayName);
 	}
 
 	if (!DeleteService(service))
@@ -420,7 +442,7 @@ int removeService()
 		return -1;
 	}
 
-	logInfoLinef(L"%ls removed.", SERVICEDISPLAYNAME);
+	logInfoLinef(L"%ls removed.", g_serviceDisplayName);
 	return 0;
 }
 
@@ -435,6 +457,9 @@ int __cdecl wmain(int argc, wchar_t** argv)
 	g_argc = argc;
 	g_argv = argv;
 
+	initializeServiceName();
+
+
 	// Try to figure out some context based on which session we're running in
 	// and decide which mode to default to.
 	bool isInteractiveSession = false;
@@ -447,7 +472,7 @@ int __cdecl wmain(int argc, wchar_t** argv)
 	if (!isInteractiveSession)
 	{
 		g_runningAsService = true;
-		SERVICE_TABLE_ENTRYW dispatchTable[] = { { (LPWSTR)SERVICENAME, (LPSERVICE_MAIN_FUNCTIONW)&serviceMain}, { NULL, NULL} };
+		SERVICE_TABLE_ENTRYW dispatchTable[] = { { (LPWSTR)g_serviceName, (LPSERVICE_MAIN_FUNCTIONW)&serviceMain}, { NULL, NULL} };
 		if (!StartServiceCtrlDispatcherW(dispatchTable))
 			addLastErrorToMessageLog(L"StartServiceCtrlDispatcherW failed.");
 		return 0;
