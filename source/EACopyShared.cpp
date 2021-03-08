@@ -2018,7 +2018,7 @@ WString toPretty(u64 bytes, uint alignment)
 WString toHourMinSec(u64 time, uint alignment)
 {
 	u64 timeMs = time / 10000;
-	u64 timeSec = timeMs / (1000 * 10000);
+	u64 timeSec = timeMs / 1000;
 	u64 days = timeSec / (24*60*60);
 	timeSec -= days * (24*60*60);
 	u64 hours = timeSec / (60*60);
