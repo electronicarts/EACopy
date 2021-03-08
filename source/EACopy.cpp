@@ -53,7 +53,7 @@ void printHelp()
 	logInfoLinef(L"         /NOSERVER :: will not try to connect to Server.");
 	logInfoLinef(L"           /SERVER :: must connect to Server. Fails copy if not succeed");
 	logInfoLinef(L"  /SERVERADDR addr :: Address used to connect to Server. This is only needed if using a proxy EACopyServer sitting on the side");
-	logInfoLinef(L"     /SERVERPORT:n :: Port used to connect to Server (default %u).", DefaultPort);
+	logInfoLinef(L"     /SERVERPORT:n :: Port used to connect to Server (default %u). (If SERVERADDR is provided :port can be added there instead)", DefaultPort);
 	logInfoLinef(L"           /C[:n]  :: use Compression. No value provided will auto adjust level. Only works with server");
 	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (uses zstd)");
 	#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
@@ -301,6 +301,11 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			}
 			else if (equalsIgnoreCase(activeCommand, L"SERVERADDR"))
 			{
+				if (wchar_t* colon = wcschr(arg, L':'))
+				{
+					*colon = 0;
+					outSettings.serverPort = wtoi(colon + 1);
+				}
 				outSettings.serverAddress = arg;
 			}
 			else if (equalsIgnoreCase(activeCommand, L"XF"))
