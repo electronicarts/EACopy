@@ -44,7 +44,7 @@ void printHelp()
 	logInfoLinef(L"             Usage :: EACopyService [options]");
 	logInfoLinef();
 	logInfoLinef(L"              /P:n :: Port that server will listen on (defaults to %i).", DefaultPort);
-	logInfoLinef(L"           /SECURE :: Will check so client has access to network path using smb.");
+	logInfoLinef(L"         /UNSECURE :: Will not check if client has access to network path using smb.");
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
 	logInfoLinef();
 	logInfoLinef(L"                /J :: Enable unbuffered I/O for all files.");
@@ -74,9 +74,9 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		{
 			outSettings.listenPort = _wtoi(arg + 3);
 		}
-		else if (equalsIgnoreCase(arg, L"/SECURE"))
+		else if (equalsIgnoreCase(arg, L"/UNSECURE"))
 		{
-			outSettings.useSecurityFile = true;
+			outSettings.useSecurityFile = false;
 		}
 		else if (startsWithIgnoreCase(arg, L"/HISTORY:"))
 		{

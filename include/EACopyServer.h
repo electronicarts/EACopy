@@ -10,7 +10,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr char ServerVersion[] = "0.937" CFG_STR; // Version of server
+constexpr char ServerVersion[] = "0.938" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -22,7 +22,7 @@ struct ServerSettings
 {
 	uint			listenPort					= DefaultPort;
 	uint			maxHistory					= DefaultHistorySize;
-	bool			useSecurityFile				= false;
+	bool			useSecurityFile				= true;
 	bool			logDebug					= false;
 	UseBufferedIO	useBufferedIO				= UseBufferedIO_Auto;
 	WString			primingDirectory;
