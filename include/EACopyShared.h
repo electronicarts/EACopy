@@ -365,21 +365,24 @@ public:
 
 	int					getLastError() const { return m_lastError; }
 	void				resetLastError() { m_lastError = 0; }
+	void				mute() { m_muted = true; }
 
 	Log&				log;
 
 private:
 	LogContext*			m_lastContext;
 	int					m_lastError = 0;
+	bool				m_muted = false;
 	friend void			logErrorf(const wchar_t* fmt, ...);
+	friend void			logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError);
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #if defined(NDEBUG)
-#define CFG_STR ""
+#define CFG_STR L""
 #else
-#define CFG_STR "DBG"
+#define CFG_STR L"DBG"
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

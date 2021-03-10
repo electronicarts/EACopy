@@ -142,7 +142,7 @@ Client::process(Log& log, ClientStats& outStats)
 	if (!m_destConnection)
 		if (!connectToServer(m_settings.sourceDirectory.c_str(), true, m_sourceConnection, m_useSourceServerFailed, outStats))
 			return -1;
-	ScopeGuard sourceConnectionGuard([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
+	ScopeGuard sourceConnectionCleanup([&] { delete m_sourceConnection; m_sourceConnection = nullptr; });
 
 	// Collect exclusions provided through file
 	for (auto& file : m_settings.filesExcludeFiles)
@@ -212,6 +212,9 @@ Client::process(Log& log, ClientStats& outStats)
 		}
 
 	outStats.purgeTime = getTime() - startPurgeTime;
+
+	sourceConnectionCleanup.execute();
+	destConnectionCleanup.execute();
 
 
 	// Merge stats from all threads
@@ -288,12 +291,12 @@ Client::reportServerStatus(Log& log)
 
 	LogContext logContext(log);
 
-	bool useServerFailed;
+	bool failedToConnect = false;
 	ClientStats stats;
 
 	// Create connection
-	Connection* connection = createConnection(m_settings.destDirectory.c_str(), 0, stats, useServerFailed, false);
-	if (!connection)
+	Connection* connection = createConnection(m_settings.destDirectory.c_str(), 0, stats, failedToConnect, false);
+	if (!connection && !failedToConnect)
 	{
 		logErrorf(L"Failed to connect to server. Is path '%ls' a proper smb path?", m_settings.destDirectory.c_str());
 		return -1;
@@ -1683,11 +1686,15 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 
 	{
 		// Read version command
-		char cmdBuf[sizeof(VersionCommand)];
-		int cmdBufLen = sizeof(cmdBuf);
-		if (!receiveData(sock, cmdBuf, cmdBufLen))
-			return nullptr;
+		enum { MaxStringLength = 1024 };
+		char cmdBuf[sizeof(VersionCommand) + MaxStringLength*2];
 		auto& cmd = *(const VersionCommand*)cmdBuf;
+		if (!receiveData(sock, &cmdBuf, 4))
+			return nullptr;
+		if (!receiveData(sock, cmdBuf+4, cmd.commandSize-4))
+			return nullptr;
+		stats.info = cmd.info;
+
 		if (doProtocolCheck && cmd.protocolVersion != ProtocolVersion)
 		{
 			static bool logOnce = true;
@@ -1747,15 +1754,20 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			securityFile[0] = L'.';
 			StringFromGUID2(*(GUID*)&securityFileGuid, securityFile + 1, 40);
 			securityFile[1] = L'f';
-			securityFile[41] = 0;
+			securityFile[38] = 0;
 			FileHandle hFile;
-			WString networkFilePath = m_settings.destDirectory + securityFile;
-			if (!openFileRead(networkFilePath.c_str(), hFile, stats.ioStats, true, nullptr, true))
-				return nullptr;
-			ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile, AccessType_Read, stats.ioStats); });
-
-			u64 read = 0;
-			bool secretGuidRead = readFile(networkFilePath.c_str(), hFile, &m_secretGuid, sizeof(m_secretGuid),read, stats.ioStats) != 0;
+			WString networkFilePath = WString(networkPath) + securityFile;
+			bool secretGuidRead = false;
+			{
+				LogContext temp(*m_log);
+				temp.mute(); // Mute log, we want to give different errors here
+				if (openFileRead(networkFilePath.c_str(), hFile, stats.ioStats, true, nullptr, true))
+				{
+					ScopeGuard fileGuard([&]() { closeFile(networkFilePath.c_str(), hFile, AccessType_Read, stats.ioStats); });
+					u64 read = 0;
+					secretGuidRead = readFile(networkFilePath.c_str(), hFile, &m_secretGuid, sizeof(m_secretGuid),read, stats.ioStats) != 0;
+				}
+			}
 
 			if (!sendData(sock, &m_secretGuid, sizeof(m_secretGuid)))
 				return nullptr;
@@ -1763,6 +1775,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			if (!secretGuidRead)
 			{
 				logErrorf(L"Failed reading secret guid from file %ls", networkFilePath.c_str());
+				failedToConnect = true;
 				return nullptr;
 			}
 		}
@@ -1807,6 +1820,10 @@ Client::Connection::~Connection()
 	cmd.commandType = CommandType_Done;
 	cmd.commandSize = sizeof(cmd);
 	sendCommand(cmd);
+
+	u64 compressionLevelSum;
+	receiveData(m_socket, &compressionLevelSum, sizeof(compressionLevelSum));
+	m_stats.compressionLevelSum += compressionLevelSum;
 
 	destroy();
 }

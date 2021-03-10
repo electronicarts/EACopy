@@ -15,7 +15,7 @@ void printHelp()
 {
 	logInfoLinef();
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopy v%hs - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
+	logInfoLinef(L"  EACopy v%ls - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopy source destination [file [file]...] [options]");
@@ -447,7 +447,8 @@ int main(int argc, char* argv_[])
 	{
 		Settings settings;
 		WString temp;
-		settings.destDirectory = optimizeUncPath(argv[2], temp, false);
+		WString destDir = getCleanedupPath(argv[2]);
+		settings.destDirectory = optimizeUncPath(destDir.c_str(), temp, false);
 		Client client(settings);
 		Log log;
 		log.init(nullptr, false, false);
@@ -480,7 +481,7 @@ int main(int argc, char* argv_[])
 	{
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
-		logInfoLinef(L"  EACopy v%hs - File Copy for Windows.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
+		logInfoLinef(L"  EACopy v%ls - File Copy for Windows.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
 		logInfoLinef(L"  Source : %ls", settings.sourceDirectory.c_str());
@@ -564,7 +565,7 @@ int main(int argc, char* argv_[])
 
 
 		if (stats.destServerUsed || stats.sourceServerUsed)
-			logInfoLinef(L"   Server found and used!");
+			logInfoLinef(L"   Server found and used! (%ls)", stats.info.c_str());
 		else if (stats.serverAttempt && !stats.destServerUsed)
 			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/std::max(1, (int)settings.threadCount)).c_str());
 		else

@@ -38,7 +38,7 @@ Server					g_server;
 void printHelp()
 {
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyService v%hs - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion);
+	logInfoLinef(L"  EACopyService v%ls - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyService [options]");
@@ -512,7 +512,7 @@ int __cdecl wmain(int argc, wchar_t** argv)
 	if (!readSettings(settings, logFileName, argc, argv))
 		return -1;
 
-	logInfoLinef(L"Server v%hs - Starting... (Add /? for help)", ServerVersion);
+	logInfoLinef(L"Server v%ls - Starting... (Add /? for help)", ServerVersion);
 
 	Log log;
 	log.init(logFileName.c_str(), settings.logDebug, true);

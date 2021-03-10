@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr char ClientVersion[] = "0.9995" CFG_STR; // Version of client (visible when printing help info)
+constexpr wchar_t ClientVersion[] = L"0.9996" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -89,6 +89,8 @@ struct ClientStats
 	bool				destServerUsed				= false;
 	bool				sourceServerUsed			= false;
 	bool				serverAttempt				= false;
+
+	WString				info;
 };
 
 

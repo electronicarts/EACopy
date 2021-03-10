@@ -106,7 +106,7 @@ private:
 	Thread m_serverThread;
 };
 #else
-constexpr char ServerVersion[] = "NOSERVER";
+constexpr wchar_t ServerVersion[] = "NOSERVER";
 #define MAX_PATH 260
 #endif
 
@@ -195,6 +195,13 @@ struct TestBase
 		settings.retryCount = 0;
 		if (wildcard)
 			settings.filesOrWildcards.push_back(wildcard);
+		return settings;
+	}
+
+	ServerSettings getDefaultServerSettings()
+	{
+		ServerSettings settings;
+		settings.useSecurityFile = false;
 		return settings;
 	}
 
@@ -1101,7 +1108,7 @@ EACOPY_TEST(ServerCopyDirs)
 	createTestFile(L"A\\Foo.txt", 10);
 	createTestFile(L"B\\Bar.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1121,7 +1128,7 @@ EACOPY_TEST(ServerCopySmallFile)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1140,7 +1147,7 @@ EACOPY_TEST(ServerCopySmallFileDestIsLocal)
 	std::swap(testSourceDir, testDestDir);
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1164,7 +1171,7 @@ EACOPY_TEST(ServerCopyDirectories)
 	createTestFile(L"A\\D\\Bar.txt", 11);
 	createTestFile(L"B\\F\\Meh.txt", 12);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1190,7 +1197,7 @@ EACOPY_TEST(ServerCopyDirectoriesDestIsLocal)
 	createTestFile(L"A\\Bar.txt", 11);
 	createTestFile(L"B\\Meh.txt", 12);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1215,7 +1222,7 @@ EACOPY_TEST(ServerCopyMediumFile)
 	uint fileSize = 3*1024*1024 + 123;
 	createTestFile(L"Foo.txt", fileSize);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1234,7 +1241,7 @@ EACOPY_TEST(ServerCopyMediumFileCompressed)
 	uint fileSize = 3*1024*1024 + 123;
 	createTestFile(L"Foo.txt", fileSize);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1263,7 +1270,7 @@ EACOPY_TEST(ServerCopyMultiThreaded)
 
 	for (uint i=0; i!=testCount; ++i)
 	{
-		ServerSettings serverSettings;
+		ServerSettings serverSettings(getDefaultServerSettings());
 		TestServer server(serverSettings, serverLog);
 		server.waitReady();
 
@@ -1283,7 +1290,7 @@ EACOPY_TEST(ServerCopyMultiClient)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1308,7 +1315,7 @@ EACOPY_TEST(ServerCopyLink)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1331,7 +1338,7 @@ EACOPY_TEST(ServerCopySameDest)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1350,7 +1357,7 @@ EACOPY_TEST(ServerCopyExistingDestAndFoundLinkSomewhereElse)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1378,7 +1385,7 @@ EACOPY_TEST(ServerCopyBadDest)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1400,7 +1407,7 @@ EACOPY_TEST(ServerCopyFileFail)
 	createTestFile(L"Foo.txt", 100, false);
 	setReadOnly(L"Foo.txt", true, false);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1423,7 +1430,7 @@ EACOPY_TEST(ServerCopyFileDestLockedAndThenUnlocked)
 	FileHandle destFile = CreateFileW((testDestDir + L"Foo.txt").c_str(), GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
 	EACOPY_ASSERT(destFile);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1455,7 +1462,7 @@ EACOPY_TEST(ServerPurgeWithNoCopy)
 	createTestFile(L"DestDir\\Boo.txt", 10, false);
 	createTestFile(L"SourceDir2\\Boo.txt", 10, false);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1472,7 +1479,7 @@ EACOPY_TEST(ServerPurgeWithNoCopy)
 
 EACOPY_TEST(ServerReport)
 {
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1484,7 +1491,7 @@ EACOPY_TEST(ServerReport)
 
 EACOPY_TEST(ServerReportUsingBadPath)
 {
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1496,7 +1503,7 @@ EACOPY_TEST(ServerReportUsingBadPath)
 
 EACOPY_TEST(ServerLinkNotExists)
 {
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1520,7 +1527,7 @@ EACOPY_TEST(ServerLinkNotExists)
 
 EACOPY_TEST(ServerLinkModified)
 {
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1616,7 +1623,7 @@ EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 
 	createTestFile(L"Foo.txt", fileSize);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1661,7 +1668,7 @@ EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
 	createTestFile(L"2\\Foo.txt", 16 * 1024 * 1024);
 	writeRandomData((testSourceDir + L"2\\Foo.txt").c_str(), 16 * 1024 * 1024);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 	EACOPY_ASSERT(server.primeDirectory(wcschr(testSourceDir.c_str() + 2, '\\') + 1));
@@ -1720,7 +1727,7 @@ EACOPY_TEST(ServerCopyFileListDestIsLocal)
 	createTestFile(L"Foo.txt", 10);
 	createFileList(L"FileList.txt", "Foo.txt");
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1741,7 +1748,7 @@ EACOPY_TEST(ServerCopyMissingFileListDestIsLocal)
 	std::swap(testDestDir, testSourceDir);
 	createFileList(L"FileList.txt", "Foo.txt");
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1764,7 +1771,7 @@ EACOPY_TEST(CopyFileWithVeryLongPathDestIsLocal)
 	longPath.append(L"Foo.txt");
 	createTestFile(longPath.c_str(), 100);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1810,7 +1817,7 @@ EACOPY_TEST(ServerCopyLargeFile)
 
 	for (uint i=0; i!=1; ++i)
 	{
-		ServerSettings serverSettings;
+		ServerSettings serverSettings(getDefaultServerSettings());
 		TestServer server(serverSettings, serverLog);
 		server.waitReady();
 
@@ -1837,7 +1844,7 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 
 	for (uint i=0; i!=1; ++i)
 	{
-		ServerSettings serverSettings;
+		ServerSettings serverSettings(getDefaultServerSettings());
 		TestServer server(serverSettings, serverLog);
 		server.waitReady();
 
@@ -1868,7 +1875,7 @@ EACOPY_TEST(ServerTestMemory)
 		createTestFile(fileName, 100);
 	}
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1971,7 +1978,7 @@ EACOPY_TEST(ServerCopyFileExternalPath)
 	const wchar_t* file = L"Foo.txt";
 	createTestFile(file, 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -1998,7 +2005,7 @@ EACOPY_TEST(FromServerCopyFileExternalPath)
 	const wchar_t* file = L"Foo.txt";
 	createTestFile(externalDest.c_str(), file, 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -2022,7 +2029,7 @@ EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 	const wchar_t* file = L"Foo.txt";
 	createTestFile(file, 1024*1024);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
 
@@ -2054,11 +2061,32 @@ EACOPY_TEST(ServerCopyFileExternalPathUseHistory)
 	}
 }
 
-EACOPY_TEST(ServerTestSecurityFile)
+EACOPY_TEST(ServerTestSecurityFileCopyToServer)
 {
 	createTestFile(L"Foo.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
+	serverSettings.useSecurityFile = true;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerTestSecurityFileCopyFromServer)
+{
+	std::swap(testDestDir, testSourceDir);
+
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings(getDefaultServerSettings());
 	serverSettings.useSecurityFile = true;
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
@@ -2080,7 +2108,7 @@ EACOPY_TEST(ServerTestSecurityFileMultiThreadedClient)
 	createTestFile(L"Foo3.txt", 10);
 	createTestFile(L"Foo4.txt", 10);
 
-	ServerSettings serverSettings;
+	ServerSettings serverSettings(getDefaultServerSettings());
 	serverSettings.useSecurityFile = true;
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
@@ -2099,7 +2127,7 @@ EACOPY_TEST(ServerTestSecurityFileMultiThreadedClient)
 void printHelp()
 {
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyTest (Client v%hs Server v%hs) (c) Electronic Arts.  All Rights Reserved.", ClientVersion, ServerVersion);
+	logInfoLinef(L"  EACopyTest (Client v%ls Server v%ls) (c) Electronic Arts.  All Rights Reserved.", ClientVersion, ServerVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyTest source destination");

@@ -242,14 +242,20 @@ Server::connectionThread(ConnectionInfo& info)
 
 	// Sending protocol version to connection
 	{
-		VersionCommand cmd;
+		enum { MaxStringLength = 1024 };
+		char cmdBuf[MaxStringLength*2 + sizeof(VersionCommand)+1];
+		auto& cmd = *(VersionCommand*)cmdBuf;
+
+		swprintf(cmd.info, L"v%ls", ServerVersion);
+
 		cmd.commandType = CommandType_Version;
-		cmd.commandSize = sizeof(cmd);
+		cmd.commandSize = sizeof(cmd) + uint(wcslen(cmd.info))*2;
 		cmd.protocolVersion = ProtocolVersion;
 		cmd.protocolFlags = 0;
+
 		if (info.settings.useSecurityFile)
 			cmd.protocolFlags |= UseSecurityFile;
-		if (!sendData(info.socket, &cmd, sizeof(VersionCommand)))
+		if (!sendData(info.socket, &cmd, cmd.commandSize))
 			return -1;
 	}
 
@@ -266,9 +272,11 @@ Server::connectionThread(ConnectionInfo& info)
 	});
 
 	IOStats ioStats;
+	SendFileStats sendStats;
 	NetworkCopyContext copyContext;
 	CompressionStats compressionStats;
 	CompressionData	compressionData{compressionStats};
+	compressionStats.level = 1;
 
 	uint recvPos = 0;
 	WString serverPath;
@@ -338,7 +346,7 @@ Server::connectionThread(ConnectionInfo& info)
 					m_queuesCs.scoped([&]() { m_queues[clientConnectionIndex].push_back(&info); });
 
 					if (!getLocalFromNet(serverPath, isServerPathExternal, cmd.netDirectory))
-						break;
+						return -1;
 
 					if (info.settings.useSecurityFile)
 					{
@@ -351,7 +359,7 @@ Server::connectionThread(ConnectionInfo& info)
 							if (!isValid)
 							{
 								logInfoLinef(L"Connection is providing invalid secret guid.. disconnect");
-								break;
+								return -1;
 							}
 						}
 						else
@@ -363,42 +371,47 @@ Server::connectionThread(ConnectionInfo& info)
 							if (CoCreateGuid(&filenameGuid) != S_OK)
 							{
 								logErrorf(L"CoCreateGuid - Failed to create filename guid");
-								break;
+								return -1;
 							}
 
 							wchar_t filename[128];
 							filename[0] = L'.';
 							StringFromGUID2(filenameGuid, filename + 1, 40);
 							filename[1] = L'f';
-							filename[41] = 0;
+							filename[38] = 0;
 
 							if (CoCreateGuid((GUID*)&secretGuid) != S_OK)
 							{
 								logErrorf(L"CoCreateGuid - Failed to create secret guid");
-								break;
+								return -1;
 							}
 
 							// Create hidden security file with code
 							FileInfo fileInfo;
 							fileInfo.fileSize = sizeof(secretGuid);
 							WString securityFilePath = serverPath + filename;
+							if (!ensureDirectory(serverPath.c_str(), ioStats))
+							{
+								logErrorf(L"Failed to create directory '%ls' needed to create secret guid file for client. Server does not have access?", serverPath.c_str());
+								return -1;
+							}
 							ScopeGuard deleteFileGuard([&]() { deleteFile(securityFilePath.c_str(), ioStats, false); });
 							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, ioStats, true, true))
-								break;
+								return -1;
 
 							m_validSecretGuidsCs.scoped([&]() { m_validSecretGuids.insert(secretGuid); });
 
 							if (!sendData(info.socket, &filenameGuid, sizeof(GUID)))
-								break;
+								return -1;
 
 							Guid returnedSecretGuid;
 							if (!receiveData(info.socket, &returnedSecretGuid, sizeof(returnedSecretGuid))) // Let client do the copying while we want for a success or not
-								break;
+								return -1;
 
 							if (secretGuid != returnedSecretGuid)
 							{
 								logInfoLinef(L"Connection is providing invalid secret guid.. disconnect");
-								break;
+								return -1;
 							}
 						}
 					}
@@ -656,7 +669,6 @@ Server::connectionThread(ConnectionInfo& info)
 						WriteFileType writeType = cmd.compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
 
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, fi.fileSize);
-						SendFileStats sendStats;
 						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, ioStats, sendStats))
 							return -1;
 					}
@@ -828,7 +840,7 @@ Server::connectionThread(ConnectionInfo& info)
 					auto elementCount = bufferSize/2;
 
 					StringCbPrintfW(buffer, CopyContextBufferSize,
-						L"   Server v%hs  (c) Electronic Arts.  All Rights Reserved.\n"
+						L"   Server v%ls  (c) Electronic Arts.  All Rights Reserved.\n"
 						L"\n"
 						L"   Protocol: v%u\n"
 						L"   Running as: %ls\n"
@@ -869,6 +881,7 @@ Server::connectionThread(ConnectionInfo& info)
 				break;
 			case CommandType_Done:
 				isDone = true;
+				sendData(info.socket, &sendStats.compressionLevelSum, sizeof(sendStats.compressionLevelSum));
 				break;
 			}
 

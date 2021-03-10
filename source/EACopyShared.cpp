@@ -439,6 +439,8 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 {
 	if (LogContext* context = t_logContext)
 	{
+		if (context->m_muted)
+			return;
 		Log& log = context->log;
 		ScopedCriticalSection cs(log.m_logQueueCs);
 		if (log.m_logQueue)
