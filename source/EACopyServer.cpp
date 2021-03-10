@@ -250,7 +250,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 		cmd.commandType = CommandType_Version;
 		cmd.commandSize = sizeof(cmd) + uint(wcslen(cmd.info))*2;
-		cmd.protocolVersion = ProtocolVersion;
+		cmd.protocolVersion = m_protocolVersion;
 		cmd.protocolFlags = 0;
 
 		if (info.settings.useSecurityFile)
@@ -450,7 +450,7 @@ Server::connectionThread(ConnectionInfo& info)
 					// Check if a file with the same key has already been copied at some point
 					FileDatabase::FileRec localFile = m_database.getRecord(key);
 
-					WriteResponse writeResponse = isServerPathExternal ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
+					WriteResponse writeResponse = (isServerPathExternal && cmd.writeType != WriteFileType_Compressed) ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
 
 					if (!localFile.name.empty())
 					{
@@ -853,7 +853,7 @@ Server::connectionThread(ConnectionInfo& info)
 						L"   %ls copied (%ls received)\n"
 						L"   %ls linked\n"
 						L"   %ls skipped\n"
-						, ServerVersion, ProtocolVersion, m_isConsole ? L"Console" : L"Service"
+						, ServerVersion, m_protocolVersion, m_isConsole ? L"Console" : L"Service"
 						, toHourMinSec(upTime).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
 						, toPretty(freeVolumeSpace).c_str(), toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());

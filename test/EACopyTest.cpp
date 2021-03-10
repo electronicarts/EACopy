@@ -61,9 +61,10 @@ WString g_testExternalDestDir = DEFAULT_EXTERNAL_DEST_DIR;
 class TestServer
 {
 public:
-	TestServer(const ServerSettings& settings, Log& log)
+	TestServer(const ServerSettings& settings, Log& log, uint protocolVersion = ProtocolVersion)
 	:	m_settings(settings)
 	,	m_log(log)
+	,	m_server(protocolVersion)
 	,	m_serverThread([this]() { threadFunc(); return 0; })
 	{
 	}
@@ -1134,6 +1135,24 @@ EACOPY_TEST(ServerCopySmallFile)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(ServerCopySmallFileProtocolMismatch)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings(getDefaultServerSettings());
+	TestServer server(serverSettings, serverLog, ~0u);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Automatic;
 	Client client(clientSettings);
 
 	ClientStats clientStats;

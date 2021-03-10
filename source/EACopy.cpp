@@ -14,9 +14,9 @@ inline int wtoi(const wchar_t *str) { return (int)wcstol(str, 0, 10); }
 void printHelp()
 {
 	logInfoLinef();
-	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopy v%ls - File Copy for Win. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion);
-	logInfoLinef(L"-------------------------------------------------------------------------------");
+	logInfoLinef(L"-------------------------------------------------------------------------------------");
+	logInfoLinef(L"  EACopy v%ls (%u) - File Copy. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion, ProtocolVersion);
+	logInfoLinef(L"-------------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopy source destination [file [file]...] [options]");
 	logInfoLinef();
@@ -52,8 +52,10 @@ void printHelp()
 	logInfoLinef();
 	logInfoLinef(L"         /NOSERVER :: will not try to connect to Server.");
 	logInfoLinef(L"           /SERVER :: must connect to Server. Fails copy if not succeed");
-	logInfoLinef(L"  /SERVERADDR addr :: Address used to connect to Server. This is only needed if using a proxy EACopyServer sitting on the side");
-	logInfoLinef(L"     /SERVERPORT:n :: Port used to connect to Server (default %u). (If SERVERADDR is provided :port can be added there instead)", DefaultPort);
+	logInfoLinef(L"  /SERVERADDR addr :: Address used to connect to Server.");
+	logInfoLinef(L"                      This is only needed if using a proxy EACopyServer sitting on the side");
+	logInfoLinef(L"     /SERVERPORT:n :: Port used to connect to Server (default %u).", DefaultPort);
+	logInfoLinef(L"                      (If SERVERADDR is provided :port can be added there instead)");
 	logInfoLinef(L"           /C[:n]  :: use Compression. No value provided will auto adjust level. Only works with server");
 	logInfoLinef(L"                      n must be between 1=lowest, 22=highest. (uses zstd)");
 	#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
@@ -481,7 +483,7 @@ int main(int argc, char* argv_[])
 	{
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
-		logInfoLinef(L"  EACopy v%ls - File Copy for Windows.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
+		logInfoLinef(L"  EACopy v%ls - File Copy.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
 		logInfoLinef(L"  Source : %ls", settings.sourceDirectory.c_str());

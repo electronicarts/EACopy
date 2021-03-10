@@ -36,7 +36,7 @@ struct ServerSettings
 class Server
 {
 public:
-					Server() {}
+					Server(uint protocolVersion = ProtocolVersion) : m_protocolVersion(protocolVersion) {}
 					~Server() {}
 
 					// Starts the server. Call will not return until some other thread call stop() or
@@ -55,6 +55,7 @@ private:
 	uint			connectionThread(ConnectionInfo& info);
 	bool			getLocalFromNet(WString& outServerDirectory, bool& outIsExternalDirectory, const wchar_t* netDirectory);
 
+	uint			m_protocolVersion;
 	FileDatabase	m_database;
 
 	struct			GuidLess { bool operator()(const Guid& a, const Guid& b) const { return memcmp(&a, &b, sizeof(Guid)) < 0; } };
