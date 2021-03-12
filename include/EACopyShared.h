@@ -139,6 +139,7 @@ private:
 
 u64						getTime();
 inline u64				getTimeMs() { return getTime() / 10000; }
+inline u64				timeToMs(u64 time) { return time / 10000; }
 bool					equalsIgnoreCase(const wchar_t* a, const wchar_t* b);
 bool					lessIgnoreCase(const wchar_t* a, const wchar_t* b);
 bool					startsWithIgnoreCase(const wchar_t* str, const wchar_t* substr);

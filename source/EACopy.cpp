@@ -579,7 +579,7 @@ int main(int argc, char* argv_[])
 		if (settings.printJobSummary)
 		{
 			u64 endLogTime = getTime();
-			if (endLogTime - endTime > 100)
+			if (timeToMs(endLogTime - endTime) > 100) // 100 milliseconds
 			{
 				logInfoLinef();
 				logInfoLinef(L"   Spent %ls seconds waiting for log output to finish (Consider using /LOG:file or /LOGMIN)", toHourMinSec(endLogTime - endTime).c_str());

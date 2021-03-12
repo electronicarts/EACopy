@@ -1134,7 +1134,13 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			ensureDirectory(m_destConnection, destPath, stats.ioStats);
 			u64 fileSize;
 			u64 read;
-			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), FileInfo(), fileSize, read, m_copyContext))
+
+			FileInfo srcInfo;
+			uint srcAttributes;
+			uint error;
+			if (!m_sourceConnection->sendGetFileAttributes(fileName.c_str(), srcInfo, srcAttributes, error))
+				continue;
+			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), srcInfo, fileSize, read, m_copyContext))
 				continue;
 			fullPath = destPath + fileName;
 		}

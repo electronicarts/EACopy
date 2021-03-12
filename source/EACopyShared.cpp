@@ -1005,6 +1005,8 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	const wchar_t* lastBackslash = wcsrchr(directory, '\\');
 	if (!lastBackslash)
 	{
+		if (directory[1] == L':') // We got all the way to the root
+			return true;
 		logErrorf(L"Error validating directory %ls: Bad format.. must contain a slash", directory);
 		return false;
 	}
