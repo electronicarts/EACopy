@@ -2317,7 +2317,7 @@ HashContext::HashContext(u64& time, u64& count)
 bool
 HashContext::init()
 {
-	TimerScope _(m_time);
+	//TimerScope _(m_time);
 	if (CryptAcquireContext(&(HCRYPTPROV&)m_handle, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
 		return true;
 	logErrorf(L"CryptAcquireContext failed: %ls", getLastErrorText().c_str());
@@ -2326,7 +2326,7 @@ HashContext::init()
 
 HashContext::~HashContext()
 {
-	TimerScope _(m_time);
+	//TimerScope _(m_time);
 	CryptReleaseContext((HCRYPTPROV&)m_handle, 0);
 }
 

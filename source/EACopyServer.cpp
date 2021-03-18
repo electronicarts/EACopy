@@ -514,7 +514,7 @@ Server::connectionThread(ConnectionInfo& info)
 						}
 					#endif
 
-					if (info.settings.useHash && writeResponse == WriteResponse_Copy || writeResponse == WriteResponse_CopyUsingSmb)
+					if (info.settings.useHash && (writeResponse == WriteResponse_Copy || writeResponse == WriteResponse_CopyUsingSmb))
 					{
 						// Ask for hash of file first, it might still exist on the server but with different time stamp... and if it doesnt we still need the hash
 						WriteResponse hashResponse = WriteResponse_Hash;
