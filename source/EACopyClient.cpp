@@ -1882,7 +1882,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		return false;
 	}
 	
-	if (srcInfo.fileSize)
+	if (srcInfo.lastWriteTime.dwLowDateTime || srcInfo.lastWriteTime.dwHighDateTime)
 		cmd.info = srcInfo;
 	else
 		if (getFileInfo(cmd.info, src, m_stats.ioStats) == 0)
@@ -1904,7 +1904,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 		if (writeResponse == WriteResponse_Link)
 		{
-			outWritten = cmd.info.fileSize;
+			outWritten = cmd.info.lastWriteTime.dwLowDateTime || cmd.info.lastWriteTime.dwHighDateTime;
 			outLinked = true;
 			return true;
 		}

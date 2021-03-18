@@ -1472,23 +1472,36 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 {
 	outSkip = false;
 	#if defined(_WIN32)
+	do
 	{
-		++ioStats.createLinkCount;
-		TimerScope _(ioStats.createLinkTime);
-		if (CreateHardLinkW(fullPath, sourcePath, NULL))
-			return true;
-	}
-	uint error = GetLastError();
-	if (error == ERROR_ALREADY_EXISTS)
-	{
+		{
+			++ioStats.createLinkCount;
+			TimerScope _(ioStats.createLinkTime);
+			if (CreateHardLinkW(fullPath, sourcePath, NULL))
+				return true;
+		}
+
+		uint error = GetLastError();
+		if (error != ERROR_ALREADY_EXISTS)
+		{
+			logDebugLinef(L"Failed creating hardlink on %ls: %ls", sourcePath, getErrorText(error));
+			return false;
+		}
+
 		FileInfo other;
 		uint attributes = getFileInfo(other, fullPath, ioStats);
-		if (!equals(info, other))
+		if (equals(info, other))
+		{
+			outSkip = true;
+			return true;
+		}
+
+		// Delete file and try again
+		if (!deleteFile(fullPath, ioStats))
 			return false;
-		outSkip = true;
-		return true;
-	}
-	logDebugLinef(L"Failed creating hardlink on %ls", sourcePath);
+
+	} while (true); // Should only really get here once
+
 	return false;
 	#else
 	EACOPY_NOT_IMPLEMENTED
