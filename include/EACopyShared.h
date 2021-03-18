@@ -337,13 +337,14 @@ public:
 class HashContext
 {
 public:
-	HashContext();
+	HashContext(u64& time, u64& count);
+
 	bool init();
 	~HashContext();
 
 	void* m_handle = nullptr;
-	u64 m_time = 0;
-	u64 m_count = 0;
+	u64& m_time;
+	u64& m_count;
 };
 
 class HashBuilder

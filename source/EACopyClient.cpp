@@ -1813,6 +1813,7 @@ Client::isValid(Connection* connection)
 Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s, CompressionStats& compressionStats)
 :	m_settings(settings)
 ,	m_stats(stats)
+,	m_hashContext(stats.hashTime, stats.hashCount)
 ,	m_socket(s)
 ,	m_compressionData({compressionStats})
 {
@@ -1914,7 +1915,6 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		Hash hash;
 		if (!getFileHash(hash, src, copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
 			return false;
-		++m_stats.hashCount;
 		if (!sendData(m_socket, &hash, sizeof(hash)))
 			return false;
 		if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
@@ -2058,7 +2058,6 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		Hash hash;
 		if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
 			return ReadFileResult_Error;
-		++m_stats.hashCount;
 		if (!sendData(m_socket, &hash, sizeof(hash)))
 			return ReadFileResult_Error;
 		if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))

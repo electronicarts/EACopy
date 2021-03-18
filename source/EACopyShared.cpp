@@ -2307,7 +2307,9 @@ FileDatabase::primeWait(IOStats& ioStats)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-HashContext::HashContext()
+HashContext::HashContext(u64& time, u64& count)
+:	m_time(time)
+,	m_count(count)
 {
 	init();
 }
@@ -2330,6 +2332,7 @@ HashContext::~HashContext()
 
 HashBuilder::HashBuilder(HashContext& c) : m_context(c)
 {
+	++m_context.m_count;
 	TimerScope _(m_context.m_time);
 	if (!CryptCreateHash((HCRYPTPROV&)m_context.m_handle, CALG_MD5, 0, 0, &(HCRYPTHASH&)m_handle))
 		logErrorf(L"CryptCreateHash failed: %ls", getLastErrorText().c_str());
