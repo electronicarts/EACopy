@@ -9,6 +9,7 @@
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <windows.h>
+#include <wincrypt.h>
 #include "RestartManager.h"
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Rstrtmgr.lib")
@@ -781,6 +782,71 @@ getFileInfo(FileInfo& outInfo, FindFileData& findFileData)
 	else
 		EACOPY_NOT_IMPLEMENTED;
 	return attr;
+#endif
+}
+
+bool
+getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, u64& hashTime)
+{
+#if defined(_WIN32)
+	u64 hashStartTime = getTime();
+	// Get handle to the crypto provider
+	HCRYPTPROV hProv = 0;
+	if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
+	{
+		logErrorf(L"CryptAcquireContext failed: %ls", getLastErrorText().c_str());
+		return false;
+	}
+	ScopeGuard provGuard([&]() { CryptReleaseContext(hProv, 0); });
+
+	HCRYPTHASH hHash = 0;
+	if (!CryptCreateHash(hProv, CALG_MD5, 0, 0, &hHash))
+	{
+		logErrorf(L"CryptCreateHash failed: %ls", getLastErrorText().c_str());
+		return false;
+	}
+	ScopeGuard hashGuard([&]() { CryptDestroyHash(hHash); });
+	hashTime += getTime() - hashStartTime;
+
+	bool useBufferedIO = true;
+	FileHandle handle;
+	if (!openFileRead(fullFileName, handle, ioStats, useBufferedIO))
+		return false;
+	ScopeGuard fileGuard([&]() { closeFile(fullFileName, handle, AccessType_Read, ioStats); });
+
+	while (true)
+	{
+		uint toRead = CopyContextBufferSize;
+		uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
+
+		u64 read;
+		if (!readFile(fullFileName, handle, copyContext.buffers[0], toReadAligned, read, ioStats))
+			return false;
+		if (read == 0)
+			break;
+
+		hashStartTime = getTime();
+		if (!CryptHashData(hHash, copyContext.buffers[0], read, 0))
+		{
+			logErrorf(L"CryptHashData failed: %ls", getLastErrorText().c_str());
+			return false;
+		}
+		hashTime += getTime() - hashStartTime;
+	}
+
+	hashStartTime = getTime();
+	DWORD cbHash = sizeof(Hash);
+	if (!CryptGetHashParam(hHash, HP_HASHVAL, (BYTE*)&outHash, &cbHash, 0))
+	{
+		logErrorf(L"CryptGetHashParam failed: %ls", getLastErrorText().c_str());
+		return false;
+	}
+	hashTime += getTime() - hashStartTime;
+
+	return true;
+#else
+	EACOPY_NOT_IMPLEMENTED;
+	return true;
 #endif
 }
 
@@ -2117,6 +2183,15 @@ FileDatabase::getRecord(const FileKey& key)
 	return FileRec();
 }
 
+FileDatabase::FileRec
+FileDatabase::getRecord(const Hash& hash)
+{
+	auto findIt = m_localFileHashes.find(hash);
+	if (findIt != m_localFileHashes.end())
+		return *findIt->second;
+	return {};
+}
+
 uint
 FileDatabase::getHistorySize()
 {
@@ -2141,15 +2216,19 @@ FileDatabase::findFileForDeltaCopy(WString& outFile, const FileKey& key)
 }
 
 void
-FileDatabase::addToLocalFilesHistory(const FileKey& key, const WString& fullFileName)
+FileDatabase::addToLocalFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName)
 {
 	ScopedCriticalSection cs(m_localFilesCs);
 	auto insres = m_localFiles.insert({key, FileRec()});
 	if (!insres.second)
 		m_localFilesHistory.erase(insres.first->second.historyIt);
 	m_localFilesHistory.push_back(key);
-	insres.first->second.name = fullFileName;
-	insres.first->second.historyIt = --m_localFilesHistory.end();
+	FileRec& rec = insres.first->second;
+	rec.name = fullFileName;
+	rec.hash = hash;
+	rec.historyIt = --m_localFilesHistory.end();
+	if (hash)
+		m_localFileHashes[hash] = &rec;
 }
 
 uint
@@ -2162,7 +2241,11 @@ FileDatabase::garbageCollect(uint maxHistory)
 	uint it = removeCount;
 	while (it--)
 	{
-		m_localFiles.erase(m_localFilesHistory.front());
+		auto findIt = m_localFiles.find(m_localFilesHistory.front());
+		auto hashFindIt = m_localFileHashes.find(findIt->second.hash);
+		if (hashFindIt->second == &findIt->second)
+			m_localFileHashes.erase(hashFindIt);
+		m_localFiles.erase(findIt);
 		m_localFilesHistory.pop_front();
 	}
 	return removeCount;
@@ -2229,7 +2312,8 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 		}
 		else
 		{
-			addToLocalFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, directory + fileName);
+			Hash hash; // TODO: Should use hashes also calculate hash for files?
+			addToLocalFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, hash, directory + fileName);
 		}
 	} 
 	while(findNextFile(fh, fd, ioStats)); 

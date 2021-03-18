@@ -246,6 +246,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
 		outStats.connectTime += threadStats.connectTime;
+		outStats.hashCount += outStats.hashCount;
+		outStats.hashTime += outStats.hashTime;
 		outStats.ioStats.createReadTime += threadStats.ioStats.createReadTime;
 		outStats.ioStats.closeReadTime += threadStats.ioStats.closeReadTime;
 		outStats.ioStats.closeReadCount += threadStats.ioStats.closeReadCount;
@@ -1894,15 +1896,31 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
 		return false;
 
-	if (writeResponse == WriteResponse_Skip)
-		return true;
-
-	if (writeResponse == WriteResponse_Link)
+	do
 	{
-		outWritten = cmd.info.fileSize;
-		outLinked = true;
-		return true;
-	}
+		if (writeResponse == WriteResponse_Skip)
+			return true;
+
+		if (writeResponse == WriteResponse_Link)
+		{
+			outWritten = cmd.info.fileSize;
+			outLinked = true;
+			return true;
+		}
+
+		if (writeResponse != WriteResponse_Hash)
+			break;
+
+		Hash hash;
+		if (!getFileHash(hash, src, copyContext, m_stats.ioStats, m_stats.hashTime))
+			return false;
+		++m_stats.hashCount;
+		if (!sendData(m_socket, &hash, sizeof(hash)))
+			return false;
+		if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
+			return false;
+			
+	} while (true);
 
 	if (writeResponse == WriteResponse_Copy)
 	{
@@ -2033,6 +2051,18 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	{
 		logErrorf(L"Unknown server side error while asking for file %ls: sendReadFileCommand failed", fullDest.c_str());
 		return ReadFileResult_Error;
+	}
+
+	if (readResponse == ReadResponse_Hash)
+	{
+		Hash hash;
+		if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_stats.hashTime))
+			return ReadFileResult_Error;
+		++m_stats.hashCount;
+		if (!sendData(m_socket, &hash, sizeof(hash)))
+			return ReadFileResult_Error;
+		if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))
+			return ReadFileResult_Error;
 	}
 
 	// Skip file, we already have the same file as source

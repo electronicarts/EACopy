@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr wchar_t ClientVersion[] = L"0.9997" CFG_STR; // Version of client (visible when printing help info)
+constexpr wchar_t ClientVersion[] = L"0.9998" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -84,6 +84,8 @@ struct ClientStats
 	float				compressionAverageLevel		= 0;
 	u64					decompressTime				= 0;
 	u64					deltaCompressionTime		= 0;
+	u64					hashTime					= 0;
+	u64					hashCount					= 0;
 	IOStats				ioStats;
 
 	bool				destServerUsed				= false;

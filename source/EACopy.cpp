@@ -552,6 +552,7 @@ int main(int argc, char* argv_[])
 		populateStatsValue(statsVec, L"CompressLevel", stats.compressionAverageLevel);
 		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTime, 0);
 		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTime, 0);
+		populateStatsTime(statsVec, L"HashCalc", stats.hashTime, stats.hashCount);
 		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTime, 0);
 
 		logInfoLinef();

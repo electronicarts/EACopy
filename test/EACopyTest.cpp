@@ -1107,7 +1107,7 @@ EACOPY_TEST(ServerCopyAttemptFail)
 EACOPY_TEST(ServerCopyDirs)
 {
 	createTestFile(L"A\\Foo.txt", 10);
-	createTestFile(L"B\\Bar.txt", 10);
+	createTestFile(L"B\\Bar.txt", 11);
 
 	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
@@ -1284,7 +1284,7 @@ EACOPY_TEST(ServerCopyMultiThreaded)
 	{
 		wchar_t fileName[1024];
 		StringCbPrintfW(fileName, sizeof(fileName), L"Foo%i.txt", i);
-		createTestFile(fileName, 100);
+		createTestFile(fileName, 100 + i);
 	}
 
 	for (uint i=0; i!=testCount; ++i)
@@ -1351,6 +1351,42 @@ EACOPY_TEST(ServerCopyLink)
 	clientSettings.destDirectory = testDestDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats2) == 0);
 	EACOPY_ASSERT(clientStats2.linkCount == 1);
+}
+
+EACOPY_TEST(ServerCopyByHash)
+{
+	createTestFile(L"Foo.txt", 10);
+
+	ServerSettings serverSettings(getDefaultServerSettings());
+	serverSettings.useHash = true;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	Client client(clientSettings);
+
+	ClientStats clientStats1;
+	clientSettings.destDirectory = testDestDir + L"1\\";
+	EACOPY_ASSERT(client.process(clientLog, clientStats1) == 0);
+	EACOPY_ASSERT(clientStats1.copyCount == 1);
+
+	deleteFile((testSourceDir + L"\\Foo.txt").c_str(), ioStats);
+	createTestFile(L"Foo.txt", 10);
+
+	ClientStats clientStats2;
+	clientSettings.destDirectory = testDestDir + L"2\\";
+	EACOPY_ASSERT(client.process(clientLog, clientStats2) == 0);
+	EACOPY_ASSERT(clientStats2.linkCount == 1);
+
+	deleteFile((testSourceDir + L"\\Foo.txt").c_str(), ioStats);
+	createTestFile(L"Foo.txt", 10);
+
+	ClientStats clientStats3;
+	clientSettings.sourceDirectory = testDestDir + L"2\\";
+	clientSettings.destDirectory = testSourceDir;
+	EACOPY_ASSERT(client.process(clientLog, clientStats3) == 0);
+	EACOPY_ASSERT(clientStats3.skipCount == 1);
 }
 
 EACOPY_TEST(ServerCopySameDest)

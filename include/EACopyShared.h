@@ -135,6 +135,20 @@ private:
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Hash
+
+struct Hash
+{
+	u64 first = 0;
+	u64 second = 0;
+
+	operator bool() const { return first != 0 || second != 0; }
+	bool operator<(const Hash& o) const { return first == o.first ? second < o.second : first < o.first; }
+};
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Misc
 
 u64						getTime();
@@ -234,6 +248,7 @@ enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedI
 bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 
 uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats);
+bool					getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, u64& hashTime);
 bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
 bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
@@ -286,15 +301,17 @@ class FileDatabase
 {
 public:
 	using			FilesHistory = List<FileKey>;
-	struct			FileRec { WString name; FilesHistory::iterator historyIt; };
+	struct			FileRec { WString name; Hash hash;  FilesHistory::iterator historyIt; };
 	using			FilesMap = Map<FileKey, FileRec>;
+	using			FilesHashMap = Map<Hash, FileRec*>;
 	using			PrimeDirs = List<WString>;
 
 	FileRec			getRecord(const FileKey& key);
+	FileRec			getRecord(const Hash& hash);
 	uint			getHistorySize();
 	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 
-	void			addToLocalFilesHistory(const FileKey& key, const WString& fullFileName);
+	void			addToLocalFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName);
 	uint			garbageCollect(uint maxHistory);
 
 	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool flush);
@@ -306,6 +323,7 @@ public:
 	uint			m_primeActive = 0;
 
 	FilesMap		m_localFiles;
+	FilesHashMap	m_localFileHashes;
 	FilesHistory	m_localFilesHistory;
 	CriticalSection	m_localFilesCs;
 };
@@ -412,7 +430,7 @@ uint GetLastError();
 #define ERROR_SHARING_VIOLATION          32L
 #endif
 
-#define EACOPY_NOT_IMPLEMENTED { eacopy::Sleep(1000); fflush(stdout); assert(false); }
+#define EACOPY_NOT_IMPLEMENTED { Sleep(1000); fflush(stdout); assert(false); }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

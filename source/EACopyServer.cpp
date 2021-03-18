@@ -444,6 +444,8 @@ Server::connectionThread(ConnectionInfo& info)
 					if (const wchar_t* lastSlash = wcsrchr(fileName, '\\'))
 						fileName = lastSlash + 1;
 
+					Hash hash;
+
 					// Robocopy style key for uniqueness of file
 					FileKey key { fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 
@@ -459,6 +461,8 @@ Server::connectionThread(ConnectionInfo& info)
 						uint attributes = getFileInfo(other, localFile.name.c_str(), ioStats);
 						if (attributes && equals(cmd.info, other))
 						{
+							hash = localFile.hash;
+
 							FileInfo destInfo;
 
 							if (fullPath == localFile.name) // We are copying to the same place we've copied before and the file there is still up-to-date, skip
@@ -488,7 +492,10 @@ Server::connectionThread(ConnectionInfo& info)
 						FileInfo other;
 						uint attributes = getFileInfo(other, fullPath.c_str(), ioStats);
 						if (attributes && equals(cmd.info, other))
+						{
+							hash = localFile.hash;
 							writeResponse = WriteResponse_Skip;
+						}
 					}
 
 					// If CopyDelta is enabled we should look for a file that we believe is a very similar file and use that to send delta
@@ -507,6 +514,25 @@ Server::connectionThread(ConnectionInfo& info)
 						}
 					#endif
 
+					if (info.settings.useHash && writeResponse == WriteResponse_Copy || writeResponse == WriteResponse_CopyUsingSmb)
+					{
+						// Ask for hash of file first, it might still exist on the server but with different time stamp... and if it doesnt we still need the hash
+						WriteResponse hashResponse = WriteResponse_Hash;
+						if (!sendData(info.socket, &hashResponse, sizeof(hashResponse)))
+							return -1;
+						if (!receiveData(info.socket, &hash, sizeof(hash)))
+							return -1;
+						localFile = m_database.getRecord(hash);
+
+						if (!localFile.name.empty()) // File exists on server but with different time stamp.
+						{
+							// Attempt to create link to other file
+							bool skip;
+							if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+								writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
+						}
+					}
+
 					++entryCount[writeResponse];
 
 					// Send response of action
@@ -517,7 +543,7 @@ Server::connectionThread(ConnectionInfo& info)
 					if (writeResponse == WriteResponse_Link || writeResponse == WriteResponse_Skip)
 					{
 						InterlockedAdd64((LONG64*)(writeResponse != WriteResponse_Skip ? &m_bytesLinked : &m_bytesSkipped), cmd.info.fileSize);
-						m_database.addToLocalFilesHistory(key, fullPath);
+						m_database.addToLocalFilesHistory(key, hash, fullPath);
 						break;
 					}
 
@@ -552,7 +578,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (success)
 					{
-						m_database.addToLocalFilesHistory(key, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
+						m_database.addToLocalFilesHistory(key, hash, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
 						InterlockedAdd64((LONG64*)&m_bytesCopied, cmd.info.fileSize);
 						InterlockedAdd64((LONG64*)&m_bytesReceived, totalReceivedSize);
 					}
@@ -634,7 +660,28 @@ Server::connectionThread(ConnectionInfo& info)
 
 					ReadResponse readResponse = (isServerPathExternal && !cmd.compressionEnabled) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
 					if (equals(fi, cmd.info))
+					{
 						readResponse = ReadResponse_Skip;
+					}
+					else if (info.settings.useHash && fi.fileSize == cmd.info.fileSize)  // Check if client's file content actually matches server's.. might only differ in last write time if size is the same
+					{
+						FileKey serverKey{ cmd.path, fi.lastWriteTime, fi.fileSize };
+						if (Hash serverHash = m_database.getRecord(serverKey).hash)
+						{
+							FileKey clientKey{ cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
+							Hash hash = m_database.getRecord(clientKey).hash;
+							if (!hash)
+							{
+								ReadResponse hashResponse = ReadResponse_Hash;
+								if (!sendData(info.socket, &hashResponse, sizeof(hashResponse)))
+									return -1;
+								if (!receiveData(info.socket, &hash, sizeof(hash)))
+									return -1;
+							}
+							if (hash == serverHash) // They are actually the same file.. just different time
+								readResponse = ReadResponse_Skip;
+						}
+					}
 
 					// Check if the version that the client has exist and in that case send as delta
 					#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)

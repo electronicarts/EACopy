@@ -21,7 +21,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 17 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 18 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
 enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
@@ -101,6 +101,7 @@ enum WriteResponse : u8
 	WriteResponse_CopyUsingSmb,
 	WriteResponse_Link,
 	WriteResponse_Skip,
+	WriteResponse_Hash,
 	WriteResponse_BadDestination
 };
 
@@ -117,6 +118,7 @@ enum ReadResponse : u8
 	ReadResponse_CopyDelta,
 	ReadResponse_CopyUsingSmb,
 	ReadResponse_Skip,
+	ReadResponse_Hash,
 	ReadResponse_BadSource,
 	ReadResponse_ServerBusy,
 };
