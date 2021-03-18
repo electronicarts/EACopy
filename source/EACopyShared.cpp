@@ -786,33 +786,15 @@ getFileInfo(FileInfo& outInfo, FindFileData& findFileData)
 }
 
 bool
-getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, u64& hashTime)
+getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, HashContext& hashContext, u64& hashTime)
 {
-#if defined(_WIN32)
-	u64 hashStartTime = getTime();
-	// Get handle to the crypto provider
-	HCRYPTPROV hProv = 0;
-	if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
-	{
-		logErrorf(L"CryptAcquireContext failed: %ls", getLastErrorText().c_str());
-		return false;
-	}
-	ScopeGuard provGuard([&]() { CryptReleaseContext(hProv, 0); });
-
-	HCRYPTHASH hHash = 0;
-	if (!CryptCreateHash(hProv, CALG_MD5, 0, 0, &hHash))
-	{
-		logErrorf(L"CryptCreateHash failed: %ls", getLastErrorText().c_str());
-		return false;
-	}
-	ScopeGuard hashGuard([&]() { CryptDestroyHash(hHash); });
-	hashTime += getTime() - hashStartTime;
-
 	bool useBufferedIO = true;
 	FileHandle handle;
 	if (!openFileRead(fullFileName, handle, ioStats, useBufferedIO))
 		return false;
 	ScopeGuard fileGuard([&]() { closeFile(fullFileName, handle, AccessType_Read, ioStats); });
+
+	HashBuilder builder(hashContext);
 
 	while (true)
 	{
@@ -824,30 +806,11 @@ getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext
 			return false;
 		if (read == 0)
 			break;
-
-		hashStartTime = getTime();
-		if (!CryptHashData(hHash, copyContext.buffers[0], read, 0))
-		{
-			logErrorf(L"CryptHashData failed: %ls", getLastErrorText().c_str());
+		if (!builder.add(copyContext.buffers[0], read))
 			return false;
-		}
-		hashTime += getTime() - hashStartTime;
 	}
 
-	hashStartTime = getTime();
-	DWORD cbHash = sizeof(Hash);
-	if (!CryptGetHashParam(hHash, HP_HASHVAL, (BYTE*)&outHash, &cbHash, 0))
-	{
-		logErrorf(L"CryptGetHashParam failed: %ls", getLastErrorText().c_str());
-		return false;
-	}
-	hashTime += getTime() - hashStartTime;
-
-	return true;
-#else
-	EACOPY_NOT_IMPLEMENTED;
-	return true;
-#endif
+	return builder.getHash(outHash);
 }
 
 wchar_t*
@@ -2340,6 +2303,63 @@ FileDatabase::primeWait(IOStats& ioStats)
 			break;
 	}
 	return true;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+HashContext::HashContext()
+{
+	init();
+}
+
+bool
+HashContext::init()
+{
+	TimerScope _(m_time);
+	if (CryptAcquireContext(&(HCRYPTPROV&)m_handle, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
+		return true;
+	logErrorf(L"CryptAcquireContext failed: %ls", getLastErrorText().c_str());
+	return false;
+}
+
+HashContext::~HashContext()
+{
+	TimerScope _(m_time);
+	CryptReleaseContext((HCRYPTPROV&)m_handle, 0);
+}
+
+HashBuilder::HashBuilder(HashContext& c) : m_context(c)
+{
+	TimerScope _(m_context.m_time);
+	if (!CryptCreateHash((HCRYPTPROV&)m_context.m_handle, CALG_MD5, 0, 0, &(HCRYPTHASH&)m_handle))
+		logErrorf(L"CryptCreateHash failed: %ls", getLastErrorText().c_str());
+}
+
+HashBuilder::~HashBuilder()
+{
+	TimerScope _(m_context.m_time);
+	CryptDestroyHash((HCRYPTHASH&)m_handle);
+}
+
+bool
+HashBuilder::add(u8* data, u64 size)
+{
+	TimerScope _(m_context.m_time);
+	if (CryptHashData((HCRYPTHASH&)m_handle, data, size, 0))
+		return true;
+	logErrorf(L"CryptHashData failed: %ls", getLastErrorText().c_str());
+	return false;
+}
+
+bool
+HashBuilder::getHash(Hash& outHash)
+{
+	TimerScope _(m_context.m_time);
+	DWORD cbHash = sizeof(Hash);
+	if (CryptGetHashParam((HCRYPTHASH&)m_handle, HP_HASHVAL, (BYTE*)&outHash, &cbHash, 0))
+		return true;
+	logErrorf(L"CryptGetHashParam failed: %ls", getLastErrorText().c_str());
+	return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

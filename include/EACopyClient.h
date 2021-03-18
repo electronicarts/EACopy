@@ -215,6 +215,8 @@ public:
 	const ClientSettings& m_settings;
 	ClientStats&		m_stats;
 
+	HashContext			m_hashContext;
+
 	Socket				m_socket;
 	bool				m_compressionEnabled;
 	CompressionData		m_compressionData;

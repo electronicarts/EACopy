@@ -1912,7 +1912,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 			break;
 
 		Hash hash;
-		if (!getFileHash(hash, src, copyContext, m_stats.ioStats, m_stats.hashTime))
+		if (!getFileHash(hash, src, copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
 			return false;
 		++m_stats.hashCount;
 		if (!sendData(m_socket, &hash, sizeof(hash)))
@@ -2056,7 +2056,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	if (readResponse == ReadResponse_Hash)
 	{
 		Hash hash;
-		if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_stats.hashTime))
+		if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
 			return ReadFileResult_Error;
 		++m_stats.hashCount;
 		if (!sendData(m_socket, &hash, sizeof(hash)))

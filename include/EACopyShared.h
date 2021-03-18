@@ -15,6 +15,7 @@ struct _OVERLAPPED;
 
 namespace eacopy
 {
+	class HashContext;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Global Constants
@@ -248,7 +249,7 @@ enum					UseBufferedIO { UseBufferedIO_Auto, UseBufferedIO_Enabled, UseBufferedI
 bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 
 uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats);
-bool					getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, u64& hashTime);
+bool					getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, HashContext& hashContext, u64& hashTime);
 bool					equals(const FileInfo& a, const FileInfo& b);
 bool					ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
 bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
@@ -330,6 +331,33 @@ public:
 
 
 
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Hash
+
+class HashContext
+{
+public:
+	HashContext();
+	bool init();
+	~HashContext();
+
+	void* m_handle = nullptr;
+	u64 m_time = 0;
+	u64 m_count = 0;
+};
+
+class HashBuilder
+{
+public:
+	HashBuilder(HashContext& context);
+	~HashBuilder();
+
+	bool add(u8* data, u64 size);
+	bool getHash(Hash& outHash);
+
+	HashContext& m_context;
+	void* m_handle = nullptr;
+};
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Logging
