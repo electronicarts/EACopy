@@ -2311,13 +2311,12 @@ HashContext::HashContext(u64& time, u64& count)
 :	m_time(time)
 ,	m_count(count)
 {
-	init();
 }
 
 bool
 HashContext::init()
 {
-	//TimerScope _(m_time);
+	TimerScope _(m_time); // Skip these since they makes the user think hashing happens when it is not
 	if (CryptAcquireContext(&(HCRYPTPROV&)m_handle, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
 		return true;
 	logErrorf(L"CryptAcquireContext failed: %ls", getLastErrorText().c_str());
@@ -2326,14 +2325,20 @@ HashContext::init()
 
 HashContext::~HashContext()
 {
-	//TimerScope _(m_time);
+	if (!m_handle)
+		return;
+	TimerScope _(m_time); // Skip these since they makes the user think hashing happens when it is not
 	CryptReleaseContext((HCRYPTPROV&)m_handle, 0);
 }
 
 HashBuilder::HashBuilder(HashContext& c) : m_context(c)
 {
+	if (!m_context.m_handle)
+		m_context.init();
+
 	++m_context.m_count;
 	TimerScope _(m_context.m_time);
+
 	if (!CryptCreateHash((HCRYPTPROV&)m_context.m_handle, CALG_MD5, 0, 0, &(HCRYPTHASH&)m_handle))
 		logErrorf(L"CryptCreateHash failed: %ls", getLastErrorText().c_str());
 }
