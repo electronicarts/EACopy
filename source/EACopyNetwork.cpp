@@ -49,7 +49,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool isLocalHost(const wchar_t* hostname)
+bool isLocalHost(const wchar_t* hostname, WString& outIp)
 {
 	#if defined(_WIN32)
 	WSADATA wsaData;
@@ -69,6 +69,11 @@ bool isLocalHost(const wchar_t* hostname)
 	int res1 = getAddrInfoW(hostname, NULL, &hints, &hostaddr);
 	int res2 = getAddrInfoW(L"localhost", NULL, &hints, &localaddr);
 	bool isLocal = res1 == 0 && res2 == 0 && stringEquals(hostaddr->ai_canonname, localaddr->ai_canonname);
+
+	wchar_t addrString[1024];
+	DWORD addrStringLen = eacopy_sizeof_array(addrString);
+	if (!WSAAddressToStringW(hostaddr->ai_addr, sizeof(struct sockaddr_storage), NULL, addrString, &addrStringLen))
+		outIp = addrString;
 
 	freeAddrInfo(hostaddr);
 	freeAddrInfo(localaddr);
@@ -128,8 +133,14 @@ const wchar_t* optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allow
 			return uncPath;
 
 		WString serverName(serverNameStart, serverNameEnd);
-		if (!isLocalHost(serverName.c_str()))
-			return uncPath;
+		WString serverIp;
+		if (!isLocalHost(serverName.c_str(), serverIp))
+		{
+			if (serverIp.empty())
+				return uncPath;
+			temp = L"\\\\" + serverIp + serverNameEnd;
+			return temp.c_str();
+		}
 
 		const wchar_t* netDirectory = serverNameEnd + 1;
 
