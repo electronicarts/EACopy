@@ -674,6 +674,8 @@ findFirstFile(const wchar_t* searchStr, FindFileData& findFileData, IOStats& ioS
 	++ioStats.findFileCount;
 	TimerScope _(ioStats.findFileTime);
 #if defined(_WIN32)
+	WString tempBuffer;
+	searchStr = convertToShortPath(searchStr, tempBuffer);
 	static_assert(sizeof(WIN32_FIND_DATAW) <= sizeof(FindFileData), "");
 	return FindFirstFileExW(searchStr, FindExInfoBasic, (WIN32_FIND_DATAW*)&findFileData, FindExSearchNameMatch, NULL, FIND_FIRST_EX_LARGE_FETCH);
 #else
@@ -894,11 +896,11 @@ uint getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStat
 	TimerScope _(ioStats.fileInfoTime);
 
 	#if defined(_WIN32)
-	WString tempBuffer;
-	const wchar_t* validFullFileName = convertToShortPath(fullFileName, tempBuffer);
+	WString temp;
+	fullFileName = convertToShortPath(fullFileName, temp);
 
 	WIN32_FILE_ATTRIBUTE_DATA fd;
-	BOOL ret = GetFileAttributesExW(validFullFileName, GetFileExInfoStandard, &fd); 
+	BOOL ret = GetFileAttributesExW(fullFileName, GetFileExInfoStandard, &fd);
 	if (ret == 0)
 	{
 		outInfo = FileInfo();
@@ -1071,12 +1073,11 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 			return false;
 	}
 
-	WString tempBuffer;
-	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
-
 	{
 		++ioStats.createDirCount;
 		TimerScope _(ioStats.createDirTime);
+		WString tempBuffer;
+		const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 		if (CreateDirectoryW(validDirectory, NULL) != 0)
 		{
 			if (outCreatedDirs)
@@ -1100,12 +1101,9 @@ bool isError(uint error, bool errorOnMissingFile)
 
 bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioStats, bool errorOnMissingFile)
 {
-	WString tempBuffer;
-	const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
-
 	outPathFound = true;
 	FindFileData fd;
-	WString dir(validDirectory);
+	WString dir(directory);
 	if (dir[dir.length()-1] != L'\\')
 		dir += L'\\';
     WString searchStr = dir + L"*.*";
@@ -1119,7 +1117,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 			return true;
 		}
 
-		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %ls: %ls", validDirectory, getErrorText(error).c_str());
+		logErrorf(L"deleteDirectory failed using FindFirstFile for directory %ls: %ls", directory, getErrorText(error).c_str());
 		return false;
 	}
 
@@ -1150,10 +1148,12 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 			bool isSymlink = (fileAttr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 			if (isSymlink)
 			{
+				WString buffer;
+				const wchar_t* fullName2 = convertToShortPath(fullName.c_str(), buffer);
 				// Delete reparsepoint and treat path as not existing
 				++ioStats.removeDirCount;
 				TimerScope _(ioStats.removeDirTime);
-				if (!RemoveDirectoryW(fullName.c_str()))
+				if (!RemoveDirectoryW(fullName2))
 				{
 					uint error = GetLastError();
 					if (isError(error, errorOnMissingFile))
@@ -1248,6 +1248,8 @@ bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	uint sequentialScanFlag = isSequentialScan ? FILE_FLAG_SEQUENTIAL_SCAN : 0;
 	DWORD shareMode = sharedRead ? FILE_SHARE_READ : 0;
+	WString temp;
+	fullPath = convertToShortPath(fullPath, temp);
 	outFile = CreateFileW(fullPath, GENERIC_READ, shareMode, NULL, OPEN_EXISTING, sequentialScanFlag | nobufferingFlag, overlapped);
 	if (outFile != InvalidFileHandle)
 		return true;
@@ -1284,6 +1286,8 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 
 	++ioStats.createWriteCount;
 	TimerScope _(ioStats.createWriteTime);
+	WString temp;
+	fullPath = convertToShortPath(fullPath, temp);
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
@@ -1472,6 +1476,11 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 {
 	outSkip = false;
 	#if defined(_WIN32)
+	WString tempBuffer1;
+	fullPath = convertToShortPath(fullPath, tempBuffer1);
+
+	WString tempBuffer2;
+	sourcePath = convertToShortPath(sourcePath, tempBuffer2);
 	do
 	{
 		{
@@ -1558,10 +1567,10 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 
 	// This kind of sucks but since machines might not have long paths enabled we have to work around it by making a symlink and copy through that
 	WString tempBuffer1;
-	const wchar_t* validSource = convertToShortPath(source, tempBuffer1);
+	source = convertToShortPath(source, tempBuffer1);
 
 	WString tempBuffer2;
-	const wchar_t* validDest = convertToShortPath(dest, tempBuffer2);
+	dest = convertToShortPath(dest, tempBuffer2);
 
 	if (UseOwnCopyFunction)
 	{
@@ -1579,7 +1588,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 
 		++ioStats.createWriteCount;
 		u64 startCreateWriteTime = getTime();
-		HANDLE destFile = CreateFileW(validDest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
+		HANDLE destFile = CreateFileW(dest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
 		ioStats.createWriteTime += getTime() - startCreateWriteTime;
 
 		if (destFile == InvalidFileHandle)
@@ -1597,7 +1606,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 
 		bool result = true;
 		
-		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); result &= closeFile(validDest, destFile, AccessType_Write, ioStats); });
+		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); result &= closeFile(dest, destFile, AccessType_Write, ioStats); });
 
 		OVERLAPPED osRead  = {0,0,0};
 		osRead.Offset = 0;
@@ -1605,7 +1614,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		osRead.hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
 		u64 startCreateReadTime = getTime();
-		HANDLE sourceFile = CreateFileW(validSource, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
+		HANDLE sourceFile = CreateFileW(source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag, &osRead);
 		ioStats.createReadTime += getTime() - startCreateReadTime;
 		++ioStats.createReadCount;
 
@@ -1615,7 +1624,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			return false;
 		}
 
-		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); result &= closeFile(validSource, sourceFile, AccessType_Read, ioStats); });
+		ScopeGuard sourceGuard([&]() { CloseHandle(osRead.hEvent); result &= closeFile(source, sourceFile, AccessType_Read, ioStats); });
 
 		uint activeBufferIndex = 0;
 		uint sizeFilled = 0;
@@ -1721,7 +1730,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		uint flags = 0;
 		if (failIfExists)
 			flags |= COPY_FILE_FAIL_IF_EXISTS;
-		if (CopyFileExW(validSource, validDest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
+		if (CopyFileExW(source, dest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
 			return true;
 
 		uint error = GetLastError();
@@ -1834,11 +1843,11 @@ bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFi
 {
 	++ioStats.deleteFileCount;
 	TimerScope _(ioStats.deleteFileTime);
-	WString tempBuffer;
-	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer);
 
 	#if defined(_WIN32)
-	if (DeleteFileW(validFullPath) != 0)
+	WString tempBuffer;
+	fullPath = convertToShortPath(fullPath, tempBuffer);
+	if (DeleteFileW(fullPath) != 0)
 		return true;
 
 	uint error = GetLastError();
@@ -1865,6 +1874,8 @@ bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFi
 bool setFileWritable(const wchar_t* fullPath, bool writable)
 {
 	#if defined(_WIN32)
+	WString temp;
+	fullPath = convertToShortPath(fullPath, temp);
 	return SetFileAttributesW(fullPath, writable ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_READONLY) != 0;
 	#else
 	String file = toLinuxPath(fullPath);
@@ -2264,7 +2275,7 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 
     FindFileData fd; 
     WString searchStr = directory + L"*.*";
-    FindFileHandle fh = findFirstFile(searchStr.c_str(), fd, ioStats); 
+	FindFileHandle fh = findFirstFile(searchStr.c_str(), fd, ioStats);
     if(fh == InvalidFileHandle)
 	{
 		logErrorf(L"FindFirstFile failed with search string %ls", searchStr.c_str());

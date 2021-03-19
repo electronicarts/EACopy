@@ -284,14 +284,11 @@ CompressionData::~CompressionData()
 
 bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats)
 {
-	WString tempBuffer1;
-	const wchar_t* validSrc = convertToShortPath(src, tempBuffer1);
-
 	FileHandle sourceFile;
-	if (!openFileRead(validSrc, sourceFile, ioStats, useBufferedIO, nullptr, true))
+	if (!openFileRead(src, sourceFile, ioStats, useBufferedIO, nullptr, true))
 		return false;
 
-	ScopeGuard closeSourceFile([&]() { closeFile(validSrc, sourceFile, AccessType_Read, ioStats); });
+	ScopeGuard closeSourceFile([&]() { closeFile(src, sourceFile, AccessType_Read, ioStats); });
 
 
 	if (writeType == WriteFileType_TransmitFile)
@@ -317,13 +314,13 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 					if (WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, WSA_INFINITE, FALSE) == WSA_WAIT_FAILED)
 					{
 						int error = getLastNetworkError();
-						logErrorf(L"Error while waiting on transmit of %ls: %ls", validSrc, getErrorText(error).c_str());
+						logErrorf(L"Error while waiting on transmit of %ls: %ls", src, getErrorText(error).c_str());
 						return false;
 					}
 				}
 				else
 				{
-					logErrorf(L"Error while transmitting %ls: %ls", validSrc, getErrorText(error).c_str());
+					logErrorf(L"Error while transmitting %ls: %ls", src, getErrorText(error).c_str());
 					return false;
 				}
 			}
@@ -348,11 +345,11 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			u64 read;
-			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
+			if (!readFile(src, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %ls: %ls", validSrc, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %ls: %ls", src, getLastErrorText().c_str());
 					return false;
 				}
 			}
@@ -380,11 +377,11 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			uint toRead = std::min(left, u64(CompressedNetworkTransferChunkSize - CompressBoundReservation));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 			u64 read;
-			if (!readFile(validSrc, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
+			if (!readFile(src, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
-					logErrorf(L"Fail reading file %ls: %ls", validSrc, getLastErrorText().c_str());
+					logErrorf(L"Fail reading file %ls: %ls", src, getLastErrorText().c_str());
 					return false;
 				}
 			}
@@ -400,7 +397,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CompressedNetworkTransferChunkSize - 4, copyContext.buffers[0], read, cs.level);
 			if (ZSTD_isError(compressedSize))
 			{
-				logErrorf(L"Fail compressing file %ls: %ls", validSrc, ZSTD_getErrorName(compressedSize));
+				logErrorf(L"Fail compressing file %ls: %ls", src, ZSTD_getErrorName(compressedSize));
 				return false;
 			}
 			u64 compressTime = getTime() - startCompressTime;
@@ -458,9 +455,6 @@ NetworkCopyContext::~NetworkCopyContext()
 
 bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, IOStats& ioStats, RecvFileStats& recvStats)
 {
-	WString tempBuffer1;
-	const wchar_t* validFullPath = convertToShortPath(fullPath, tempBuffer1);
-
 	u64 totalReceivedSize = 0;
 
 	if (writeType == WriteFileType_TransmitFile || writeType == WriteFileType_Send)
@@ -472,8 +466,8 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
 
-		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
-		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
+		outSuccess = openFileWrite(fullPath, file, ioStats, useBufferedIO);
+		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(fullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
 
 		u64 read = 0;
 
@@ -481,7 +475,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
+			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 		}
@@ -514,7 +508,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 			recvStats.recvTime += getTime() - startRecvTime;
 			recvStats.recvSize += recvBytes;
 
-			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], recvBytes, ioStats, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], recvBytes, ioStats, &osWrite);
 
 			read += recvBytes;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -525,7 +519,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		u64 startWriteTime = getTime();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 		ioStats.writeTime = getTime() - startWriteTime;
-		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
+		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime, ioStats);
 	}
 	else if (writeType == WriteFileType_Compressed)
 	{
@@ -536,8 +530,8 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 		osWrite.hEvent = CreateEvent(nullptr, false, true, nullptr);
 
-		outSuccess = openFileWrite(validFullPath, file, ioStats, useBufferedIO);
-		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(validFullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
+		outSuccess = openFileWrite(fullPath, file, ioStats, useBufferedIO);
+		ScopeGuard fileGuard([&]() { CloseHandle(osWrite.hEvent); if (!closeFile(fullPath, file, AccessType_Write, ioStats)) outSuccess = false; });
 
 		u64 read = 0;
 
@@ -545,7 +539,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(validFullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
+			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 		}
@@ -585,7 +579,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				}
 				if (recvBytes == 0)
 				{
-					logErrorf(L"Socket closed before full file has been received (%ls)", validFullPath);
+					logErrorf(L"Socket closed before full file has been received (%ls)", fullPath);
 					return false;
 				}
 
@@ -604,7 +598,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				outSuccess &= ZSTD_isError(decompressedSize) == 0;
 				if (!outSuccess)
 				{
-					logErrorf(L"Decompression error while decompressing %u bytes after reading %llu, for file %ls: %hs", compressedSize, read, validFullPath, ZSTD_getErrorName(decompressedSize));
+					logErrorf(L"Decompression error while decompressing %u bytes after reading %llu, for file %ls: %hs", compressedSize, read, fullPath, ZSTD_getErrorName(decompressedSize));
 					// Don't return false since we can still continue copying other files after getting this error
 				}
 			}
@@ -613,7 +607,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 
 			outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 
-			outSuccess = outSuccess && writeFile(validFullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, ioStats, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, copyContext.buffers[fileBufIndex], decompressedSize, ioStats, &osWrite);
 
 			read += decompressedSize;
 			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
@@ -622,7 +616,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		u64 startWriteTime = getTime();
 		outSuccess = outSuccess && WaitForSingleObject(osWrite.hEvent, INFINITE) == WAIT_OBJECT_0;
 		ioStats.writeTime = getTime() - startWriteTime;
-		outSuccess = outSuccess && setFileLastWriteTime(validFullPath, file, lastWriteTime, ioStats);
+		outSuccess = outSuccess && setFileLastWriteTime(fullPath, file, lastWriteTime, ioStats);
 	}
 
 	return true;

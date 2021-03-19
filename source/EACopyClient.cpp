@@ -246,8 +246,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
 		outStats.connectTime += threadStats.connectTime;
-		outStats.hashCount += outStats.hashCount;
-		outStats.hashTime += outStats.hashTime;
+		outStats.hashCount += threadStats.hashCount;
+		outStats.hashTime += threadStats.hashTime;
 		outStats.ioStats.createReadTime += threadStats.ioStats.createReadTime;
 		outStats.ioStats.closeReadTime += threadStats.ioStats.closeReadTime;
 		outStats.ioStats.closeReadCount += threadStats.ioStats.closeReadCount;
@@ -944,8 +944,6 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 			searchStr += wildcard;
 		else
 			searchStr += L"*.*";
-		WString tempBuffer;
-		const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
 
 		FindFileData fd; 
 		FindFileHandle findFileHandle; 
@@ -953,7 +951,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			findFileHandle = findFirstFile(validSearchStr, fd, stats.ioStats); 
+			findFileHandle = findFirstFile(searchStr.c_str(), fd, stats.ioStats); 
 			if (findFileHandle != InvalidFindFileHandle)
 				break;
 
@@ -974,7 +972,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", searchStr.c_str(), m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 			++stats.retryCount;
 		}
@@ -1014,7 +1012,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 			uint findNextError = GetLastError();
 			if (findNextError != ERROR_NO_MORE_FILES)
 			{
-				logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
+				logErrorf(L"FindNextFileW failed for %ls: %ls", searchStr, getErrorText(findNextError).c_str());
 				return false;
 			}
 		}
@@ -1037,8 +1035,6 @@ Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& lo
 	{
 		WString searchStr = path;
 		searchStr += L"*.*";
-		WString tempBuffer;
-		const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
 
 		FindFileData fd; 
 		FindFileHandle findFileHandle; 
@@ -1046,7 +1042,7 @@ Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& lo
 		int retryCount = m_settings.retryCount;
 		while (true)
 		{
-			findFileHandle = findFirstFile(validSearchStr, fd, stats.ioStats); 
+			findFileHandle = findFirstFile(searchStr.c_str(), fd, stats.ioStats);
 			if (findFileHandle != InvalidFindFileHandle)
 				break;
 
@@ -1061,7 +1057,7 @@ Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& lo
 
 			// Reset last error and try again!
 			logContext.resetLastError();
-			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", validSearchStr, m_settings.retryWaitTimeMs/1000);
+			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", searchStr.c_str(), m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 			++stats.retryCount;
 		}
@@ -1087,7 +1083,7 @@ Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& lo
 		uint findNextError = GetLastError();
 		if (findNextError != ERROR_NO_MORE_FILES)
 		{
-			logErrorf(L"FindNextFileW failed for %ls: %ls", validSearchStr, getErrorText(findNextError).c_str());
+			logErrorf(L"FindNextFileW failed for %ls: %ls", searchStr.c_str(), getErrorText(findNextError).c_str());
 			return false;
 		}
 	}

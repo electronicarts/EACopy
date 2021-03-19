@@ -778,20 +778,19 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_FindFiles:
 				{
 					auto& cmd = *(const FindFilesCommand*)recvBuffer;
-					WIN32_FIND_DATAW fd; 
+					FindFileData fd;
 					WString searchStr = serverPath + cmd.pathAndWildcard;
 
 					WString tempBuffer;
-					const wchar_t* validSearchStr = convertToShortPath(searchStr.c_str(), tempBuffer);
-					HANDLE hFind = ::FindFirstFileW(validSearchStr, &fd); 
-					if(hFind == InvalidFileHandle)
+					FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd, ioStats);
+					if(findHandle == InvalidFileHandle)
 					{
 						uint blockSize = ~0u;
 						if (!sendData(info.socket, &blockSize, sizeof(blockSize)))
 							return -1;
 						break;
 					}
-					ScopeGuard _([&]() { FindClose(hFind); });
+					ScopeGuard _([&]() { findClose(findHandle, ioStats); });
 
 					u8* bufferPos = copyContext.buffers[0];
 
@@ -808,29 +807,32 @@ Server::connectionThread(ConnectionInfo& info)
 
 					do
 					{ 
-						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN))
+						FileInfo fileInfo;
+						uint attributes = getFileInfo(fileInfo, fd);
+						if ((attributes & FILE_ATTRIBUTE_HIDDEN))
 							continue;
 
-						if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fd.cFileName))
+						const wchar_t* fileName = getFileName(fd);
+						if ((attributes & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fileName))
 							continue;
 
-						uint fileNameBytes = (wcslen(fd.cFileName)+1)*2;
+						uint fileNameBytes = (wcslen(fileName)+1)*2;
 
 						if (fileNameBytes + 20 >= CopyContextBufferSize)
 							if (!writeBlock())
 								return -1;
 
-						*(uint*)bufferPos = fd.dwFileAttributes;
+						*(uint*)bufferPos = attributes;
 						bufferPos += sizeof(uint);
-						*(FILETIME*)bufferPos = fd.ftLastWriteTime;
+						*(FileTime*)bufferPos = fileInfo.lastWriteTime;
 						bufferPos += sizeof(u64);
-						*(u64*)bufferPos = ((u64)fd.nFileSizeHigh << 32) + fd.nFileSizeLow;
+						*(u64*)bufferPos = fileInfo.fileSize;
 						bufferPos += sizeof(u64);
 
-						memcpy(bufferPos, fd.cFileName, fileNameBytes);
+						memcpy(bufferPos, fileName, fileNameBytes);
 						bufferPos += fileNameBytes;
 					}
-					while(FindNextFileW(hFind, &fd)); 
+					while(findNextFile(findHandle, fd, ioStats)); 
 
 					uint error = GetLastError();
 					if (error != ERROR_NO_MORE_FILES)

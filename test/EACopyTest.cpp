@@ -1034,9 +1034,6 @@ EACOPY_TEST(CopyFileWithPurgeTargetHasSymlink)
 
 EACOPY_TEST(CopyFileWithVeryLongPath)
 {
-	//EACOPY_REQUIRE_ADMIN
-
-	//This test when run in Visual Studio must be have Visual Studio run as Administrator!
 	WString longPath;
 	for (uint i=0;i!=30; ++i)
 		longPath.append(L"TestDir\\");
@@ -1070,6 +1067,53 @@ EACOPY_TEST(CopyUsingLink)
 	Client client2(clientSettings);
 	EACOPY_ASSERT(client2.process(clientLog) == 0);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
+}
+
+EACOPY_TEST(LinkFileWithVeryLongPath)
+{
+	WString longPath;
+	for (uint i = 0; i != 30; ++i)
+		longPath.append(L"TestDir\\");
+	WString longPathFile = longPath + L"Foo.txt";
+	createTestFile(longPathFile.c_str(), 100);
+
+	{
+		auto oldTestDestDir = testDestDir;
+		testDestDir += L"1\\";
+		ClientSettings clientSettings(getDefaultClientSettings());
+		clientSettings.destDirectory = testDestDir;
+		clientSettings.copySubdirDepth = 1000;
+		Client client(clientSettings);
+		EACOPY_ASSERT(client.process(clientLog) == 0);
+		EACOPY_ASSERT(isSourceEqualDest(longPathFile.c_str()));
+		testDestDir = oldTestDestDir;
+	}
+
+	{
+		ClientSettings clientSettings(getDefaultClientSettings());
+		clientSettings.copySubdirDepth = 1000;
+		clientSettings.useFileLinks = true;
+		clientSettings.additionalLinkDirectories.push_back(testDestDir + L"1\\" + longPath);
+		testDestDir += L"2\\";
+		clientSettings.destDirectory = testDestDir;
+		Client client(clientSettings);
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(isSourceEqualDest(longPathFile.c_str()));
+		EACOPY_ASSERT(clientStats.linkCount == 1);
+	}
+
+	// Purge
+	{
+		EACOPY_ASSERT(deleteFile((testSourceDir + longPathFile).c_str(), ioStats));
+		ClientSettings clientSettings(getDefaultClientSettings());
+		clientSettings.purgeDestination = true;
+		clientSettings.destDirectory = testDestDir;
+		Client client(clientSettings);
+		ClientStats clientStats;
+		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+		EACOPY_ASSERT(clientStats.ioStats.deleteFileCount == 1);
+	}
 }
 
 #if defined(_WIN32)
