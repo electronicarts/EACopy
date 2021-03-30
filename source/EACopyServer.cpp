@@ -260,13 +260,13 @@ Server::connectionThread(ConnectionInfo& info)
 	}
 
 	// This is using writeReport
-	int entryCount[] = { 0, 0, 0, 0, 0 };
+	int entryCount[] = { 0, 0, 0, 0, 0, 0 };
 	ScopeGuard logDebugReport([&]()
 	{ 
 		logScopeEnter();
 		logDebugLinef(L"--------- Socket %u report ---------", info.socket.index);
-		logDebugLinef(L"          Copy   CopyDelta CopySmb   Link   Skip");
-		logDebugLinef(L"Files   %6i      %6i  %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[3], entryCount[4]);
+		logDebugLinef(L"          Copy   CopyDelta CopySmb   Link    Odx   Skip");
+		logDebugLinef(L"Files   %6i      %6i  %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[3], entryCount[4], entryCount[5]);
 		logDebugLinef(L"---------------------------------");
 		logScopeLeave();
 	});
@@ -457,9 +457,9 @@ Server::connectionThread(ConnectionInfo& info)
 					if (!localFile.name.empty())
 					{
 						// File has already been copied, if the old copied file still has the same attributes as when it was copied we create a link to it
-						FileInfo other;
-						uint attributes = getFileInfo(other, localFile.name.c_str(), ioStats);
-						if (attributes && equals(cmd.info, other))
+						FileInfo localFileInfo;
+						uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), ioStats);
+						if (attributes && equals(cmd.info, localFileInfo))
 						{
 							hash = localFile.hash;
 
@@ -481,8 +481,17 @@ Server::connectionThread(ConnectionInfo& info)
 							*/
 							{
 								bool skip;
-								if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+								if (info.settings.useLinks && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+								{
 									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
+								}
+								else if (info.settings.useOdx)
+								{
+									bool existed = false;
+									u64 bytesCopied;
+									if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
+										writeResponse = WriteResponse_Odx;
+								}
 							}
 						}
 					}
@@ -526,10 +535,23 @@ Server::connectionThread(ConnectionInfo& info)
 
 						if (!localFile.name.empty()) // File exists on server but with different time stamp.
 						{
+							// TODO: Maybe check that localFile still has the same timestamp so noone has tampered with it
+							// 
 							// Attempt to create link to other file
 							bool skip;
-							if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+							if (info.settings.useLinks && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+							{
 								writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
+							}
+							else if (info.settings.useOdx)
+							{
+								bool existed = false;
+								u64 bytesCopied;
+								FileInfo localFileInfo;
+								if (uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), ioStats))
+									if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
+										writeResponse = WriteResponse_Odx;
+							}
 						}
 					}
 
@@ -539,10 +561,11 @@ Server::connectionThread(ConnectionInfo& info)
 					if (!sendData(info.socket, &writeResponse, sizeof(writeResponse)))
 						return -1;
 
-					// Skip or Link means that we are done, just add to history and move on (history will kick out oldest entry if full)
-					if (writeResponse == WriteResponse_Link || writeResponse == WriteResponse_Skip)
+					// Skip, Odx or Link means that we are done, just add to history and move on (history will kick out oldest entry if full)
+					if (writeResponse == WriteResponse_Link || writeResponse == WriteResponse_Odx || writeResponse == WriteResponse_Skip)
 					{
-						InterlockedAdd64((LONG64*)(writeResponse != WriteResponse_Skip ? &m_bytesLinked : &m_bytesSkipped), cmd.info.fileSize);
+						u64& bytes = writeResponse == WriteResponse_Odx ? m_bytesCopied : (writeResponse != WriteResponse_Skip ? m_bytesLinked : m_bytesSkipped);
+						InterlockedAdd64((LONG64*)&bytes, cmd.info.fileSize);
 						m_database.addToLocalFilesHistory(key, hash, fullPath);
 						break;
 					}

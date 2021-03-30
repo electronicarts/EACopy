@@ -70,10 +70,11 @@ bool isLocalHost(const wchar_t* hostname, WString& outIp)
 	int res2 = getAddrInfoW(L"localhost", NULL, &hints, &localaddr);
 	bool isLocal = res1 == 0 && res2 == 0 && stringEquals(hostaddr->ai_canonname, localaddr->ai_canonname);
 
-	wchar_t addrString[1024];
-	DWORD addrStringLen = eacopy_sizeof_array(addrString);
-	if (!WSAAddressToStringW(hostaddr->ai_addr, sizeof(struct sockaddr_storage), NULL, addrString, &addrStringLen))
-		outIp = addrString;
+	// Disable this since it can cause security tokens to not work
+	//wchar_t addrString[1024];
+	//DWORD addrStringLen = eacopy_sizeof_array(addrString);
+	//if (!WSAAddressToStringW(hostaddr->ai_addr, sizeof(struct sockaddr_storage), NULL, addrString, &addrStringLen))
+	//	outIp = addrString;
 
 	freeAddrInfo(hostaddr);
 	freeAddrInfo(localaddr);

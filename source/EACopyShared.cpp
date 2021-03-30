@@ -865,6 +865,11 @@ WString getCleanedupPath(wchar_t* path, uint startIndex, bool lastWasSlash)
 	return tempBuffer;
 }
 
+bool isLocalPath(const wchar_t* path)
+{
+	return path[1] != L'\\';
+}
+
 void removeTemporarySymlinks(const wchar_t* path)
 {
 #if defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
@@ -1493,7 +1498,7 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 		uint error = GetLastError();
 		if (error != ERROR_ALREADY_EXISTS)
 		{
-			logDebugLinef(L"Failed creating hardlink on %ls: %ls", sourcePath, getErrorText(error));
+			logDebugLinef(L"Failed creating hardlink from %ls to %ls: %ls", fullPath, sourcePath, getErrorText(error).c_str());
 			return false;
 		}
 
@@ -1539,7 +1544,7 @@ CopyContext::~CopyContext()
 		delete[] buffers[i];
 }
 
-bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO)
 {
 	CopyContext copyContext;
 	FileInfo sourceInfo;
@@ -1555,10 +1560,10 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, boo
 		logErrorf(L"Failed to copy source file %ls: File is a directory", source);
 		return false;
 	}
-	return copyFile(source, sourceInfo, dest, failIfExists, outExisted, outBytesCopied, copyContext, ioStats, useBufferedIO);
+	return copyFile(source, sourceInfo, dest, useSystemCopy, failIfExists, outExisted, outBytesCopied, copyContext, ioStats, useBufferedIO);
 }
 
-bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
 	outBytesCopied = 0;
@@ -1572,7 +1577,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 	WString tempBuffer2;
 	dest = convertToShortPath(dest, tempBuffer2);
 
-	if (UseOwnCopyFunction)
+	if (UseOwnCopyFunction && !useSystemCopy)
 	{
 		enum { ReadChunkSize = 2 * 1024 * 1024 };
 		static_assert(ReadChunkSize <= CopyContextBufferSize, "ReadChunkSize must be smaller than CopyContextBufferSize");
@@ -1726,12 +1731,19 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 	}
 	else
 	{
-		BOOL cancel = false;
-		uint flags = 0;
-		if (failIfExists)
-			flags |= COPY_FILE_FAIL_IF_EXISTS;
-		if (CopyFileExW(source, dest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
+		++ioStats.copyFileCount;
+		TimerScope _(ioStats.copyFileTime);
+		//BOOL cancel = false;
+		//uint flags = COPY_FILE_NO_BUFFERING;
+		//if (failIfExists)
+		//	flags |= COPY_FILE_FAIL_IF_EXISTS;
+		//if (CopyFileExW(source, dest, NULL, &outBytesCopied, &cancel, flags) != 0)
+		//if (CopyFileExW(source, dest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
+		if (CopyFileW(source, dest, failIfExists) != 0)
+		{
+			outBytesCopied = sourceInfo.fileSize;
 			return true;
+		}
 
 		uint error = GetLastError();
 		if (ERROR_FILE_EXISTS == error)

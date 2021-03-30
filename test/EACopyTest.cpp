@@ -436,7 +436,7 @@ EACOPY_TEST(SkipFile)
 	(void)existed; // suppress unused variable warning
 	(void)bytesCopied; // suppress unused variable warning
 
-	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), true, existed, bytesCopied, ioStats, UseBufferedIO_Enabled));
+	EACOPY_ASSERT(copyFile((testSourceDir + L"Foo.txt").c_str(), (testDestDir + L"Foo.txt").c_str(), false, true, existed, bytesCopied, ioStats, UseBufferedIO_Enabled));
 	EACOPY_ASSERT(!existed);
 	EACOPY_ASSERT(bytesCopied == 100);
 
@@ -1114,6 +1114,20 @@ EACOPY_TEST(LinkFileWithVeryLongPath)
 		EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 		EACOPY_ASSERT(clientStats.ioStats.deleteFileCount == 1);
 	}
+}
+
+EACOPY_TEST(CopyUsingOdx)
+{
+	testSourceDir = testDestDir;
+	testSourceDir += L"A\\";
+	ensureDirectory(testSourceDir.c_str());
+	testDestDir += L"B\\";
+	createTestFile(L"Foo.txt", 100);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	Client client(clientSettings);
+	EACOPY_ASSERT(client.process(clientLog) == 0);
+	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 }
 
 #if defined(_WIN32)

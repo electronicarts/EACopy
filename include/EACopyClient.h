@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr wchar_t ClientVersion[] = L"0.9998" CFG_STR; // Version of client (visible when printing help info)
+constexpr wchar_t ClientVersion[] = L"0.9999" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -52,6 +52,8 @@ struct ClientSettings
 	bool				replaceSymLinksAtDestination= true; // When writing to destination and a directory is a symlink we remove symlink and create real directory
 	bool				useOptimizedWildCardFileSearch = true;
 	bool				useFileLinks				= false;
+	bool				useOdx						= false;
+	bool				useSystemCopy				= true;
 	StringList			additionalLinkDirectories;
 };
 

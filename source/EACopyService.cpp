@@ -47,6 +47,8 @@ void printHelp()
 	logInfoLinef(L"             /HASH :: Will use hash of files to try to reduce copying.");
 	logInfoLinef(L"         /UNSECURE :: Will not check if client has access to network path using smb.");
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
+	logInfoLinef(L"          /NOLINKS :: Disables hard links.");
+	logInfoLinef(L"          /OFFLOAD :: Let server do local copying as fallback when link fails.");
 	logInfoLinef();
 	logInfoLinef(L"                /J :: Enable unbuffered I/O for all files.");
 	logInfoLinef(L"               /NJ :: Disable unbuffered I/O for all files.");
@@ -86,6 +88,14 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		else if (startsWithIgnoreCase(arg, L"/HISTORY:"))
 		{
 			outSettings.maxHistory = _wtoi(arg + 9);
+		}
+		else if (equalsIgnoreCase(arg, L"/NOLINKS"))
+		{
+			outSettings.useLinks = false;
+		}
+		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
+		{
+			outSettings.useOdx = true;
 		}
 		else if (equalsIgnoreCase(arg, L"/J"))
 		{

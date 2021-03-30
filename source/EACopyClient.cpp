@@ -274,7 +274,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.ioStats.fileInfoCount += threadStats.ioStats.fileInfoCount;
 		outStats.ioStats.createDirCount += threadStats.ioStats.createDirCount;
 		outStats.ioStats.createDirTime += threadStats.ioStats.createDirTime;
-
+		outStats.ioStats.copyFileCount += threadStats.ioStats.copyFileCount;
+		outStats.ioStats.copyFileTime += threadStats.ioStats.copyFileTime;
 	}
 
 	outStats.compressionAverageLevel = outStats.copySize ? (float)((double)outStats.compressionLevelSum / outStats.copySize) : 0;
@@ -499,9 +500,23 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						}
 						return true;
 					}
+					else if (m_settings.useOdx) // Try to use ODX
+					{
+						bool useSystemCopy = true; // Must use system copy for odx to potentially work
+						bool existed = false;
+						u64 written;
+						if (copyFile(localFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+						{
+							stats.copyTime += getTime() - startTime;
+							++stats.copyCount;
+							stats.copySize += written;
+							return true;
+						}
+					}
 				}
 			}
 
+			bool useSystemCopy = m_settings.useSystemCopy || (m_settings.useOdx && !isLocalPath(m_settings.destDirectory.c_str()) && !isLocalPath(m_settings.sourceDirectory.c_str()));
 			bool tryCopyFirst = m_tryCopyFirst;
 
 			bool existed = false;
@@ -510,7 +525,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
 			{
-				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), true, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, true, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -555,7 +570,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
 				}
 				
-				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -1900,8 +1915,14 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 		if (writeResponse == WriteResponse_Link)
 		{
-			outWritten = cmd.info.lastWriteTime.dwLowDateTime || cmd.info.lastWriteTime.dwHighDateTime;
+			outWritten = cmd.info.fileSize;
 			outLinked = true;
+			return true;
+		}
+
+		if (writeResponse == WriteResponse_Odx)
+		{
+			outWritten = cmd.info.fileSize;
 			return true;
 		}
 
@@ -1946,10 +1967,11 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	
 	if (writeResponse == WriteResponse_CopyUsingSmb) // It seems server is a proxy server and the server wants the client to copy the file directly to the share using smb
 	{
+		bool useSystemCopy = m_settings.useSystemCopy;
 		bool existed;
 		u64 written;
 		WString fullDst = m_settings.destDirectory + dst;
-		bool success = copyFile(src, srcInfo, fullDst.c_str(), false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO);
+		bool success = copyFile(src, srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO);
 		u8 copyResult = success ? 1 : 0;
 		if (!sendData(m_socket, &copyResult, sizeof(copyResult)))
 			return false;
@@ -2101,7 +2123,8 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		bool existed;
 		u64 written;
 		WString fullSrc = m_settings.sourceDirectory + src;
-		if (!copyFile(fullSrc.c_str(), srcInfo, fullDest.c_str(), false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO))
+		bool useSystemCopy = m_settings.useSystemCopy;
+		if (!copyFile(fullSrc.c_str(), srcInfo, fullDest.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO))
 			return ReadFileResult_Error;
 		outRead = written;
 		outSize = written;

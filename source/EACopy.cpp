@@ -63,7 +63,9 @@ void printHelp()
 	logInfoLinef(L"                      b defaults to %ls (uses rsync algorithm)", toPretty(DefaultDeltaCompressionThreshold).c_str());
 	#endif
 	logInfoLinef();
-	logInfoLinef(L"/LINK [dir]...     :: will try to create file links when files are the same. Provide extra dirs to link to");
+	logInfoLinef(L"    /LINK [dir]... :: will try to create file links when files are the same. Provide extra dirs to link to");
+	logInfoLinef(L"          /OFFLOAD :: when link fails it will try using odx between link source and dest.");
+	logInfoLinef(L"       /CUSTOMCOPY :: copy files using an hand-rolled read->write loop.. can be faster in certain setups).");
 	logInfoLinef();
 	logInfoLinef(L"/DCOPY:copyflag[s] :: what to COPY for directories (default is /DCOPY:DA).");
 	logInfoLinef(L"                      (copyflags : D=Data, A=Attributes, T=Timestamps).");
@@ -180,9 +182,9 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/MT"))
 		{
-			outSettings.threadCount = 8;
+			outSettings.threadCount = 7;
 			if (arg[3] == ':')
-				outSettings.threadCount = wtoi(arg + 4);
+				outSettings.threadCount = std::max(0, wtoi(arg + 4) - 1);
 		}
 		else if (equalsIgnoreCase(arg, L"/NOSERVER"))
 		{
@@ -228,6 +230,14 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			outSettings.useFileLinks = true;
 			activeCommand = L"LINK";
+		}
+		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
+		{
+			outSettings.useOdx = true;
+		}
+		else if (equalsIgnoreCase(arg, L"/CUSTOMCOPY"))
+		{
+			outSettings.useSystemCopy = false;
 		}
 		else if (startsWithIgnoreCase(arg, L"/DCOPY:"))
 		{
@@ -540,6 +550,7 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeTime, stats.ioStats.createWriteCount);
 		populateStatsTime(statsVec, L"LinkFile", stats.ioStats.createLinkTime, stats.ioStats.createLinkCount);
 		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileTime, stats.ioStats.deleteFileCount);
+		populateStatsTime(statsVec, L"CopyFile", stats.ioStats.copyFileTime, stats.ioStats.copyFileCount);
 		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirTime, stats.ioStats.createDirCount);
 		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirTime, stats.ioStats.removeDirCount);
 		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoTime, stats.ioStats.fileInfoCount);

@@ -226,6 +226,7 @@ struct IOStats
 	u64					findFileTime = 0;
 	u64					fileInfoTime = 0;
 	u64					createDirTime = 0;
+	u64					copyFileTime = 0;
 	uint				createLinkCount = 0;
 	uint				deleteFileCount = 0;
 	uint				removeDirCount = 0;
@@ -233,6 +234,7 @@ struct IOStats
 	uint				findFileCount = 0;
 	uint				fileInfoCount = 0;
 	uint				createDirCount = 0;
+	uint				copyFileCount = 0;
 };
 
 
@@ -264,8 +266,8 @@ bool					setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position
 bool					closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType, IOStats& ioStats);
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, IOStats& ioStats, bool useBufferedIO, bool hidden = false);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats);
-bool					copyFile(const wchar_t* source, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
-bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					setFileWritable(const wchar_t* fullPath, bool writable);
 void					convertSlashToBackslash(wchar_t* path);
@@ -273,6 +275,7 @@ void					convertSlashToBackslash(wchar_t* path, size_t size);
 void					convertSlashToBackslash(char* path);
 void					convertSlashToBackslash(char* path, size_t size);
 WString					getCleanedupPath(wchar_t* path, uint startIndex = 2, bool lastWasSlash = false);
+bool					isLocalPath(const wchar_t* path);
 const wchar_t*			convertToShortPath(const wchar_t* path, WString& outTempBuffer);
 bool					isDotOrDotDot(const wchar_t* str);
 
