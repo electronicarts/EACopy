@@ -347,6 +347,8 @@ Client::resetWorkState(Log& log)
 	m_destConnection = nullptr;
 	m_secretGuid = {0};
 
+	m_processDirActive = 0;
+
 	m_compressionStats.fixedLevel = m_settings.compressionLevel != 0;
 	m_compressionStats.level = std::min(std::max(m_settings.compressionLevel, 1), 22);
 }
@@ -354,7 +356,7 @@ Client::resetWorkState(Log& log)
 bool
 Client::processDir(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, ClientStats& stats)
 {
-	// Pop first entry off the queue
+	// Pop first entry off the queue (and increase active count to point out that something is being processed)
 	DirEntry entry;
 	m_dirEntriesCs.scoped([&]()
 		{
@@ -362,6 +364,7 @@ Client::processDir(LogContext& logContext, Connection* sourceConnection, Connect
 			{
 				entry = std::move(m_dirEntries.front());
 				m_dirEntries.pop_front();
+				++m_processDirActive;
 			}
 		});
 
@@ -371,6 +374,8 @@ Client::processDir(LogContext& logContext, Connection* sourceConnection, Connect
 
 
 	traverseFilesInDirectory(logContext, sourceConnection, destConnection, copyContext, entry.sourceDir, entry.destDir, entry.wildcard, entry.depthLeft, stats);
+
+	m_dirEntriesCs.scoped([&]() { --m_processDirActive; } );
 
 	return true;
 }
@@ -641,9 +646,28 @@ Client::processQueues(LogContext& logContext, Connection* sourceConnection, Conn
 		if (processDir(logContext, sourceConnection, destConnection, copyContext, stats))
 			continue;
 		if (processFile(logContext, sourceConnection, destConnection, copyContext, stats))
+		{
 			++filesProcessedCount;
-		else if (isMainThread)
-			break;
+			continue;
+		}
+
+		// If this is the main thread we check if we can leave processing
+		if (!isMainThread)
+			continue;
+
+		// If there are no active dir processing in any thread plus dir entries are empty there is no way to add more file entries. (all calls are protected by locks)
+		ScopedCriticalSection cs(m_dirEntriesCs);
+		if (m_processDirActive || !m_dirEntries.empty())
+			continue;
+
+		// If there are still copy entries left, keep helping out. 
+		// We can only end up here if dir processing is _fully_ done...
+		// but another thread might just have added the last file entries and m_dirEntries were empty and m_processDirActive was 0 in the check above
+		ScopedCriticalSection cs2(m_copyEntriesCs);
+		if (!m_copyEntries.empty())
+			continue;
+
+		break;
 	}
 
 	logDebugLinef(L"Worker done - %u file(s) processed", filesProcessedCount);

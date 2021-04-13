@@ -169,6 +169,7 @@ private:
 	CopyEntries			m_copyEntries;
 	CriticalSection		m_dirEntriesCs;
 	DirEntries			m_dirEntries;
+	uint				m_processDirActive;
 	FilesSet			m_handledFiles;
 	CriticalSection		m_handledFilesCs;
 	FilesSet			m_createdDirs;
