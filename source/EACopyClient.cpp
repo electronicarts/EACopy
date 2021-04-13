@@ -655,10 +655,12 @@ Client::processQueues(LogContext& logContext, Connection* sourceConnection, Conn
 		if (!isMainThread)
 			continue;
 
-		// If there are no active dir processing in any thread plus dir entries are empty there is no way to add more file entries. (all calls are protected by locks)
-		ScopedCriticalSection cs(m_dirEntriesCs);
-		if (m_processDirActive || !m_dirEntries.empty())
-			continue;
+		{
+			// If there are no active dir processing in any thread plus dir entries are empty there is no way to add more file entries. (all calls are protected by locks)
+			ScopedCriticalSection cs(m_dirEntriesCs);
+			if (m_processDirActive || !m_dirEntries.empty())
+				continue;
+		}
 
 		// If there are still copy entries left, keep helping out. 
 		// We can only end up here if dir processing is _fully_ done...
