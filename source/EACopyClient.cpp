@@ -408,6 +408,52 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 	int retryCountLeft = m_settings.retryCount;
 	while (true)
 	{
+		if (m_settings.useFileLinks)
+		{
+			u64 startTime = getTime();
+
+			WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
+			FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
+			FileDatabase::FileRec localFile = m_fileDatabase.getRecord(key);
+			if (!localFile.name.empty())
+			{
+				bool skip;
+				if (createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats))
+				{
+					if (skip)
+					{
+						if (m_settings.logProgress)
+							logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
+						stats.skipTime += getTime() - startTime;
+						++stats.skipCount;
+						stats.skipSize += entry.srcInfo.fileSize;
+					}
+					else
+					{
+						if (m_settings.logProgress)
+							logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
+						stats.linkTime += getTime() - startTime;
+						++stats.linkCount;
+						stats.linkSize += entry.srcInfo.fileSize;
+					}
+					return true;
+				}
+				else if (m_settings.useOdx) // Try to use ODX
+				{
+					bool useSystemCopy = true; // Must use system copy for odx to potentially work
+					bool existed = false;
+					u64 written;
+					if (copyFile(localFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+					{
+						stats.copyTime += getTime() - startTime;
+						++stats.copyCount;
+						stats.copySize += written;
+						return true;
+					}
+				}
+			}
+		}
+
 		// Use connection to server if available
 		if (isValid(destConnection))
 		{
@@ -476,50 +522,6 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		else
 		{
 			u64 startTime = getTime();
-
-			if (m_settings.useFileLinks)
-			{
-				WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
-				FileKey key { fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
-				FileDatabase::FileRec localFile = m_fileDatabase.getRecord(key);
-				if (!localFile.name.empty())
-				{
-					bool skip;
-					if (createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats))
-					{
-						if (skip)
-						{
-							if (m_settings.logProgress)
-								logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-							stats.skipTime += getTime() - startTime;
-							++stats.skipCount;
-							stats.skipSize += entry.srcInfo.fileSize;
-						}
-						else
-						{
-							if (m_settings.logProgress)
-								logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
-							stats.linkTime += getTime() - startTime;
-							++stats.linkCount;
-							stats.linkSize += entry.srcInfo.fileSize;
-						}
-						return true;
-					}
-					else if (m_settings.useOdx) // Try to use ODX
-					{
-						bool useSystemCopy = true; // Must use system copy for odx to potentially work
-						bool existed = false;
-						u64 written;
-						if (copyFile(localFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
-						{
-							stats.copyTime += getTime() - startTime;
-							++stats.copyCount;
-							stats.copySize += written;
-							return true;
-						}
-					}
-				}
-			}
 
 			bool useSystemCopy = m_settings.useSystemCopy || (m_settings.useOdx && !isLocalPath(m_settings.destDirectory.c_str()) && !isLocalPath(m_settings.sourceDirectory.c_str()));
 			bool tryCopyFirst = m_tryCopyFirst;
