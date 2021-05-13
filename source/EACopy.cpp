@@ -65,7 +65,7 @@ void printHelp()
 	logInfoLinef();
 	logInfoLinef(L"    /LINK [dir]... :: will try to create file links when files are the same. Provide extra dirs to link to");
 	logInfoLinef(L"          /OFFLOAD :: when link fails it will try using odx between link source and dest.");
-	logInfoLinef(L"       /CUSTOMCOPY :: copy files using an hand-rolled read->write loop.. can be faster in certain setups).");
+	logInfoLinef(L"       /SYSTEMCOPY :: copy files using ::CopyFile instead of an hand-rolled read->write loop.");
 	logInfoLinef();
 	logInfoLinef(L"/DCOPY:copyflag[s] :: what to COPY for directories (default is /DCOPY:DA).");
 	logInfoLinef(L"                      (copyflags : D=Data, A=Attributes, T=Timestamps).");
@@ -235,9 +235,9 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			outSettings.useOdx = true;
 		}
-		else if (equalsIgnoreCase(arg, L"/CUSTOMCOPY"))
+		else if (equalsIgnoreCase(arg, L"/SYSTEMCOPY"))
 		{
-			outSettings.useSystemCopy = false;
+			outSettings.useSystemCopy = true;
 		}
 		else if (startsWithIgnoreCase(arg, L"/DCOPY:"))
 		{

@@ -1737,7 +1737,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		//uint flags = COPY_FILE_NO_BUFFERING;
 		//if (failIfExists)
 		//	flags |= COPY_FILE_FAIL_IF_EXISTS;
-		//if (CopyFileExW(source, dest, NULL, &outBytesCopied, &cancel, flags) != 0)
+		//if (CopyFileExW(source, dest, NULL, NULL, NULL, flags) != 0)
 		//if (CopyFileExW(source, dest, (LPPROGRESS_ROUTINE)internalCopyProgressRoutine, &outBytesCopied, &cancel, flags) != 0)
 		if (CopyFileW(source, dest, failIfExists) != 0)
 		{
@@ -2226,7 +2226,7 @@ FileDatabase::addToLocalFilesHistory(const FileKey& key, const Hash& hash, const
 	rec.name = fullFileName;
 	rec.hash = hash;
 	rec.historyIt = --m_localFilesHistory.end();
-	if (hash)
+	if (isValid(hash))
 		m_localFileHashes[hash] = &rec;
 }
 

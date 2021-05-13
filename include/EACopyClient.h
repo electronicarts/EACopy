@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr wchar_t ClientVersion[] = L"1.0" CFG_STR; // Version of client (visible when printing help info)
+constexpr wchar_t ClientVersion[] = L"1.01" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -53,7 +53,7 @@ struct ClientSettings
 	bool				useOptimizedWildCardFileSearch = true;
 	bool				useFileLinks				= false;
 	bool				useOdx						= false;
-	bool				useSystemCopy				= true;
+	bool				useSystemCopy				= false;
 	StringList			additionalLinkDirectories;
 };
 

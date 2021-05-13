@@ -143,10 +143,11 @@ struct Hash
 	u64 first = 0;
 	u64 second = 0;
 
-	operator bool() const { return first != 0 || second != 0; }
+	bool operator==(const Hash& o) const { return first == o.first && second == o.second; }
 	bool operator<(const Hash& o) const { return first == o.first ? second < o.second : first < o.first; }
 };
 
+inline bool isValid(const Hash& hash) { return hash.first != 0 || hash.second != 0; }
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

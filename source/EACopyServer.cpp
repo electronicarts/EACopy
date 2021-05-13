@@ -689,11 +689,12 @@ Server::connectionThread(ConnectionInfo& info)
 					else if (info.settings.useHash && fi.fileSize == cmd.info.fileSize)  // Check if client's file content actually matches server's.. might only differ in last write time if size is the same
 					{
 						FileKey serverKey{ cmd.path, fi.lastWriteTime, fi.fileSize };
-						if (Hash serverHash = m_database.getRecord(serverKey).hash)
+						Hash serverHash = m_database.getRecord(serverKey).hash;
+						if (isValid(serverHash))
 						{
 							FileKey clientKey{ cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
 							Hash hash = m_database.getRecord(clientKey).hash;
-							if (!hash)
+							if (!isValid(hash))
 							{
 								ReadResponse hashResponse = ReadResponse_Hash;
 								if (!sendData(info.socket, &hashResponse, sizeof(hashResponse)))
