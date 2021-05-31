@@ -37,9 +37,9 @@ Server					g_server;
 
 void printHelp()
 {
-	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyService v%ls - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion);
-	logInfoLinef(L"-------------------------------------------------------------------------------");
+	logInfoLinef(L"----------------------------------------------------------------------------------------");
+	logInfoLinef(L"  EACopyService v%ls (%u) - Copy Accelerator. (c) Electronic Arts.  All Rights Reserved.", ServerVersion, ProtocolVersion);
+	logInfoLinef(L"----------------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyService [options]");
 	logInfoLinef();
