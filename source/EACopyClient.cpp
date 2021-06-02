@@ -147,7 +147,7 @@ Client::process(Log& log, ClientStats& outStats)
 	// Collect exclusions provided through file
 	for (auto& file : m_settings.filesExcludeFiles)
 		if (!excludeFilesFromFile(logContext, outStats, sourceDir, file, destDir))
-			break;
+			return -1;
 
 	// Help out flush out all primed directories
 	m_fileDatabase.primeWait(outStats.ioStats);
@@ -159,14 +159,14 @@ Client::process(Log& log, ClientStats& outStats)
 			CachedFindFileEntries findFileCache;
 			for (auto& file : m_settings.filesOrWildcardsFiles)
 				if (!gatherFilesOrWildcardsFromFile(logContext, outStats, findFileCache, sourceDir, file, destDir))
-					break;
+					return -1;
 			processQueuedWildcardFileEntries(logContext, outStats, findFileCache, sourceDir, destDir);
 		}
 		else
 		{
 			for (auto& fileOrWildcard : m_settings.filesOrWildcards)
 				if (!traverseFilesInDirectory(logContext, m_sourceConnection, m_destConnection, m_copyContext, sourceDir, destDir, fileOrWildcard, m_settings.copySubdirDepth, outStats))
-					break;
+					return -1;
 		}
 	}
 
