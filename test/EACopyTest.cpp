@@ -131,11 +131,15 @@ struct TestBase
 
 	void run(uint& testIndex, int count)
 	{
+		auto originalTestSourceDir = g_testSourceDir + L'\\' + name + L'\\';;
+		auto originalTestDestDir = g_testDestDir + L'\\' + name + L'\\';
+
 		for (uint loopIndex=0; loopIndex!=runCount(); ++loopIndex)
 		{
 			++testIndex;
-			testSourceDir = g_testSourceDir + L'\\' + name + L'\\';
-			testDestDir = g_testDestDir + L'\\' + name + L'\\';
+
+			testSourceDir = originalTestSourceDir;
+			testDestDir = originalTestDestDir;
 
 			bool log = false;
 			if (log)
@@ -163,8 +167,8 @@ struct TestBase
 			{
 				++s_skipCount;
 			}
-			EACOPY_ASSERT(deleteDirectory(testSourceDir.c_str(), stats));
-			EACOPY_ASSERT(deleteDirectory(testDestDir.c_str(), stats));
+			EACOPY_ASSERT(deleteDirectory(originalTestSourceDir.c_str(), stats));
+			EACOPY_ASSERT(deleteDirectory(originalTestDestDir.c_str(), stats));
 			if (log)
 			{
 				serverLog.deinit();
