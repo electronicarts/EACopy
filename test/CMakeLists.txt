@@ -34,7 +34,7 @@ target_include_directories(EACopyTest PUBLIC ../include)
 #-------------------------------------------------------------------------------------------
 # Dependencies 
 #-------------------------------------------------------------------------------------------
-target_link_libraries(EACopyTest libzstd_static ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(EACopyTest libzstd_static xdelta ${CMAKE_THREAD_LIBS_INIT})
 
 #-------------------------------------------------------------------------------------------
 # Run Unit tests and verify the results.

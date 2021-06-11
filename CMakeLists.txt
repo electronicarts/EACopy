@@ -33,6 +33,19 @@ if (WIN32)
 endif(WIN32)
 
 #-------------------------------------------------------------------------------------------
+# lzma
+#-------------------------------------------------------------------------------------------
+add_subdirectory(external/lzma)
+
+#-------------------------------------------------------------------------------------------
+# xdelta
+#-------------------------------------------------------------------------------------------
+
+add_compile_definitions(SIZEOF_SIZE_T=8 SIZEOF_UNSIGNED_LONG_LONG=8 _WIN32=1 XD3_USE_LARGEFILE64=1 SECONDARY_DJW=1 SECONDARY_LZMA=1 SECONDARY_FGK=1 XD3_WIN32=1 LZMA_API_STATIC)
+add_subdirectory(external/xdelta)
+target_include_directories(xdelta PRIVATE external/lzma/liblzma/api)
+
+#-------------------------------------------------------------------------------------------
 # Library definitions
 #-------------------------------------------------------------------------------------------
 add_executable(EACopy
@@ -48,11 +61,11 @@ add_executable(EACopy
 target_include_directories(EACopy PUBLIC include)
 
 if (WIN32)
-	target_link_libraries(EACopy libzstd_static)
+	target_link_libraries(EACopy libzstd_static xdelta)
 endif(WIN32)
 
 if (UNIX)
-	target_link_libraries(EACopy libzstd_static ${CMAKE_THREAD_LIBS_INIT})
+	target_link_libraries(EACopy libzstd_static xdelta ${CMAKE_THREAD_LIBS_INIT})
 endif (UNIX)
 
 if (WIN32)
@@ -67,7 +80,7 @@ if (WIN32)
 		source/Addition.manifest)
 
 	target_include_directories(EACopyService PUBLIC include)
-	target_link_libraries(EACopyService libzstd_static)
+	target_link_libraries(EACopyService libzstd_static xdelta)
 endif(WIN32)
 
 
