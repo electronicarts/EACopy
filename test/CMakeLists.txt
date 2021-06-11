@@ -11,7 +11,7 @@ include(CTest)
 #-------------------------------------------------------------------------------------------
 
 if (WIN32)
-	set(ServerFiles ../include/EACopyServer.h ../source/EACopyServer.cpp)
+	set(EACOPY_SERVER_FILES ../include/EACopyServer.h ../source/EACopyServer.cpp)
 endif(WIN32)
 
 if (UNIX)
@@ -22,19 +22,15 @@ add_executable(EACopyTest
 	EACopyTest.cpp
 	../include/EACopyClient.h
 	../source/EACopyClient.cpp
-	../source/EACopyNetwork.cpp
-	../include/EACopyNetwork.h
-	../include/EACopyShared.h
-	../source/EACopyShared.cpp
-	../source/Addition.manifest
-	${ServerFiles})
+	${EACOPY_SHARED_FILES}
+	${EACOPY_SERVER_FILES})
 
 target_include_directories(EACopyTest PUBLIC ../include)
 
 #-------------------------------------------------------------------------------------------
 # Dependencies 
 #-------------------------------------------------------------------------------------------
-target_link_libraries(EACopyTest libzstd_static xdelta ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(EACopyTest ${EACOPY_EXTERNAL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
 
 #-------------------------------------------------------------------------------------------
 # Run Unit tests and verify the results.
