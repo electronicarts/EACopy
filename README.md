@@ -59,6 +59,9 @@ Your pull request should:
 * do not deviate from style already established in the files
 
 ## Building
+
+First you need to make sure that you have the git submodules cloned. This can be done using ""git clone ---recurse-submodules". So full command line "git clone --recurse-submodules https://github.com/electronicarts/EACopy.git"
+
 EACopy uses the defacto standard CMake build system.
 
 As an example, look at the "build.bat" file in the scripts folder for how to build the library and build/run the unit tests.
