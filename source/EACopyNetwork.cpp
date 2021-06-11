@@ -23,7 +23,7 @@
 #include <unistd.h>
 #endif
 
-#include "zstd/zstd.h"
+#include "../external/zstd/lib/zstd.h"
 
 #if defined(_WIN32)
 #else

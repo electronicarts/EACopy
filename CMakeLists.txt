@@ -22,9 +22,15 @@ endif (UNIX)
 
 
 #-------------------------------------------------------------------------------------------
-# Dependencies
+# Zstd
 #-------------------------------------------------------------------------------------------
-add_subdirectory(external/zstd)
+set(ZSTD_BUILD_PROGRAMS OFF)
+set(ZSTD_BUILD_SHARED OFF)
+set(ZSTD_BUILD_TESTS OFF)
+add_subdirectory(external/zstd/build/cmake)
+if (WIN32)
+	target_compile_options(libzstd_static PUBLIC "$<$<CONFIG:RELEASE>:/Oi>")
+endif(WIN32)
 
 #-------------------------------------------------------------------------------------------
 # Library definitions
@@ -42,11 +48,11 @@ add_executable(EACopy
 target_include_directories(EACopy PUBLIC include)
 
 if (WIN32)
-	target_link_libraries(EACopy zstd)
+	target_link_libraries(EACopy libzstd_static)
 endif(WIN32)
 
 if (UNIX)
-	target_link_libraries(EACopy zstd ${CMAKE_THREAD_LIBS_INIT})
+	target_link_libraries(EACopy libzstd_static ${CMAKE_THREAD_LIBS_INIT})
 endif (UNIX)
 
 if (WIN32)
@@ -61,7 +67,7 @@ if (WIN32)
 		source/Addition.manifest)
 
 	target_include_directories(EACopyService PUBLIC include)
-	target_link_libraries(EACopyService zstd)
+	target_link_libraries(EACopyService libzstd_static)
 endif(WIN32)
 
 
