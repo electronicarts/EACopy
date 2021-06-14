@@ -3,6 +3,7 @@
 #if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
 
 #include <EACopyDelta.h>
+#include "EACopyDeltaZstd.h"
 #include "EACopyDeltaXDelta.h"
 
 namespace eacopy
@@ -10,8 +11,12 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+using CodeFunc = bool(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, CopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize);
+
+CodeFunc* codeFunc = zstdCode;
+
 bool
-sendDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* newFileName, CopyContext& copyContext, IOStats& ioStats)
+sendDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* newFileName, u64 newFileSize, CopyContext& copyContext, IOStats& ioStats)
 {
 	FileHandle newFile;
 	if (!openFileRead(newFileName, newFile, ioStats, true))
@@ -23,16 +28,13 @@ sendDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSiz
 		return false;
 	ScopeGuard _2([&]() { closeFile(referenceFileName, referenceFile, AccessType_Read, ioStats); });
 
-	u64 written = 0;
 	u64 socketTime = 0;
 	u64 socketBytes = 0;
-	return xDeltaCode(true, socket, referenceFileName, referenceFile, referenceFileSize, newFileName, newFile, written, copyContext, ioStats, socketTime, socketBytes);
+	return codeFunc(true, socket, referenceFileName, referenceFile, referenceFileSize, newFileName, newFile, newFileSize, copyContext, ioStats, socketTime, socketBytes);
 }
 
-bool receiveDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* destFileName, FileTime lastWriteTime, CopyContext& copyContext, u64& written, IOStats& ioStats, RecvDeltaStats& recvStats)
+bool receiveDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* destFileName, u64 destFileSize, FileTime lastWriteTime, CopyContext& copyContext, IOStats& ioStats, RecvDeltaStats& recvStats)
 {
-	written = 0;
-
 	u8* deltaBuffer = copyContext.buffers[0];
 	uint deltaBufferSize;
 
@@ -61,12 +63,14 @@ bool receiveDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenc
 			return false;
 		ScopeGuard _2([&]() { closeFile(tempFileName.c_str(), tempFile, AccessType_Write, ioStats); });
 
-		if (!xDeltaCode(false, socket, referenceFileName, referenceFile, referenceFileSize, tempFileName.c_str(), tempFile, written, copyContext, ioStats, recvStats.recvTime, recvStats.recvSize))
+		if (!codeFunc(false, socket, referenceFileName, referenceFile, referenceFileSize, tempFileName.c_str(), tempFile, destFileSize, copyContext, ioStats, recvStats.recvTime, recvStats.recvSize))
 			return false;
 
 		if (!setFileLastWriteTime(tempFileName.c_str(), tempFile, lastWriteTime, ioStats))
 			return false;
 	}
+
+	wprintf(L"Received: %ls (time: %ls)\r\n", toPretty(recvStats.recvSize, 7).c_str(), toHourMinSec(recvStats.recvTime, 7).c_str());
 
 	if (!moveFile(tempFileName.c_str(), destFileName, ioStats))
 		return false;

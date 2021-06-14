@@ -27,6 +27,7 @@ endif (UNIX)
 set(ZSTD_BUILD_PROGRAMS OFF)
 set(ZSTD_BUILD_SHARED OFF)
 set(ZSTD_BUILD_TESTS OFF)
+set(ZSTD_STATIC_LINKING_ONLY ON)
 add_subdirectory(external/zstd/build/cmake)
 if (WIN32)
 	target_compile_options(libzstd_static PUBLIC "$<$<CONFIG:RELEASE>:/Oi>")
@@ -71,6 +72,7 @@ set(EACOPY_SHARED_FILES
 	${EACOPY_SHARED_FILES}
 	${CMAKE_CURRENT_SOURCE_DIR}/include/EACopyDelta.h
 	${CMAKE_CURRENT_SOURCE_DIR}/source/EACopyDelta.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/source/EACopyDeltaZstd.h
 	${CMAKE_CURRENT_SOURCE_DIR}/source/EACopyDeltaXDelta.h)
 
 add_executable(EACopy

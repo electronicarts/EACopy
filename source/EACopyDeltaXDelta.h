@@ -221,7 +221,7 @@ void xDeltaDestroyBlockData(xDeltaGetBlockData& data)
 	delete[] data.lru;
 }
 
-bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64& written, CopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize)
+bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, CopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize)
 {
 	uint flags = 0;
 	//flags |= XD3_ADLER32;
@@ -322,7 +322,6 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 			{
 				if (!writeFile(newFileName, newFile, stream.next_out, stream.avail_out, ioStats))
 					return false;
-				written += stream.avail_out;
 			}
 			xd3_consume_output(&stream);
 			goto process;
@@ -358,9 +357,6 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 
 	xd3_close_stream(&stream);
 	xd3_free_stream(&stream);
-
-	if (!encode)
-		wprintf(L"Received: %ls (time: %ls)\r\n", toPretty(socketSize, 7).c_str(), toHourMinSec(socketTime, 7).c_str());
 
 	return true;
 }

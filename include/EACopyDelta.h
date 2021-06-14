@@ -11,7 +11,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool sendDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* newFileName, CopyContext& copyContext, IOStats& ioStats);
+bool sendDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* newFileName, u64 newFileSize, CopyContext& copyContext, IOStats& ioStats);
 
 
 struct RecvDeltaStats
@@ -21,7 +21,7 @@ struct RecvDeltaStats
 };
 
 
-bool receiveDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* destFileName, FileTime lastWriteTime, CopyContext& copyContext, u64& written, IOStats& ioStats, RecvDeltaStats& recvStats);
+bool receiveDelta(Socket& socket, const wchar_t* referenceFileName, u64 referenceFileSize, const wchar_t* destFileName, u64 destFileSize, FileTime lastWriteTime, CopyContext& copyContext, IOStats& ioStats, RecvDeltaStats& recvStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

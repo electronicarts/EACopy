@@ -743,7 +743,9 @@ Server::connectionThread(ConnectionInfo& info)
 					else // ReadResponse_CopyDelta
 					{
 						#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-						if (!sendDelta(info.socket, referenceFile.name.c_str(), cmd.info.fileSize, fullPath.c_str(), copyContext, ioStats))
+						if (!sendData(info.socket, &fi.fileSize, sizeof(fi.fileSize)))
+							return -1;
+						if (!sendDelta(info.socket, referenceFile.name.c_str(), cmd.info.fileSize, fullPath.c_str(), fi.fileSize, copyContext, ioStats))
 							return -1;
 						#else
 						return -1;

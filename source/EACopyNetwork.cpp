@@ -23,6 +23,7 @@
 #include <unistd.h>
 #endif
 
+#define ZSTD_STATIC_LINKING_ONLY
 #include "../external/zstd/lib/zstd.h"
 
 #if defined(_WIN32)

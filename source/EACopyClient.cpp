@@ -2123,7 +2123,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 	if (readResponse == ReadResponse_Copy)
 	{
-		// Read file size and lastwritetime for new file from server
+		// Read file size for new file from server
 		u64 newFileSize;
 		if (!receiveData(m_socket, &newFileSize, sizeof(newFileSize)))
 			return ReadFileResult_Error;
@@ -2162,11 +2162,14 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	{
 		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
 		RecvDeltaStats recvStats;
-		u64 written;
-		if (!receiveDelta(m_socket, fullDest.c_str(), cmd.info.fileSize, fullDest.c_str(), newFileLastWriteTime, copyContext, written, m_stats.ioStats, recvStats))
+		// Read file size for new file from server
+		u64 newFileSize;
+		if (!receiveData(m_socket, &newFileSize, sizeof(newFileSize)))
 			return ReadFileResult_Error;
-		outSize = written;
-		outRead = written;
+		if (!receiveDelta(m_socket, fullDest.c_str(), cmd.info.fileSize, fullDest.c_str(), newFileSize, newFileLastWriteTime, copyContext, m_stats.ioStats, recvStats))
+			return ReadFileResult_Error;
+		outSize = newFileSize;
+		outRead = newFileSize;
 		m_stats.recvTime += recvStats.recvTime;
 		m_stats.recvSize += recvStats.recvSize;
 		return ReadFileResult_Success;
