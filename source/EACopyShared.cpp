@@ -1429,9 +1429,13 @@ bool setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position, IO
 	LARGE_INTEGER li;
 	li.QuadPart = position;
 
-	if (SetFilePointer(file, li.LowPart, &li.HighPart, FILE_BEGIN) != INVALID_SET_FILE_POINTER)
+	DWORD dwPtrLow = SetFilePointer(file, li.LowPart, &li.HighPart, FILE_BEGIN);
+	if (dwPtrLow != INVALID_SET_FILE_POINTER)
 		return true;
-	logErrorf(L"Fail setting file position on file %ls: %ls", fullPath, getLastErrorText().c_str());
+	int lastError = GetLastError();
+	if (lastError == NO_ERROR)
+		return true;
+	logErrorf(L"Fail setting file position on file %ls: %ls", fullPath, getErrorText(lastError).c_str());
 	return false;
 	#else
 	EACOPY_NOT_IMPLEMENTED
@@ -1534,14 +1538,15 @@ uint internalCopyProgressRoutine(LARGE_INTEGER TotalFileSize, LARGE_INTEGER Tota
 
 CopyContext::CopyContext()
 {
-	for (uint i=0; i!=3; ++i)
-		buffers[i] = new u8[CopyContextBufferSize];
+	u8* data = new u8[CopyContextBufferSize * 3];
+	buffers[0] = data + CopyContextBufferSize*0;
+	buffers[1] = data + CopyContextBufferSize*1;
+	buffers[2] = data + CopyContextBufferSize*2;
 }
 
 CopyContext::~CopyContext()
 {
-	for (uint i=0; i!=3; ++i)
-		delete[] buffers[i];
+	delete[] buffers[0];
 }
 
 bool copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO)
@@ -1881,6 +1886,14 @@ bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFi
 	EACOPY_NOT_IMPLEMENTED
 	return false;
 	#endif
+}
+
+bool moveFile(const wchar_t* source, const wchar_t* dest, IOStats& ioStats)
+{
+	if (MoveFileExW(source, dest, MOVEFILE_REPLACE_EXISTING))
+		return true;
+	logErrorf(L"Failed to move file from %ls to %ls. Reason: %ls", source, dest, getLastErrorText().c_str());
+	return false;
 }
 
 bool setFileWritable(const wchar_t* fullPath, bool writable)
