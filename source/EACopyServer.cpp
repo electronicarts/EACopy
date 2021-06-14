@@ -12,7 +12,7 @@
 #include <Rpc.h>
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-#include "EACopyZdelta.h"
+#include "EACopyDelta.h"
 #endif
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
@@ -709,16 +709,9 @@ Server::connectionThread(ConnectionInfo& info)
 
 					// Check if the version that the client has exist and in that case send as delta
 					#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-					const wchar_t* referenceFileName = nullptr;
 					FileKey key { cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
-					m_localFilesCs.scoped([&]() 
-						{
-							auto findIt = m_localFiles.find(key);
-							if (findIt != m_localFiles.end())
-								referenceFileName = findIt->second.name.c_str();
-						});
-
-					if (referenceFileName != nullptr)
+					FileDatabase::FileRec referenceFile = m_database.getRecord(key);
+					if (!referenceFile.name.empty())
 						readResponse = ReadResponse_CopyDelta;
 					#endif
 
@@ -750,10 +743,11 @@ Server::connectionThread(ConnectionInfo& info)
 					else // ReadResponse_CopyDelta
 					{
 						#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-						if (!sendZdelta(info.socket, referenceFileName, fullPath.c_str()))
+						if (!sendDelta(info.socket, referenceFile.name.c_str(), cmd.info.fileSize, fullPath.c_str(), copyContext, ioStats))
 							return -1;
-						#endif
+						#else
 						return -1;
+						#endif
 					}
 
 				}

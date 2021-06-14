@@ -23,7 +23,7 @@
 #endif
 
 #if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-#include "EACopyZdelta.h"
+#include "EACopyDelta.h"
 #endif
 
 #if defined(_WIN32)
@@ -2161,8 +2161,14 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	else // ReadResponse_CopyDelta
 	{
 		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-		if (!receiveZdelta(m_socket, fullDest.c_str(), fullDest.c_str(), newFileLastWriteTime, copyContext))
+		RecvDeltaStats recvStats;
+		u64 written;
+		if (!receiveDelta(m_socket, fullDest.c_str(), cmd.info.fileSize, fullDest.c_str(), newFileLastWriteTime, copyContext, written, m_stats.ioStats, recvStats))
 			return ReadFileResult_Error;
+		outSize = written;
+		outRead = written;
+		m_stats.recvTime += recvStats.recvTime;
+		m_stats.recvSize += recvStats.recvSize;
 		return ReadFileResult_Success;
 		#endif
 	}

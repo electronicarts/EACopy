@@ -65,6 +65,14 @@ set(EACOPY_SHARED_FILES
 	${CMAKE_CURRENT_SOURCE_DIR}/source/Addition.manifest)
 
 
+
+add_definitions(-DEACOPY_ALLOW_DELTA_COPY_RECEIVE)
+set(EACOPY_SHARED_FILES
+	${EACOPY_SHARED_FILES}
+	${CMAKE_CURRENT_SOURCE_DIR}/include/EACopyDelta.h
+	${CMAKE_CURRENT_SOURCE_DIR}/source/EACopyDelta.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/source/EACopyDeltaXDelta.h)
+
 add_executable(EACopy
 	source/EACopy.cpp
 	include/EACopyClient.h
@@ -89,7 +97,7 @@ if (WIN32)
 		${EACOPY_SHARED_FILES})
 
 	target_include_directories(EACopyService PUBLIC include)
-	target_link_libraries(EACopyService libzstd_static xdelta)
+	target_link_libraries(EACopyService ${EACOPY_EXTERNAL_LIBS})
 endif(WIN32)
 
 
