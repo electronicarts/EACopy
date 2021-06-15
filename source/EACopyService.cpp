@@ -48,6 +48,7 @@ void printHelp()
 	logInfoLinef(L"         /UNSECURE :: Will not check if client has access to network path using smb.");
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
 	logInfoLinef(L"          /NOLINKS :: Disables hard links.");
+	logInfoLinef(L"    /LINK [dir]... :: Will prepopulate file database with files that can be linked to");
 	logInfoLinef(L"          /OFFLOAD :: Let server do local copying as fallback when link fails.");
 	logInfoLinef();
 	logInfoLinef(L"                /J :: Enable unbuffered I/O for all files.");
@@ -67,11 +68,16 @@ void printHelp()
 
 bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint argc, wchar_t** argv)
 {
+	const wchar_t* activeCommand = L"";
+
 	// Read options
 	uint argIndex = 1;
 	while (argIndex < argc)
 	{
 		wchar_t* arg = argv[argIndex++];
+
+		if (*arg == '/')
+			activeCommand = L"";
 
 		if (startsWithIgnoreCase(arg, L"/P:"))
 		{
@@ -92,6 +98,10 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		else if (equalsIgnoreCase(arg, L"/NOLINKS"))
 		{
 			outSettings.useLinks = false;
+		}
+		else if (startsWithIgnoreCase(arg, L"/LINK"))
+		{
+			activeCommand = L"LINK";
 		}
 		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
 		{
@@ -123,8 +133,15 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		}
 		else
 		{
-			logErrorf(L"Unknown option %ls. Use /? for help", arg);
-			return false;
+			if (equalsIgnoreCase(activeCommand, L"link"))
+			{
+				outSettings.additionalLinkDirectories.push_back(getCleanedupPath(arg));
+			}
+			else
+			{
+				logErrorf(L"Unknown option %ls. Use /? for help", arg);
+				return false;
+			}
 		}
 	}
 	return true;

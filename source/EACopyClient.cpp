@@ -18,11 +18,11 @@
 #include <netdb.h>
 #include <unistd.h>
 #endif
-#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+#if defined(EACOPY_ALLOW_RSYNC)
 #include <EACopyRsync.h>
 #endif
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#if defined(EACOPY_ALLOW_DELTA_COPY)
 #include "EACopyDelta.h"
 #endif
 
@@ -349,8 +349,9 @@ Client::resetWorkState(Log& log)
 
 	m_processDirActive = 0;
 
-	m_compressionStats.fixedLevel = m_settings.compressionLevel != 0;
-	m_compressionStats.level = std::min(std::max(m_settings.compressionLevel, 1), 22);
+	// These are used for when sending files to server with compression enabled
+	m_compressionStats.fixedLevel = m_settings.compressionLevel != 255;
+	m_compressionStats.currentLevel = std::min<u8>(std::max<u8>(m_settings.compressionLevel, 1), 22);
 }
 
 bool
@@ -1854,9 +1855,8 @@ Client::Connection::Connection(const ClientSettings& settings, ClientStats& stat
 ,	m_stats(stats)
 ,	m_hashContext(stats.hashTime, stats.hashCount)
 ,	m_socket(s)
-,	m_compressionData({compressionStats})
+,	m_compressionStats(compressionStats)
 {
-	m_compressionEnabled = settings.compressionEnabled;
 }
 
 Client::Connection::~Connection()
@@ -1902,13 +1902,13 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 }
 
 bool
-Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext)
+Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext)
 {
 	outSize = 0;
 	outWritten = 0;
 	outLinked = false;
 
-	WriteFileType writeType = m_compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
+	WriteFileType writeType = m_settings.compressionLevel != 0 ? WriteFileType_Compressed : WriteFileType_Send;
 
 	char buffer[MaxPath*2 + sizeof(WriteFileCommand)];
 	auto& cmd = *(WriteFileCommand*)buffer;
@@ -1972,7 +1972,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
 
 		SendFileStats sendStats;
-		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionData, useBufferedIO, m_stats.ioStats, sendStats))
+		if (!sendFile(m_socket, src, cmd.info.fileSize, writeType, copyContext, m_compressionStats, useBufferedIO, m_stats.ioStats, sendStats))
 			return false;
 		m_stats.sendTime += sendStats.sendTime;
 		m_stats.sendSize += sendStats.sendSize;
@@ -2010,7 +2010,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 
 	if (writeResponse == WriteResponse_CopyDelta)
 	{
-		#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+		#if defined(EACOPY_ALLOW_RSYNC)
 		RsyncStats rsyncStats;
 		if (!clientHandleRsync(m_socket, src, rsyncStats))
 			return false;
@@ -2057,7 +2057,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	char buffer[MaxPath*2 + sizeof(ReadFileCommand)];
 	auto& cmd = *(ReadFileCommand*)buffer;
 	cmd.commandType = CommandType_ReadFile;
-	cmd.compressionEnabled = m_compressionEnabled;
+	cmd.compressionLevel = m_settings.compressionLevel;
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(src)*2);
 	if (!stringCopy(cmd.path, MaxPath, src))
 	{
@@ -2130,7 +2130,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 
 		bool success = true;
-		WriteFileType writeType = m_compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
+		WriteFileType writeType = m_settings.compressionLevel != 0 ? WriteFileType_Compressed : WriteFileType_Send;
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
 		uint commandSize = 0;
 
@@ -2160,7 +2160,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	}
 	else // ReadResponse_CopyDelta
 	{
-		#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+		#if defined(EACOPY_ALLOW_DELTA_COPY)
 		RecvDeltaStats recvStats;
 		// Read file size for new file from server
 		u64 newFileSize;
@@ -2172,6 +2172,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		outRead = newFileSize;
 		m_stats.recvTime += recvStats.recvTime;
 		m_stats.recvSize += recvStats.recvSize;
+		m_stats.decompressTime += recvStats.decompressTime;
 		return ReadFileResult_Success;
 		#endif
 	}

@@ -278,13 +278,7 @@ bool isValidSocket(Socket& socket)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-CompressionData::~CompressionData()
-{
-	if (context)
-		ZSTD_freeCCtx((ZSTD_CCtx*)context);
-}
-
-bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats)
+bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, NetworkCopyContext& copyContext, CompressionStats& compressionStats, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats)
 {
 	FileHandle sourceFile;
 	if (!openFileRead(src, sourceFile, ioStats, useBufferedIO, nullptr, true))
@@ -388,15 +382,17 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				}
 			}
 
-			if (!compressionData.context)
-				compressionData.context = ZSTD_createCCtx();
+			if (!copyContext.compContext)
+				copyContext.compContext = ZSTD_createCCtx();
+			auto cctx = (ZSTD_CCtx*)copyContext.compContext;
+			ZSTD_CCtx_reset(cctx, ZSTD_reset_session_and_parameters);
 
-			CompressionStats& cs = compressionData.compressionStats;
+			CompressionStats& cs = compressionStats;
 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressTime = getTime();
-			size_t compressedSize = ZSTD_compressCCtx((ZSTD_CCtx*)compressionData.context, destBuf + 4, CompressedNetworkTransferChunkSize - 4, copyContext.buffers[0], read, cs.level);
+			size_t compressedSize = ZSTD_compressCCtx(cctx, destBuf + 4, CompressedNetworkTransferChunkSize - 4, copyContext.buffers[0], read, cs.currentLevel);
 			if (ZSTD_isError(compressedSize))
 			{
 				logErrorf(L"Fail compressing file %ls: %ls", src, ZSTD_getErrorName(compressedSize));
@@ -412,7 +408,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 				return false;
 			u64 sendTime = getTime() - startSendTime;
 
-			sendStats.compressionLevelSum += read * cs.level;
+			sendStats.compressionLevelSum += read * cs.currentLevel;
 
 			if (!cs.fixedLevel)
 			{
@@ -432,9 +428,9 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 
 					u64 timeUnitsPerBytes = (cs.currentSendTime * 1000000) / cs.currentSendBytes;
 					if (timeUnitsPerBytes < cs.lastTimeUnitPerBytes)
-						cs.level = std::min(14, cs.level + 1);
+						cs.currentLevel = std::min(14, cs.currentLevel + 1);
 					else
-						cs.level = std::max(1, cs.level - 1);
+						cs.currentLevel = std::max(1, cs.currentLevel - 1);
 					cs.lastTimeUnitPerBytes = timeUnitsPerBytes;
 				}
 			}
@@ -452,7 +448,10 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 
 NetworkCopyContext::~NetworkCopyContext()
 {
-	ZSTD_freeDCtx((ZSTD_DCtx*)compContext);
+	if (compContext)
+		ZSTD_freeCCtx((ZSTD_CCtx*)compContext);
+	if (decompContext)
+		ZSTD_freeDCtx((ZSTD_DCtx*)decompContext);
 }
 
 bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size_t fileSize, FileTime lastWriteTime, WriteFileType writeType, bool useBufferedIO, NetworkCopyContext& copyContext, char* recvBuffer, uint recvPos, uint& commandSize, IOStats& ioStats, RecvFileStats& recvStats)
@@ -590,11 +589,13 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 				toRead -= recvBytes;
 			}
 
-			if (!copyContext.compContext)
-				copyContext.compContext = ZSTD_createDCtx();
+			if (!copyContext.decompContext)
+				copyContext.decompContext = ZSTD_createDCtx();
+			auto dctx = (ZSTD_DCtx*)copyContext.decompContext;
+			ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters);
 
 			u64 startDecompressTime = getTime();
-			size_t decompressedSize = ZSTD_decompressDCtx((ZSTD_DCtx*)copyContext.compContext, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], compressedSize);
+			size_t decompressedSize = ZSTD_decompressDCtx(dctx, copyContext.buffers[fileBufIndex], NetworkTransferChunkSize, copyContext.buffers[2], compressedSize);
 			if (outSuccess)
 			{
 				outSuccess &= ZSTD_isError(decompressedSize) == 0;

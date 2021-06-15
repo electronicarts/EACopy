@@ -1,6 +1,6 @@
 // (c) Electronic Arts. All Rights Reserved.
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#if defined(EACOPY_ALLOW_DELTA_COPY)
 
 #include <EACopyDelta.h>
 #define ZSTD_STATIC_LINKING_ONLY
@@ -12,30 +12,41 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, CopyContext& copyContext_, IOStats& ioStats, u64& socketTime, u64& socketSize)
+bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, NetworkCopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize, u64& codeTime)
 {
 	enum { CompressedNetworkTransferChunkSize = NetworkTransferChunkSize / 4 };
 
-	void* referenceMemory = malloc(referenceFileSize);
-	u64 nread;
-	if (!readFile(referenceFileName, referenceFile, referenceMemory, referenceFileSize, nread, ioStats))
+	void* referenceMemory = new u8[referenceFileSize];
+	ScopeGuard _([&]() { delete[] referenceMemory; });
+
+	u64 referenceFileRead;
+	if (!readFile(referenceFileName, referenceFile, referenceMemory, referenceFileSize, referenceFileRead, ioStats))
 		return false;
+
+	if (referenceFileRead != referenceFileSize)
+	{
+		logErrorf(L"Failed to read entire ref file %ls", referenceFileName);
+		return false;
+	}
 
 	ZSTD_outBuffer buffOut;
 	ZSTD_inBuffer buffIn;
 
-	auto& copyContext = (NetworkCopyContext&)copyContext_;
 	if (encode)
 	{
-		CompressionStats compressionStats;
-		compressionStats.level = 3;
-		CompressionData	compressionData{ compressionStats };
-		if (!compressionData.context)
-			compressionData.context = ZSTD_createCCtx();
-		auto cctx = (ZSTD_CCtx*)compressionData.context;
+		if (!copyContext.compContext)
+			copyContext.compContext = ZSTD_createCCtx();
+		auto cctx = (ZSTD_CCtx*)copyContext.compContext;
+		ZSTD_CCtx_reset(cctx, ZSTD_reset_session_and_parameters);
+
 		bool useBufferedIO = true;
-		if (ZSTD_CCtx_refPrefix(cctx, referenceMemory, referenceFileSize) != 0)
+		size_t res = ZSTD_CCtx_refPrefix(cctx, referenceMemory, referenceFileSize);
+		if (ZSTD_isError(res))
+		{
+			logErrorf(L"Fail setting up ref file %ls when compressing %ls: %hs", referenceFileName, newFileName, ZSTD_getErrorName(res));
 			return false;
+		}
+
 		ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
 		ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
 		ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 1);  /* always enable content size when available (note: supposed to be default) */
@@ -64,8 +75,6 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			}
 			left -= read;
 
-			CompressionStats& cs = compressionData.compressionStats;
-
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
 			u8* destBuf = copyContext.buffers[1];
 			u64 startCompressTime = getTime();
@@ -80,23 +89,23 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			if (left == 0)
 				directive = ZSTD_e_end;
 
-			size_t compressedSize = ZSTD_compressStream2(cctx, &buffOut, &buffIn, directive);
+			res = ZSTD_compressStream2(cctx, &buffOut, &buffIn, directive);
+			if (ZSTD_isError(res))
+			{
+				logErrorf(L"Fail compressing file %ls: %hs", newFileName, ZSTD_getErrorName(res));
+				return false;
+			}
 
 			if (buffIn.pos != buffIn.size)
 			{
-				logErrorf(L"ERROR!!");
+				logErrorf(L"ERROR.. code path not implemented since I'm not sure if this can happen.. report this to if experienced!!");
 				return false;
 			}
 
-			compressedSize = buffOut.pos;
+			size_t compressedSize = buffOut.pos;
 			if (compressedSize == 0)
 				continue;
 
-			if (ZSTD_isError(compressedSize))
-			{
-				logErrorf(L"Fail compressing file %ls: %ls", newFileName, ZSTD_getErrorName(compressedSize));
-				return false;
-			}
 			u64 compressTime = getTime() - startCompressTime;
 
 			*(uint*)destBuf = uint(compressedSize);
@@ -108,15 +117,25 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			u64 sendTime = getTime() - startSendTime;
 
 		}
+
+		// Send last size 0 entry to tell client we're done
+		uint terminator = 0;
+		if (!sendData(socket, &terminator, sizeof(terminator)))
+			return false;
 	}
 	else
 	{
-		if (!copyContext.compContext)
-			copyContext.compContext = ZSTD_createDCtx();
-		auto dctx = (ZSTD_DCtx*)copyContext.compContext;
+		if (!copyContext.decompContext)
+			copyContext.decompContext = ZSTD_createDCtx();
+		auto dctx = (ZSTD_DCtx*)copyContext.decompContext;
+		ZSTD_DCtx_reset(dctx, ZSTD_reset_session_and_parameters);
 		ZSTD_DCtx_setMaxWindowSize(dctx, newFileSize);
-		if (ZSTD_DCtx_refPrefix(dctx, referenceMemory, referenceFileSize) != 0)
+		size_t res = ZSTD_DCtx_refPrefix(dctx, referenceMemory, referenceFileSize);
+		if (ZSTD_isError(res))
+		{
+			logErrorf(L"Zstd error %ls: %hs", referenceFileName, ZSTD_getErrorName(res));
 			return false;
+		}
 
 		bool outSuccess = true;
 
@@ -136,7 +155,7 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 		int fileBufIndex = 0;
 		u64 totalReceivedSize = 0;
 
-		while (read != newFileSize)
+		while (true)
 		{
 			u64 startRecvTime = getTime();
 
@@ -145,6 +164,9 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 				return false;
 
 			totalReceivedSize += compressedSize + sizeof(uint);
+
+			if (compressedSize == 0) // We're done
+				break;
 
 			if (compressedSize > NetworkTransferChunkSize)
 			{
@@ -173,49 +195,41 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 					return false;
 				}
 
-				socketTime += getTime() - startRecvTime; 
 				socketSize += recvBytes;
-
-				//recvStats.recvTime += getTime() - startRecvTime;
-				//recvStats.recvSize += recvBytes;
 				toRead -= recvBytes;
 			}
+			socketTime += getTime() - startRecvTime;
 
-			u64 startDecompressTime = getTime();
 
-			buffOut.dst = copyContext.buffers[fileBufIndex];
-			buffOut.size = CopyContextBufferSize;
-			buffOut.pos = 0;
-			buffIn.src = copyContext.buffers[2];
-			buffIn.size = compressedSize;
-			buffIn.pos = 0;
-			size_t res = ZSTD_decompressStream(dctx, &buffOut, &buffIn);
-			if (ZSTD_isError(res))
-			{
-				outSuccess = false;
-				logErrorf(L"Decompression error while decompressing %u bytes after reading %llu, for file %ls: %hs", compressedSize, read, newFileName, ZSTD_getErrorName(res));
-				// Don't return false since we can still continue copying other files after getting this error
-			}
-
-			if (buffIn.pos != buffIn.size)
-			{
-				logErrorf(L"ERROR!!");
-				return false;
-			}
-
-			size_t decompressedSize = buffOut.pos;
+			size_t decompressedSize = 0;
 
 			if (outSuccess)
 			{
-				outSuccess &= ZSTD_isError(decompressedSize) == 0;
-				if (!outSuccess)
+				u64 startDecompressTime = getTime();
+
+				buffOut.dst = copyContext.buffers[fileBufIndex];
+				buffOut.size = CopyContextBufferSize;
+				buffOut.pos = 0;
+				buffIn.src = copyContext.buffers[2];
+				buffIn.size = compressedSize;
+				buffIn.pos = 0;
+				res = ZSTD_decompressStream(dctx, &buffOut, &buffIn);
+				if (ZSTD_isError(res))
 				{
-					logErrorf(L"Decompression error while decompressing %u bytes after reading %llu, for file %ls: %hs", compressedSize, read, newFileName, ZSTD_getErrorName(decompressedSize));
+					logErrorf(L"Decompression error while decompressing %u bytes after reading %llu, for file %ls: %hs", compressedSize, read, newFileName, ZSTD_getErrorName(res));
 					// Don't return false since we can still continue copying other files after getting this error
+					outSuccess = false;
 				}
+
+				if (buffIn.pos != buffIn.size)
+				{
+					logErrorf(L"ERROR.. code path not implemented since I'm not sure if this can happen.. report this to if experienced!!");
+					outSuccess = false;
+				}
+				decompressedSize = buffOut.pos;
+				codeTime += getTime() - startDecompressTime;
 			}
 
-			//recvStats.decompressTime = getTime() - startDecompressTime;
 
 			outSuccess = outSuccess && writeFile(newFileName, newFile, copyContext.buffers[fileBufIndex], decompressedSize, ioStats);
 

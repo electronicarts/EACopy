@@ -204,9 +204,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/C"))
 		{
-			outSettings.compressionEnabled = true;
 			if (arg[2] == ':')
 				outSettings.compressionLevel = wtoi(arg + 3);
+			else
+				outSettings.compressionLevel = 255;
 		}
 		else if (startsWithIgnoreCase(arg, L"/DC"))
 		{

@@ -108,7 +108,7 @@ enum WriteResponse : u8
 
 struct ReadFileCommand : Command
 {
-	u8 compressionEnabled;
+	u8 compressionLevel; // 0 means no compression, 255 means dynamic compression
 	FileInfo info;
 	wchar_t path[1];
 };
@@ -205,16 +205,20 @@ struct CompressionStats
 	u64					lastTimeUnitPerBytes = 0;
 
 	bool				fixedLevel = false;
-	int					level = 0;
+	int					currentLevel = 0;
 };
 
-struct CompressionData
+enum { NetworkTransferChunkSize = CopyContextBufferSize };
+
+struct NetworkCopyContext : CopyContext
 {
-	CompressionStats&	compressionStats;
-	void*				context = nullptr;
+	void* compContext = nullptr;
+	void* decompContext = nullptr;
 
-	~CompressionData();
+	~NetworkCopyContext();
 };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct SendFileStats
 {
@@ -224,18 +228,9 @@ struct SendFileStats
 	u64			compressionLevelSum = 0;
 };
 
-bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, CopyContext& copyContext, CompressionData& compressionData, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats);
+bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType writeType, NetworkCopyContext& copyContext, CompressionStats& compressionStats, bool useBufferedIO, IOStats& ioStats, SendFileStats& sendStats);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-enum { NetworkTransferChunkSize = CopyContextBufferSize };
-
-struct NetworkCopyContext : CopyContext
-{
-	void* compContext = nullptr;
-
-	~NetworkCopyContext();
-};
 
 struct RecvFileStats
 {

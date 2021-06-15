@@ -1,6 +1,6 @@
 // (c) Electronic Arts. All Rights Reserved.
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#if defined(EACOPY_ALLOW_DELTA_COPY)
 
 #include <EACopyDelta.h>
 #include <xdelta3.h>
@@ -221,7 +221,7 @@ void xDeltaDestroyBlockData(xDeltaGetBlockData& data)
 	delete[] data.lru;
 }
 
-bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, CopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize)
+bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, NetworkCopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize, u64& codeTime)
 {
 	uint flags = 0;
 	//flags |= XD3_ADLER32;
@@ -260,8 +260,19 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 	u64 inputBufRead = 0;
 	u8* outputBuf = bufSize <= CopyContextBufferSize ? copyContext.buffers[2] : (u8*)malloc(bufSize);
 	u64 outputBufWritten = 0;
-	ScopeGuard _([&]() { if (bufSize > CopyContextBufferSize) { free(inputBuf); free(outputBuf); } });
+	ScopeGuard _([&]()
+		{
+			xd3_close_stream(&stream);
+			xd3_free_stream(&stream);
 
+			if (bufSize > CopyContextBufferSize)
+			{
+				free(inputBuf);
+				free(outputBuf);
+			}
+		});
+
+	bool outSuccess = true;
 	do
 	{
 		if (encode)
@@ -280,6 +291,9 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 			socketSize += sizeof(inputBufRead) + inputBufRead;
 		}
 
+		if (!outSuccess)
+			continue;
+
 		if (inputBufRead < bufSize)
 			xd3_set_flags(&stream, XD3_FLUSH | stream.flags);
 		xd3_avail_input(&stream, inputBuf, inputBufRead);
@@ -287,10 +301,13 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 	process:
 
 		int ret = 0;
-		if (encode)
-			ret = xd3_encode_input(&stream);
-		else
-			ret = xd3_decode_input(&stream);
+		{
+			TimerScope _(codeTime);
+			if (encode)
+				ret = xd3_encode_input(&stream);
+			else
+				ret = xd3_decode_input(&stream);
+		}
 
 		switch (ret)
 		{
@@ -310,18 +327,15 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 						return false;
 					if (!sendData(socket, outputBuf, outputBufWritten))
 						return false;
-					if (uint left = stream.avail_out - writeToBufferSize)
-					{
-						memcpy(outputBuf, stream.next_out + writeToBufferSize, left);
-						outputBufWritten = left;
-					}
+					uint left = stream.avail_out - writeToBufferSize;
+					memcpy(outputBuf, stream.next_out + writeToBufferSize, left);
+					outputBufWritten = left;
 				}
 
 			}
 			else
 			{
-				if (!writeFile(newFileName, newFile, stream.next_out, stream.avail_out, ioStats))
-					return false;
+				outSuccess = outSuccess && writeFile(newFileName, newFile, stream.next_out, stream.avail_out, ioStats);
 			}
 			xd3_consume_output(&stream);
 			goto process;
@@ -336,12 +350,8 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 			goto process;
 
 		default:
-		{
-			fprintf(stderr, "!!! INVALID %s %d !!!\n",
-				stream.msg, ret);
-			return false;
-		}
-
+			logErrorf(L"Xdelta failed %ls file %ls: %hs %d !!!\n", (encode ? L"compressing" : L"decompressing"), newFileName, stream.msg, ret);
+			outSuccess = false;
 		}
 
 	} while (inputBufRead == bufSize);
@@ -355,10 +365,7 @@ bool xDeltaCode(bool encode, Socket& socket, const wchar_t* referenceFileName, F
 				return false;
 	}
 
-	xd3_close_stream(&stream);
-	xd3_free_stream(&stream);
-
-	return true;
+	return outSuccess;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -10,7 +10,7 @@ namespace eacopy
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
-constexpr wchar_t ServerVersion[] = L"1.0" CFG_STR; // Version of server
+constexpr wchar_t ServerVersion[] = L"1.05" CFG_STR; // Version of server
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -20,11 +20,15 @@ using ReportServerStatus = Function<bool(uint dwCurrentState, uint dwWin32ExitCo
 
 struct ServerSettings
 {
+	using			StringList = List<WString>;
+
 	uint			listenPort					= DefaultPort;
 	uint			maxHistory					= DefaultHistorySize;
 	bool			useSecurityFile				= true;
 	bool			useHash						= false;
 	bool			useLinks					= true;
+	bool			useCompression				= true;
+	bool			useDeltaCompression			= true;
 	bool			useOdx						= false;
 	bool			logDebug					= false;
 	UseBufferedIO	useBufferedIO				= UseBufferedIO_Auto;
@@ -32,6 +36,7 @@ struct ServerSettings
 	uint			maxConcurrentDownloadCount	= 100;
 	WString			user;
 	WString			password;
+	StringList		additionalLinkDirectories;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

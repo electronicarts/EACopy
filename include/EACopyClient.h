@@ -8,7 +8,7 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr wchar_t ClientVersion[] = L"1.02" CFG_STR; // Version of client (visible when printing help info)
+constexpr wchar_t ClientVersion[] = L"1.03" CFG_STR; // Version of client (visible when printing help info)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -44,8 +44,7 @@ struct ClientSettings
 	uint				serverPort					= DefaultPort;
 	uint				serverConnectTimeoutMs		= 500;
 	u64					deltaCompressionThreshold	= ~u64(0);
-	bool				compressionEnabled			= false;
-	int					compressionLevel			= 0;
+	u8					compressionLevel			= 0;  // Zero means no compression, 255 means dynamic compression
 	bool				logProgress					= true;
 	bool				logDebug					= false;
 	UseBufferedIO		useBufferedIO				= UseBufferedIO_Auto;
@@ -202,7 +201,7 @@ public:
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
-	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, CopyContext& copyContext);
+	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext);
 
 	enum				ReadFileResult { ReadFileResult_Error, ReadFileResult_Success, ReadFileResult_ServerBusy };
 	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
@@ -221,8 +220,7 @@ public:
 	HashContext			m_hashContext;
 
 	Socket				m_socket;
-	bool				m_compressionEnabled;
-	CompressionData		m_compressionData;
+	CompressionStats&	m_compressionStats;
 
 						Connection(const Connection&) = delete;
 	void				operator=(const Connection&) = delete;

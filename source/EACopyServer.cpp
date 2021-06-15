@@ -11,11 +11,11 @@
 #include <psapi.h>
 #include <Rpc.h>
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#if defined(EACOPY_ALLOW_DELTA_COPY)
 #include "EACopyDelta.h"
 #endif
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+#if defined(EACOPY_ALLOW_RSYNC)
 #include <EACopyRsync.h>
 #endif
 
@@ -36,6 +36,9 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 
 	if (!reportStatus(SERVICE_START_PENDING, NO_ERROR, 3000))
 		return;
+
+	for (auto& primeDir : settings.additionalLinkDirectories)
+		primeDirectory(primeDir.c_str());
 
 	// Initialize Winsock
 	WSADATA wsaData;
@@ -275,8 +278,7 @@ Server::connectionThread(ConnectionInfo& info)
 	SendFileStats sendStats;
 	NetworkCopyContext copyContext;
 	CompressionStats compressionStats;
-	CompressionData	compressionData{compressionStats};
-	compressionStats.level = 1;
+	compressionStats.currentLevel = 1;
 
 	uint recvPos = 0;
 	WString serverPath;
@@ -508,7 +510,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					// If CopyDelta is enabled we should look for a file that we believe is a very similar file and use that to send delta
-					#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+					#if defined(EACOPY_ALLOW_RSYNC)
 					WString fileForCopyDelta;
 					if (cmd.info.fileSize >= deltaCompressionThreshold && writeResponse == WriteResponse_Copy)
 						if (findFileForDeltaCopy(fileForCopyDelta, key))
@@ -576,7 +578,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (writeResponse == WriteResponse_CopyDelta)
 					{
-						#if defined(EACOPY_ALLOW_DELTA_COPY_SEND)
+						#if defined(EACOPY_ALLOW_RSYNC)
 						RsyncStats stats;
 						if (!serverHandleRsync(info.socket, fileForCopyDelta.c_str(), fullPath.c_str(), cmd.info.lastWriteTime, stats))
 							return -1;
@@ -681,7 +683,7 @@ Server::connectionThread(ConnectionInfo& info)
 						break;
 					}
 
-					ReadResponse readResponse = (isServerPathExternal && !cmd.compressionEnabled) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
+					ReadResponse readResponse = (isServerPathExternal && cmd.compressionLevel == 0) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
 					if (equals(fi, cmd.info))
 					{
 						readResponse = ReadResponse_Skip;
@@ -708,11 +710,15 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 
 					// Check if the version that the client has exist and in that case send as delta
-					#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
-					FileKey key { cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
-					FileDatabase::FileRec referenceFile = m_database.getRecord(key);
-					if (!referenceFile.name.empty())
-						readResponse = ReadResponse_CopyDelta;
+					#if defined(EACOPY_ALLOW_DELTA_COPY)
+					FileDatabase::FileRec referenceFile;
+					if (cmd.compressionLevel != 0 && info.settings.useDeltaCompression)
+					{
+						FileKey key{ cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
+						referenceFile = m_database.getRecord(key);
+						if (!referenceFile.name.empty())
+							readResponse = ReadResponse_CopyDelta;
+					}
 					#endif
 
 					if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
@@ -730,10 +736,22 @@ Server::connectionThread(ConnectionInfo& info)
 							return -1;
 
 
-						WriteFileType writeType = cmd.compressionEnabled ? WriteFileType_Compressed : WriteFileType_Send;
+						WriteFileType writeType = WriteFileType_Send;
+
+						if (cmd.compressionLevel != 0)
+						{
+							writeType = WriteFileType_Compressed;
+							if (cmd.compressionLevel != 255)
+							{
+								compressionStats.currentLevel = cmd.compressionLevel;
+								compressionStats.fixedLevel = true;
+							}
+							else
+								compressionStats.fixedLevel = false;
+						}
 
 						bool useBufferedIO = getUseBufferedIO(info.settings.useBufferedIO, fi.fileSize);
-						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionData, useBufferedIO, ioStats, sendStats))
+						if (!sendFile(info.socket, fullPath.c_str(), fi.fileSize, writeType, copyContext, compressionStats, useBufferedIO, ioStats, sendStats))
 							return -1;
 					}
 					else if (readResponse == ReadResponse_CopyUsingSmb)
@@ -742,7 +760,7 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 					else // ReadResponse_CopyDelta
 					{
-						#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+						#if defined(EACOPY_ALLOW_DELTA_COPY)
 						if (!sendData(info.socket, &fi.fileSize, sizeof(fi.fileSize)))
 							return -1;
 						if (!sendDelta(info.socket, referenceFile.name.c_str(), cmd.info.fileSize, fullPath.c_str(), fi.fileSize, copyContext, ioStats))
