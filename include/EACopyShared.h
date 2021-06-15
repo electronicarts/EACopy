@@ -272,6 +272,7 @@ bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar
 bool					deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					moveFile(const wchar_t* source, const wchar_t* dest, IOStats& ioStats);
 bool					setFileWritable(const wchar_t* fullPath, bool writable);
+bool					setFileHidden(const wchar_t* fullPath, bool hidden);
 void					convertSlashToBackslash(wchar_t* path);
 void					convertSlashToBackslash(wchar_t* path, size_t size);
 void					convertSlashToBackslash(char* path);

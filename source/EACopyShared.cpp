@@ -1914,6 +1914,17 @@ bool setFileWritable(const wchar_t* fullPath, bool writable)
 	#endif
 }
 
+bool setFileHidden(const wchar_t* fullPath, bool hidden)
+{
+#if defined(_WIN32)
+	WString temp;
+	fullPath = convertToShortPath(fullPath, temp);
+	return SetFileAttributesW(fullPath, hidden ? FILE_ATTRIBUTE_HIDDEN : FILE_ATTRIBUTE_NORMAL) != 0;
+#else
+	EACOPY_NOT_IMPLEMENTED
+#endif
+}
+
 void convertSlashToBackslash(wchar_t* path)
 {
 	convertSlashToBackslash(path, wcslen(path));

@@ -15,9 +15,38 @@ namespace eacopy
 bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, FileHandle referenceFile, u64 referenceFileSize, const wchar_t* newFileName, FileHandle newFile, u64 newFileSize, NetworkCopyContext& copyContext, IOStats& ioStats, u64& socketTime, u64& socketSize, u64& codeTime)
 {
 	enum { CompressedNetworkTransferChunkSize = NetworkTransferChunkSize / 4 };
+	enum { CompressBoundReservation = 32 * 1024 };
 
-	void* referenceMemory = new u8[referenceFileSize];
-	ScopeGuard _([&]() { delete[] referenceMemory; });
+
+	u8* copyContextData = copyContext.buffers[0]; // All buffers are allocated in the same allocation.. so if we use less we can just linearly use them
+
+	u8* inBuffer;
+	u8* outBuffer;
+	u8* referenceBuffer;
+
+	if (encode)
+	{
+		inBuffer = copyContextData; // In-buffer for file
+		outBuffer = inBuffer + CompressedNetworkTransferChunkSize - CompressBoundReservation; // Out-buffer to socket
+		referenceBuffer = outBuffer + CompressedNetworkTransferChunkSize; // Buffer for reference file
+	}
+	else
+	{
+		inBuffer = copyContextData; // In-buffer for socket
+		outBuffer = inBuffer + CompressedNetworkTransferChunkSize; // Out-buffer for destination file
+		referenceBuffer = outBuffer + CopyContextBufferSize; // Buffer for reference file
+	}
+
+	bool freeReferenceMemory = false;
+	void* referenceMemory = referenceBuffer;
+
+	size_t referenceBufferSize = CopyContextBufferSize * 3 - (referenceBuffer - copyContextData);
+	if (referenceFileSize > referenceBufferSize)
+	{
+		referenceMemory = new u8[referenceFileSize];
+		freeReferenceMemory = true;
+	}
+	ScopeGuard _([&]() { if (freeReferenceMemory) delete[] referenceMemory; });
 
 	u64 referenceFileRead;
 	if (!readFile(referenceFileName, referenceFile, referenceMemory, referenceFileSize, referenceFileRead, ioStats))
@@ -58,14 +87,13 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 		u64 left = newFileSize;
 		while (left)
 		{
-			enum { CompressBoundReservation = 32 * 1024 };
 			// Make sure the amount of data we've read fit in the destination compressed buffer
 			static_assert(ZSTD_COMPRESSBOUND(CompressedNetworkTransferChunkSize - CompressBoundReservation) <= CompressedNetworkTransferChunkSize - 4, "");
 
 			uint toRead = min(left, u64(CompressedNetworkTransferChunkSize - CompressBoundReservation));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 			u64 read;
-			if (!readFile(newFileName, newFile, copyContext.buffers[0], toReadAligned, read, ioStats))
+			if (!readFile(newFileName, newFile, inBuffer, toReadAligned, read, ioStats))
 			{
 				if (GetLastError() != ERROR_IO_PENDING)
 				{
@@ -76,12 +104,12 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			left -= read;
 
 			// Use the first 4 bytes to write size of buffer.. can probably be replaced with zstd header instead
-			u8* destBuf = copyContext.buffers[1];
+			u8* destBuf = outBuffer;
 			u64 startCompressTime = getTime();
 			buffOut.dst = destBuf + 4;
 			buffOut.size = CompressedNetworkTransferChunkSize - 4;
 			buffOut.pos = 0;
-			buffIn.src = copyContext.buffers[0];
+			buffIn.src = inBuffer;
 			buffIn.size = read;
 			buffIn.pos = 0;
 
@@ -141,18 +169,6 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 
 		u64 read = 0;
 
-		// Copy the stuff already in the buffer
-		/*
-		if (recvPos > commandSize)
-		{
-			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(newFileName, newFile, recvBuffer + commandSize, toCopy, ioStats);
-			read = toCopy;
-			commandSize += (uint)toCopy;
-		}
-		*/
-
-		int fileBufIndex = 0;
 		u64 totalReceivedSize = 0;
 
 		while (true)
@@ -180,7 +196,7 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			{
 				WSABUF wsabuf;
 				wsabuf.len = toRead;
-				wsabuf.buf = (char*)copyContext.buffers[2];
+				wsabuf.buf = (char*)inBuffer;
 				uint recvBytes = 0;
 				uint flags = MSG_WAITALL;
 				int fileRes = WSARecv(socket.socket, &wsabuf, 1, &recvBytes, &flags, NULL, NULL);
@@ -207,10 +223,10 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			{
 				u64 startDecompressTime = getTime();
 
-				buffOut.dst = copyContext.buffers[fileBufIndex];
+				buffOut.dst = outBuffer;
 				buffOut.size = CopyContextBufferSize;
 				buffOut.pos = 0;
-				buffIn.src = copyContext.buffers[2];
+				buffIn.src = inBuffer;
 				buffIn.size = compressedSize;
 				buffIn.pos = 0;
 				res = ZSTD_decompressStream(dctx, &buffOut, &buffIn);
@@ -231,10 +247,9 @@ bool zstdCode(bool encode, Socket& socket, const wchar_t* referenceFileName, Fil
 			}
 
 
-			outSuccess = outSuccess && writeFile(newFileName, newFile, copyContext.buffers[fileBufIndex], decompressedSize, ioStats);
+			outSuccess = outSuccess && writeFile(newFileName, newFile, outBuffer, decompressedSize, ioStats);
 
 			read += decompressedSize;
-			fileBufIndex = fileBufIndex == 0 ? 1 : 0;
 		}
 	}
 
