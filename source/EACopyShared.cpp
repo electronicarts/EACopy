@@ -805,7 +805,7 @@ findNextFile(FindFileHandle handle, FindFileData& findFileData, IOStats& ioStats
 {
 	TimerScope _(ioStats.findFileTime);
 #if defined(_WIN32)
-	return FindNextFileW(handle, (WIN32_FIND_DATAW*)&findFileData);
+	return FindNextFileW(handle, (WIN32_FIND_DATAW*)&findFileData) != 0;
 #else
 	auto dir = (DIR*)handle;
 	auto& fd = *(FindFileDataLinux*)&findFileData;
@@ -1253,7 +1253,7 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 					uint error = GetLastError();
 					if (isError(error, errorOnMissingFile))
 					{
-						logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getErrorText(error).c_str());
+						logErrorf(L"Trying to remove reparse point while ensuring directory %ls: %ls", directory, getErrorText(fullName2, error).c_str());
 						return false;
 					}
 				}
@@ -1306,7 +1306,7 @@ bool deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMis
 	if (!isError(error, errorOnMissingFile))
 		return true;
 
-	logErrorf(L"Trying to remove directory  %ls: %ls", validDirectory, getErrorText(error).c_str());
+	logErrorf(L"Trying to remove directory  %ls: %ls", validDirectory, getErrorText(validDirectory, error).c_str());
 	return false;
 }
 
