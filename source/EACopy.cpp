@@ -15,7 +15,7 @@ void printHelp()
 {
 	logInfoLinef();
 	logInfoLinef(L"-------------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopy v%ls (%u) - File Copy. (c) Electronic Arts.  All Rights Reserved. ", ClientVersion, ProtocolVersion);
+	logInfoLinef(L"  EACopy v%ls (%u) - File Copy. (c) Electronic Arts.  All Rights Reserved. ", getClientVersionString().c_str(), ProtocolVersion);
 	logInfoLinef(L"-------------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopy source destination [file [file]...] [options]");
@@ -379,54 +379,6 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 	return true;
 }
 
-const wchar_t* getPadding(const wchar_t* name)
-{
-	return L"              " + wcslen(name);
-}
-
-void addCount(wchar_t* buf, uint offset, uint count)
-{
-	if (count)
-	{
-		wchar_t countBuf[32];
-		itow(count, countBuf, eacopy_sizeof_array(countBuf));
-		uint len = wcslen(countBuf);
-
-		swprintf(buf + offset, L" (%u)%ls", count, L"      " + len);
-	}
-	else
-		wcscat(buf + offset, L"         ");
-}
-
-void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint count)
-{
-	if (!ms && !count)
-		return;
-	wchar_t buf[512];
-	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
-	addCount(buf, size, count);
-	stats.push_back(buf);
-}
-
-void populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes)
-{
-	if (!bytes)
-		return;
-	wchar_t buf[512];
-	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
-	addCount(buf, size, 0);
-	stats.push_back(buf);
-}
-void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value)
-{
-	if (!value)
-		return;
-	wchar_t buf[512];
-	uint size = swprintf(buf, L"   %ls:%ls%8.1f", name, getPadding(name), value);
-	addCount(buf, size, 0);
-	stats.push_back(buf);
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 } // namespace eacopy
@@ -492,13 +444,23 @@ int main(int argc, char* argv_[])
 
 	if (settings.printJobHeader)
 	{
+		WString options;
+		for (int i = 0; i != argc; ++i)
+		{
+			if (*argv[i] != '/')
+				continue;
+			options.append(L" ");
+			options.append(argv[i]);
+		}
+
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
-		logInfoLinef(L"  EACopy v%ls - File Copy.   (c) Electronic Arts.  All Rights Reserved.", ClientVersion);
+		logInfoLinef(L"  EACopy v%ls (%u) - File Copy.   (c) Electronic Arts.  All Rights Reserved.", getClientVersionString().c_str(), ProtocolVersion);
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
 		logInfoLinef(L"  Source : %ls", settings.sourceDirectory.c_str());
 		logInfoLinef(L"    Dest : %ls", settings.destDirectory.c_str());
+		logInfoLinef(L" Options :%ls", options.c_str()); // First space added in generated string
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
@@ -546,16 +508,7 @@ int main(int argc, char* argv_[])
 
 		Vector<WString> statsVec;
 		populateStatsTime(statsVec, L"ConnectTime", stats.connectTime, 0);
-		populateStatsTime(statsVec, L"FindFile", stats.ioStats.findFileTime, stats.ioStats.findFileCount);
-		populateStatsTime(statsVec, L"ReadFile", stats.ioStats.readTime, stats.ioStats.createReadCount);
-		populateStatsTime(statsVec, L"WriteFile", stats.ioStats.writeTime, stats.ioStats.createWriteCount);
-		populateStatsTime(statsVec, L"LinkFile", stats.ioStats.createLinkTime, stats.ioStats.createLinkCount);
-		populateStatsTime(statsVec, L"DeleteFile", stats.ioStats.deleteFileTime, stats.ioStats.deleteFileCount);
-		populateStatsTime(statsVec, L"CopyFile", stats.ioStats.copyFileTime, stats.ioStats.copyFileCount);
-		populateStatsTime(statsVec, L"CreateDir", stats.ioStats.createDirTime, stats.ioStats.createDirCount);
-		populateStatsTime(statsVec, L"RemoveDir", stats.ioStats.removeDirTime, stats.ioStats.removeDirCount);
-		populateStatsTime(statsVec, L"FileInfo", stats.ioStats.fileInfoTime, stats.ioStats.fileInfoCount);
-		populateStatsTime(statsVec, L"SetWriteTime", stats.ioStats.setLastWriteTime, stats.ioStats.setLastWriteTimeCount);
+		populateIOStats(statsVec, stats.ioStats);
 		populateStatsTime(statsVec, L"SendFile", stats.sendTime, 0);
 		populateStatsBytes(statsVec, L"SendBytes", stats.sendSize);
 		populateStatsTime(statsVec, L"RecvFile", stats.recvTime, 0);
@@ -568,14 +521,7 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTime, 0);
 
 		logInfoLinef();
-
-		for (uint i=0; i<statsVec.size(); i += 2)
-		{
-			if (i + 1 < statsVec.size())
-				logInfoLinef(L"%ls%ls", statsVec[i].c_str(), statsVec[i+1].c_str());
-			else
-				logInfoLinef(L"%ls", statsVec[i].c_str());
-		}
+		logInfoStats(statsVec);
 		logInfoLinef();
 
 

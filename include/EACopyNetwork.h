@@ -21,29 +21,36 @@ namespace eacopy
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-enum : uint { ProtocolVersion = 19 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
+enum : uint { ProtocolVersion = 20 };	// Network protocol version.. must match EACopy and EACopyService otherwise it will fallback to non-server copy behavior
 enum : uint { DefaultPort = 18099 };	// Default port for client and server to connect. Can be overridden with command line
-enum : uint { DefaultDeltaCompressionThreshold = 1024 * 1024 }; // Default threshold for filesize to use delta compression
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Protocol for communication between EACopy and Server
 
+//#define EACOPY_COMMAND
+#define EACOPY_COMMANDS \
+	EACOPY_COMMAND(Version) 		/* Version */ \
+	EACOPY_COMMAND(Text) 			/* Text message..Currently not used but can be used to communicate message to server from client */ \
+	EACOPY_COMMAND(WriteFile) 		/* Write file from client to server */ \
+	EACOPY_COMMAND(ReadFile) 		/* Read file from server to client */ \
+	EACOPY_COMMAND(CreateDir) 		/* Create directory on server */ \
+	EACOPY_COMMAND(Environment) 	/* Sends information to server about where all relative file paths should be stored */ \
+	EACOPY_COMMAND(DeleteFiles) 	/* Tell server to delete files */ \
+	EACOPY_COMMAND(FindFiles) 		/* Return list of files/directories */ \
+	EACOPY_COMMAND(Done) 			/* Tell server that connection is done copying and can close */ \
+	EACOPY_COMMAND(RequestReport) 	/* Ask server for a status report */ \
+	EACOPY_COMMAND(GetFileInfo) 	/* Get file info for file/directory on server side */ \
+
+#define EACOPY_COMMAND(x) CommandType_##x,
+
 enum CommandType : u8
 {
-	CommandType_Version,		// Version
-	CommandType_Text,			// Text message.. Currently not used but can be used to communicate message to server from client
-	CommandType_WriteFile,		// Write file from client to server
-	CommandType_ReadFile,		// Read file from server to client
-	CommandType_CreateDir,		// Create directory on server
-	CommandType_Environment,	// Sends information to server about where all relative file paths should be stored
-	CommandType_DeleteFiles,	// Tell server to delete files
-	CommandType_FindFiles,		// Return list of files/directories
-	CommandType_Done,			// Tell server that connection is done copying and can close
-	CommandType_RequestReport,	// Ask server for a status report
-	CommandType_GetFileInfo,	// Get file info for file/directory on server side
+	EACOPY_COMMANDS
+	CommandType_Bad,
 };
 
+#undef EACOPY_COMMAND
 
 struct Command
 {
@@ -66,8 +73,9 @@ struct VersionCommand : Command
 
 struct EnvironmentCommand : Command
 {
-	u64 deltaCompressionThreshold;
 	uint connectionIndex;
+	uint majorVersion;
+	uint minorVersion;
 	Guid secretGuid;
 	wchar_t netDirectory[1];
 };
@@ -103,7 +111,7 @@ enum WriteResponse : u8
 	WriteResponse_Odx,
 	WriteResponse_Skip,
 	WriteResponse_Hash,
-	WriteResponse_BadDestination
+	WriteResponse_BadDestination // Must be last!
 };
 
 struct ReadFileCommand : Command
@@ -120,8 +128,8 @@ enum ReadResponse : u8
 	ReadResponse_CopyUsingSmb,
 	ReadResponse_Skip,
 	ReadResponse_Hash,
-	ReadResponse_BadSource,
 	ReadResponse_ServerBusy,
+	ReadResponse_BadSource, // Must be last!
 };
 
 struct CreateDirCommand : Command

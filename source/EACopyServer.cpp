@@ -175,7 +175,9 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 		for (uint i=0; i!=selectRes; ++i)
 		{
 			// Accept a client socket (this is blocking but select should have checked so there is one knocking on the door)
-			SOCKET clientSocket = accept(m_listenSocket, NULL, NULL);
+			sockaddr_in remoteSockAddr = { 0 }; /* for TCP/IP */
+			socklen_t remoteSockAddrLen = sizeof(remoteSockAddr);
+			SOCKET clientSocket = accept(m_listenSocket, (sockaddr*)&remoteSockAddr, &remoteSockAddrLen);
 
 			if (clientSocket == INVALID_SOCKET)
 			{
@@ -186,12 +188,14 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 				break;
 			}
 
+			char* remoteIp = inet_ntoa(remoteSockAddr.sin_addr);
 			uint socketIndex = m_handledConnectionCount++;
 
-			logDebugLinef(L"Connection %u accepted", socketIndex);
+			//logDebugLinef(L"Connection %u accepted (%hs)", socketIndex, remoteIp);
 			Socket sock = { clientSocket, socketIndex };
 			connections.emplace_back(log, settings, sock);
 			ConnectionInfo& info = connections.back();
+			info.remoteIp = WString(remoteIp, remoteIp + strlen(remoteIp));
 
 			info.thread = new Thread([this, &info]() { return connectionThread(info); });
 
@@ -224,6 +228,13 @@ Server::primeDirectory(const wchar_t* directory)
 	return m_database.primeDirectory(serverDir, ioStats, true);
 }
 
+#define EACOPY_COMMAND(x) L"CMD" L#x,
+
+const wchar_t* commandNames[] =
+{
+	EACOPY_COMMANDS
+};
+
 uint
 Server::connectionThread(ConnectionInfo& info)
 {
@@ -233,7 +244,42 @@ Server::connectionThread(ConnectionInfo& info)
 	char* recvBuffer2 = new char[bufferSize];
 	char* recvBuffer = recvBuffer1;
 
-	ScopeGuard closeSocket([&]() { closeSocket(info.socket); delete[] recvBuffer1; delete[] recvBuffer2; logDebugLinef(L"Connection %u closed...", info.socket.index); });
+	uint commands[CommandType_Bad] = { 0 };
+	u64 commandTimes[CommandType_Bad] = { 0 };
+	uint readEntries[ReadResponse_BadSource] = { 0 };
+	uint readEntryCount = 0;
+	uint writeEntries[WriteResponse_BadDestination] = { 0 };
+	uint writeEntryCount = 0;
+	IOStats ioStats;
+
+	ScopeGuard closeSocket([&]()
+	{
+			closeSocket(info.socket);
+			delete[] recvBuffer1;
+			delete[] recvBuffer2;
+			logScopeEnter();
+			logDebugLinef(L"--------- Connection %u closed ---------", info.socket.index);
+			
+			if (readEntryCount)
+			{
+				logDebugLinef(L"             Copy   CopyDelta CopySmb   Skip   Hash    ServerBusy");
+				logDebugLinef(L"   Reads   %6i      %6i  %6i %6i %6i        %6i", readEntries[0], readEntries[1], readEntries[2], readEntries[3], readEntries[4], readEntries[5]);
+			}
+			if (writeEntryCount)
+			{
+				logDebugLinef(L"             Copy   CopyDelta CopySmb   Link    Odx   Skip   Hash");
+				logDebugLinef(L"   Writes  %6i      %6i  %6i %6i %6i %6i %6i", writeEntries[0], writeEntries[1], writeEntries[2], writeEntries[3], writeEntries[4], writeEntries[5], writeEntries[6]);
+			}
+			logDebugLinef(L"");
+
+			Vector<WString> statsVec;
+			for (uint i = 0; i != CommandType_Bad; ++i)
+				populateStatsTime(statsVec, commandNames[i], commandTimes[i], commands[i]);
+			//populateIOStats(statsVec, ioStats);
+			logDebugStats(statsVec);
+			logDebugLinef(L"");
+			logScopeLeave();
+	});
 
 	// Experimenting with speeding up network performance. This didn't make any difference
 	// setRecvBufferSize(info.socket, 16*1024*1024);
@@ -249,7 +295,7 @@ Server::connectionThread(ConnectionInfo& info)
 		char cmdBuf[MaxStringLength*2 + sizeof(VersionCommand)+1];
 		auto& cmd = *(VersionCommand*)cmdBuf;
 
-		swprintf(cmd.info, L"v%ls", ServerVersion);
+		swprintf(cmd.info, L"v%ls", getServerVersionString().c_str());
 
 		cmd.commandType = CommandType_Version;
 		cmd.commandSize = sizeof(cmd) + uint(wcslen(cmd.info))*2;
@@ -262,19 +308,6 @@ Server::connectionThread(ConnectionInfo& info)
 			return -1;
 	}
 
-	// This is using writeReport
-	int entryCount[] = { 0, 0, 0, 0, 0, 0 };
-	ScopeGuard logDebugReport([&]()
-	{ 
-		logScopeEnter();
-		logDebugLinef(L"--------- Socket %u report ---------", info.socket.index);
-		logDebugLinef(L"          Copy   CopyDelta CopySmb   Link    Odx   Skip");
-		logDebugLinef(L"Files   %6i      %6i  %6i %6i %6i", entryCount[0], entryCount[1], entryCount[2], entryCount[3], entryCount[4], entryCount[5]);
-		logDebugLinef(L"---------------------------------");
-		logScopeLeave();
-	});
-
-	IOStats ioStats;
 	SendFileStats sendStats;
 	NetworkCopyContext copyContext;
 	CompressionStats compressionStats;
@@ -285,7 +318,6 @@ Server::connectionThread(ConnectionInfo& info)
 	bool isValidEnvironment = false;
 	bool isServerPathExternal = false; // Tells whether "local" directory is external or not (it could be pointing to a network share)
 	bool isDone = false;
-	u64 deltaCompressionThreshold = ~0u;
 	uint clientConnectionIndex = ~0u; // Note that this is the connection index from the same client where 0 is the controlling connection and the rest are worker connections
 
 	ScopeGuard queueRemoveGuard([&]()
@@ -336,13 +368,24 @@ Server::connectionThread(ConnectionInfo& info)
 			if (recvPos < header.commandSize)
 				break;
 
+			++commands[header.commandType];
+			TimerScope commandTimer(commandTimes[header.commandType]);
+
 			switch (header.commandType)
 			{
 			case CommandType_Environment:
 				{
 					auto& cmd = *(const EnvironmentCommand*)recvBuffer;
 
-					deltaCompressionThreshold = cmd.deltaCompressionThreshold;
+					logScopeEnter();
+					logDebugLinef(L"--- Connection %u opened ---", info.socket.index);
+					logDebugLinef(L"  RemoteIp              : %ls", info.remoteIp.c_str());
+					logDebugLinef(L"  ClientVersion         : %ls", getVersionString(cmd.majorVersion, cmd.minorVersion, false).c_str());
+					logDebugLinef(L"  RemoteConnectionIndex : %u", cmd.connectionIndex);
+					logDebugLinef(L"  NetDirectory          : %ls", cmd.netDirectory);
+					logDebugLinef(L"");
+					logScopeLeave();
+
 					clientConnectionIndex = min(cmd.connectionIndex, MaxPriorityQueueCount - 1);
 					
 					m_queuesCs.scoped([&]() { m_queues[clientConnectionIndex].push_back(&info); });
@@ -512,7 +555,7 @@ Server::connectionThread(ConnectionInfo& info)
 					// If CopyDelta is enabled we should look for a file that we believe is a very similar file and use that to send delta
 					#if defined(EACOPY_ALLOW_RSYNC)
 					WString fileForCopyDelta;
-					if (cmd.info.fileSize >= deltaCompressionThreshold && writeResponse == WriteResponse_Copy)
+					if (writeResponse == WriteResponse_Copy)
 						if (findFileForDeltaCopy(fileForCopyDelta, key))
 						{
 							// TODO: Right now we don't support copy delta to same destination as the file we use for delta
@@ -557,7 +600,8 @@ Server::connectionThread(ConnectionInfo& info)
 						}
 					}
 
-					++entryCount[writeResponse];
+					++writeEntries[writeResponse];
+					++writeEntryCount;
 
 					// Send response of action
 					if (!sendData(info.socket, &writeResponse, sizeof(writeResponse)))
@@ -664,6 +708,8 @@ Server::connectionThread(ConnectionInfo& info)
 					if (tooBusy)
 					{
 						ReadResponse readResponse = ReadResponse_ServerBusy;
+						++readEntryCount;
+						++readEntries[readResponse];
 						if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
 							return -1;
 						break;
@@ -723,6 +769,8 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
 						return -1;
+					++readEntryCount;
+					++readEntries[readResponse];
 
 					if (readResponse == ReadResponse_Skip)
 						break;
@@ -940,7 +988,7 @@ Server::connectionThread(ConnectionInfo& info)
 						L"   %ls copied (%ls received)\n"
 						L"   %ls linked\n"
 						L"   %ls skipped\n"
-						, ServerVersion, m_protocolVersion, m_isConsole ? L"Console" : L"Service"
+						, getServerVersionString().c_str(), m_protocolVersion, m_isConsole ? L"Console" : L"Service"
 						, toHourMinSec(upTime).c_str()
 						, activeConnectionCount, m_handledConnectionCount, historySize, toPretty(memCounters.WorkingSetSize).c_str(), toPretty(memCounters.PeakWorkingSetSize).c_str()
 						, toPretty(freeVolumeSpace).c_str(), toPretty(m_bytesCopied).c_str(), toPretty(m_bytesReceived).c_str(), toPretty(m_bytesLinked).c_str(), toPretty(m_bytesSkipped).c_str());

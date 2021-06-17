@@ -1779,7 +1779,8 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		char cmdBuf[MaxPath*2 + sizeof(EnvironmentCommand)+1];
 		auto& cmd = *(EnvironmentCommand*)cmdBuf;
 		cmd.commandType = CommandType_Environment;
-		cmd.deltaCompressionThreshold = m_settings.deltaCompressionThreshold;
+		cmd.majorVersion = ClientMajorVersion;
+		cmd.minorVersion = ClientMinorVersion;
 		cmd.connectionIndex = connectionIndex;
 		cmd.secretGuid = m_secretGuid;
 		cmd.commandSize = sizeof(cmd) + uint(m_networkServerNetDirectory.size()*2);

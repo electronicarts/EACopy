@@ -551,6 +551,96 @@ void logScopeLeave()
 		c->log.m_logQueueCs.leave();
 }
 
+const wchar_t* getPadding(const wchar_t* name)
+{
+	return L"              " + wcslen(name);
+}
+
+void addCount(wchar_t* buf, uint offset, uint count)
+{
+	if (count)
+	{
+		wchar_t countBuf[32];
+		itow(count, countBuf, eacopy_sizeof_array(countBuf));
+		uint len = wcslen(countBuf);
+
+		swprintf(buf + offset, L" (%u)%ls", count, L"      " + len);
+	}
+	else
+		wcscat(buf + offset, L"         ");
+}
+
+void populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint count)
+{
+	if (!ms && !count)
+		return;
+	wchar_t buf[512];
+	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toHourMinSec(ms, 7).c_str());
+	addCount(buf, size, count);
+	stats.push_back(buf);
+}
+
+void populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes)
+{
+	if (!bytes)
+		return;
+	wchar_t buf[512];
+	uint size = swprintf(buf, L"   %ls:%ls%ls", name, getPadding(name), toPretty(bytes, 7).c_str());
+	addCount(buf, size, 0);
+	stats.push_back(buf);
+}
+void populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value)
+{
+	if (!value)
+		return;
+	wchar_t buf[512];
+	uint size = swprintf(buf, L"   %ls:%ls%8.1f", name, getPadding(name), value);
+	addCount(buf, size, 0);
+	stats.push_back(buf);
+}
+
+void populateStatsValue(Vector<WString>& stats, const wchar_t* name, uint value)
+{
+	if (!value)
+		return;
+	wchar_t buf[512];
+	uint size = swprintf(buf, L"   %ls:%ls%8u", name, getPadding(name), value);
+	addCount(buf, size, 0);
+	stats.push_back(buf);
+}
+
+void populateIOStats(Vector<WString>& stats, const IOStats& ioStats)
+{
+	populateStatsTime(stats, L"FindFile", ioStats.findFileTime, ioStats.findFileCount);
+	populateStatsTime(stats, L"ReadFile", ioStats.readTime, ioStats.createReadCount);
+	populateStatsTime(stats, L"WriteFile", ioStats.writeTime, ioStats.createWriteCount);
+	populateStatsTime(stats, L"LinkFile", ioStats.createLinkTime, ioStats.createLinkCount);
+	populateStatsTime(stats, L"DeleteFile", ioStats.deleteFileTime, ioStats.deleteFileCount);
+	populateStatsTime(stats, L"CopyFile", ioStats.copyFileTime, ioStats.copyFileCount);
+	populateStatsTime(stats, L"CreateDir", ioStats.createDirTime, ioStats.createDirCount);
+	populateStatsTime(stats, L"RemoveDir", ioStats.removeDirTime, ioStats.removeDirCount);
+	populateStatsTime(stats, L"FileInfo", ioStats.fileInfoTime, ioStats.fileInfoCount);
+	populateStatsTime(stats, L"SetWriteTime", ioStats.setLastWriteTime, ioStats.setLastWriteTimeCount);
+}
+
+void logInfoStats(const Vector<WString>& stats)
+{
+	for (uint i = 0; i < stats.size(); i += 2)
+		if (i + 1 < stats.size())
+			logInfoLinef(L"%ls%ls", stats[i].c_str(), stats[i + 1].c_str());
+		else
+			logInfoLinef(L"%ls", stats[i].c_str());
+}
+
+void logDebugStats(const Vector<WString>& stats)
+{
+	for (uint i = 0; i < stats.size(); i += 2)
+		if (i + 1 < stats.size())
+			logDebugLinef(L"%ls%ls", stats[i].c_str(), stats[i + 1].c_str());
+		else
+			logDebugLinef(L"%ls", stats[i].c_str());
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #if defined(EACOPY_USE_SYMLINK_FOR_LONGPATHS)
@@ -2177,6 +2267,12 @@ void itow(int value, wchar_t* dst, uint dstCapacity)
 int stringEquals(const wchar_t* a, const wchar_t* b) { return wcscmp(a, b) == 0; }
 int	stringEquals(const char* a, const char* b) { return strcmp(a, b) == 0; }
 bool stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source) { return wcscpy_s(dest, destCapacity, source) == 0; }
+WString getVersionString(uint major, uint minor, bool isDebug)
+{
+	wchar_t buffer[64];
+	StringCbPrintfW(buffer, 64, L"%u.%02u %ls", major, minor, isDebug ? L"DBG" : L"");
+	return buffer;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

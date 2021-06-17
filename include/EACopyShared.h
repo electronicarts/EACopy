@@ -171,7 +171,7 @@ int						stringEquals(const wchar_t* a, const wchar_t* b);
 int						stringEquals(const char* a, const char* b);
 bool					stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source);
 #define					eacopy_sizeof_array(array) int(sizeof(array)/sizeof(array[0]))
-
+WString					getVersionString(uint major, uint minor, bool isDebug);
 
 struct TimerScope
 {
@@ -431,12 +431,20 @@ private:
 	friend void			logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError);
 };
 
+void					populateStatsTime(Vector<WString>& stats, const wchar_t* name, u64 ms, uint count);
+void					populateStatsBytes(Vector<WString>& stats, const wchar_t* name, u64 bytes);
+void					populateStatsValue(Vector<WString>& stats, const wchar_t* name, float value);
+void					populateStatsValue(Vector<WString>& stats, const wchar_t* name, uint value);
+void					populateIOStats(Vector<WString>& stats, const IOStats& ioStats);
+void					logInfoStats(const Vector<WString>& stats);
+void					logDebugStats(const Vector<WString>& stats);
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #if defined(NDEBUG)
-#define CFG_STR L""
+constexpr bool isDebug = false;
 #else
-#define CFG_STR L"DBG"
+constexpr bool isDebug = true;
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
