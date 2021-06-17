@@ -79,7 +79,7 @@ public:
 	{
 		while (!m_isServerReady)
 		{
-			EACOPY_ASSERT(!m_threadExited);
+			EACOPY_ASSERT(!m_threadExited); // Another server running?
 			Sleep(1);
 		}
 	}
@@ -1328,7 +1328,7 @@ EACOPY_TEST(ServerCopyMediumFileCompressed)
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;
-	clientSettings.compressionEnabled = true;
+	clientSettings.compressionLevel = 255;
 	Client client(clientSettings);
 
 	ClientStats clientStats;
@@ -1776,7 +1776,7 @@ EACOPY_TEST_LOOP(ServerCopyMediumFileDelta, 3)
 }
 #endif
 
-#if defined(EACOPY_ALLOW_DELTA_COPY_RECEIVE)
+#if defined(EACOPY_ALLOW_DELTA_COPY)
 EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
 {
 	std::swap(testSourceDir, testDestDir);
@@ -1801,7 +1801,7 @@ EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
 
 	clientSettings.sourceDirectory = testSourceDir + L"2\\";
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
-	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(clientStats.copyCount == 2);
 }
 #endif
 
@@ -1971,7 +1971,6 @@ EACOPY_TEST(ServerCopyLargeFileCompressed)
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.useServer = UseServer_Required;
 		clientSettings.destDirectory = testDestDir + iStr + L'\\';
-		clientSettings.compressionEnabled = true;
 		clientSettings.compressionLevel = 4;
 
 		Client client(clientSettings);
@@ -2244,7 +2243,7 @@ EACOPY_TEST(ServerTestSecurityFileMultiThreadedClient)
 void printHelp()
 {
 	logInfoLinef(L"-------------------------------------------------------------------------------");
-	logInfoLinef(L"  EACopyTest (Client v%ls Server v%ls) (c) Electronic Arts.  All Rights Reserved.", ClientVersion, ServerVersion);
+	logInfoLinef(L"  EACopyTest (Client v%ls Server v%ls) (c) Electronic Arts.  All Rights Reserved.", getClientVersionString().c_str(), getServerVersionString().c_str());
 	logInfoLinef(L"-------------------------------------------------------------------------------");
 	logInfoLinef();
 	logInfoLinef(L"             Usage :: EACopyTest source destination");
