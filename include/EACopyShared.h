@@ -172,6 +172,8 @@ int						stringEquals(const char* a, const char* b);
 bool					stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source);
 #define					eacopy_sizeof_array(array) int(sizeof(array)/sizeof(array[0]))
 WString					getVersionString(uint major, uint minor, bool isDebug);
+template<class T> T		min(T a, T b) { return a < b ? a : b; }
+template<class T> T		max(T a, T b) { return a > b ? a : b; }
 
 struct TimerScope
 {

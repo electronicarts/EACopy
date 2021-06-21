@@ -184,7 +184,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			outSettings.threadCount = 7;
 			if (arg[3] == ':')
-				outSettings.threadCount = std::max(0, wtoi(arg + 4) - 1);
+				outSettings.threadCount = max(0, wtoi(arg + 4) - 1);
 		}
 		else if (equalsIgnoreCase(arg, L"/NOSERVER"))
 		{
@@ -528,7 +528,7 @@ int main(int argc, char* argv_[])
 		if (stats.destServerUsed || stats.sourceServerUsed)
 			logInfoLinef(L"   Server found and used! (%ls)", stats.info.c_str());
 		else if (stats.serverAttempt && !stats.destServerUsed)
-			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/std::max(1, (int)settings.threadCount)).c_str());
+			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/max(1, (int)settings.threadCount)).c_str());
 		else
 			logInfoLinef(L"   No server used!");
 	}

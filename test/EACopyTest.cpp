@@ -233,7 +233,7 @@ struct TestBase
 		WString fullFilename = dir + name;
 		const wchar_t* fullFileName = convertToShortPath(fullFilename.c_str(), tempBuffer);
 
-		u64 dataSize = std::min(size, 1024*1024*256ull);
+		u64 dataSize = min(size, 1024*1024*256ull);
 		char* data = new char[size];
 		for (u64 i=0; i!=dataSize; ++i)
 			data[i] = 'a' + i % 26;
@@ -323,7 +323,7 @@ struct TestBase
 		{
 			char buffer[128];
 			memset(buffer, 0, sizeof(buffer));
-			uint writePos = std::max((uint)0, (uint)(((uint(rand()) << 16) + uint(rand())) % (fileSize - 128)));
+			uint writePos = max((uint)0, (uint)(((uint(rand()) << 16) + uint(rand())) % (fileSize - 128)));
 			memcpy(data + writePos, buffer, sizeof(buffer));
 		}
 

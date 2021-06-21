@@ -299,7 +299,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 		while (pos != fileSize)
 		{
 			u64 left = fileSize - pos;
-			uint toWrite = (uint)std::min(left, u64(INT_MAX-1));
+			uint toWrite = (uint)min(left, u64(INT_MAX-1));
 
 			u64 startSendTime = getTime();
 			if (!TransmitFile(socket.socket, sourceFile, toWrite, 0, &overlapped, NULL, TF_USE_KERNEL_APC))
@@ -337,7 +337,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 		u64 left = fileSize;
 		while (left)
 		{
-			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
+			uint toRead = (uint)min(left, u64(NetworkTransferChunkSize));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 
 			u64 read;
@@ -370,7 +370,7 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 			// Make sure the amount of data we've read fit in the destination compressed buffer
 			static_assert(ZSTD_COMPRESSBOUND(CompressedNetworkTransferChunkSize - CompressBoundReservation) <= CompressedNetworkTransferChunkSize - 4, "");
 
-			uint toRead = std::min(left, u64(CompressedNetworkTransferChunkSize - CompressBoundReservation));
+			uint toRead = min(left, u64(CompressedNetworkTransferChunkSize - CompressBoundReservation));
 			uint toReadAligned = useBufferedIO ? toRead : (((toRead + 4095) / 4096) * 4096);
 			u64 read;
 			if (!readFile(src, sourceFile, copyContext.buffers[0], toReadAligned, read, ioStats))
@@ -428,9 +428,9 @@ bool sendFile(Socket& socket, const wchar_t* src, size_t fileSize, WriteFileType
 
 					u64 timeUnitsPerBytes = (cs.currentSendTime * 1000000) / cs.currentSendBytes;
 					if (timeUnitsPerBytes < cs.lastTimeUnitPerBytes)
-						cs.currentLevel = std::min(14, cs.currentLevel + 1);
+						cs.currentLevel = min(14, cs.currentLevel + 1);
 					else
-						cs.currentLevel = std::max(1, cs.currentLevel - 1);
+						cs.currentLevel = max(1, cs.currentLevel - 1);
 					cs.lastTimeUnitPerBytes = timeUnitsPerBytes;
 				}
 			}
@@ -475,7 +475,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
-			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
+			u64 toCopy = min(u64(recvPos - commandSize), u64(fileSize));
 			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
@@ -487,7 +487,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		{
 			u64 startRecvTime = getTime();
 			u64 left = fileSize - read;
-			uint toRead = (uint)std::min(left, u64(NetworkTransferChunkSize));
+			uint toRead = (uint)min(left, u64(NetworkTransferChunkSize));
 			WSABUF wsabuf;
 			wsabuf.len = toRead;
 			wsabuf.buf = (char*)copyContext.buffers[fileBufIndex];
@@ -539,7 +539,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		// Copy the stuff already in the buffer
 		if (recvPos > commandSize)
 		{
-			u64 toCopy = std::min(u64(recvPos - commandSize), u64(fileSize));
+			u64 toCopy = min(u64(recvPos - commandSize), u64(fileSize));
 			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;

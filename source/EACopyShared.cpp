@@ -1425,7 +1425,7 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 	while (left)
 	{
 		uint written;
-		uint toWrite = (uint)std::min(left, u64(INT_MAX-1));
+		uint toWrite = (uint)min(left, u64(INT_MAX-1));
 		if (!WriteFile(file, data, toWrite, &written, nullptr))
 		{
 			logErrorf(L"Trying to write data to %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
@@ -1443,7 +1443,7 @@ bool writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 
 	u64 left = dataSize;
 	while (left)
 	{
-		size_t  toWrite = (uint)std::min(left, u64(INT_MAX-1));
+		size_t  toWrite = (uint)min(left, u64(INT_MAX-1));
 		size_t written = write(fileHandle, data, toWrite);
 		if (written == -1)
 		{
@@ -1774,7 +1774,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 				++ioStats.readCount;
 				TimerScope _(ioStats.readTime);
 
-				uint toRead = (uint)std::min(left, u64(ReadChunkSize));
+				uint toRead = (uint)min(left, u64(ReadChunkSize));
 				activeBufferIndex = (activeBufferIndex + 1) % 3;
 
 				uint toReadAligned = nobufferingFlag ? (((toRead + 4095) / 4096) * 4096) : toRead;
