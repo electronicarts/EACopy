@@ -412,6 +412,7 @@ Server::connectionThread(ConnectionInfo& info)
 							// No secretGuid provided, let's test the clients access to the network path
 							// by putting a hidden file there with a guid in it, if client can return that guid it means that client has access
 
+							static_assert(sizeof(GUID) == sizeof(Guid), "GUID and Guid are not matching");
 							GUID filenameGuid;
 							if (CoCreateGuid(&filenameGuid) != S_OK)
 							{
@@ -446,7 +447,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 							m_validSecretGuidsCs.scoped([&]() { m_validSecretGuids.insert(secretGuid); });
 
-							if (!sendData(info.socket, &filenameGuid, sizeof(GUID)))
+							if (!sendData(info.socket, &filenameGuid, sizeof(filenameGuid)))
 								return -1;
 
 							Guid returnedSecretGuid;
