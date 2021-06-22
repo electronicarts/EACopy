@@ -445,10 +445,12 @@ int main(int argc, char* argv_[])
 	if (settings.printJobHeader)
 	{
 		WString options;
+		bool foundFirstOption = false;
 		for (int i = 0; i != argc; ++i)
 		{
-			if (*argv[i] != '/')
+			if (!foundFirstOption && *argv[i] != '/')
 				continue;
+			foundFirstOption = true;
 			options.append(L" ");
 			options.append(argv[i]);
 		}
@@ -526,7 +528,7 @@ int main(int argc, char* argv_[])
 
 
 		if (stats.destServerUsed || stats.sourceServerUsed)
-			logInfoLinef(L"   Server found and used! (%ls)", stats.info.c_str());
+			logInfoLinef(L"   Server found (%ls)", stats.info.c_str());
 		else if (stats.serverAttempt && !stats.destServerUsed)
 			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/max(1, (int)settings.threadCount)).c_str());
 		else
