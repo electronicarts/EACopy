@@ -2270,7 +2270,7 @@ bool stringCopy(wchar_t* dest, uint destCapacity, const wchar_t* source) { retur
 WString getVersionString(uint major, uint minor, bool isDebug)
 {
 	wchar_t buffer[64];
-	StringCbPrintfW(buffer, 64, L"%u.%02u %ls", major, minor, isDebug ? L"DBG" : L"");
+	StringCbPrintfW(buffer, 64, L"%u.%02u%ls", major, minor, isDebug ? L" DBG" : L"");
 	return buffer;
 }
 
