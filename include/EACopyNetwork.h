@@ -188,7 +188,7 @@ struct Socket
 
 const wchar_t*	optimizeUncPath(const wchar_t* uncPath, WString& temp, bool allowLocal = true);
 bool			sendData(Socket& socket, const void* buffer, uint size);
-bool			receiveData(Socket& socket, void* buffer, uint size);
+bool			receiveData(Socket& socket, void* buffer, uint size, bool closeIsError = true);
 bool			setBlocking(Socket& socket, bool blocking);
 bool			disableNagle(Socket& socket);
 bool			setSendBufferSize(Socket& socket, uint sendBufferSize);

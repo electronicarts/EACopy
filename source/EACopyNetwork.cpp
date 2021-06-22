@@ -199,7 +199,7 @@ bool sendData(Socket& socket, const void* buffer, uint size)
 	return true;
 }
 
-bool receiveData(Socket& socket, void* buffer, uint size)
+bool receiveData(Socket& socket, void* buffer, uint size, bool closeIsError)
 {
 	uint left = size;
 	char* pos = (char*)buffer;
@@ -217,7 +217,10 @@ bool receiveData(Socket& socket, void* buffer, uint size)
 		}
 		else if (res == 0)
 		{
-			logDebugLinef(L"Connection closed");
+			if (closeIsError)
+				logErrorf(L"recv failed. Connection closed");
+			else
+				logDebugLinef(L"Connection closed");
 			return false;
 		}
 

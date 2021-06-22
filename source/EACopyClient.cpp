@@ -1787,18 +1787,25 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 		
 		if (!stringCopy(cmd.netDirectory, MaxPath, m_networkServerNetDirectory.data()))
 		{
-			logErrorf(L"Failed send environment %ls: wcscpy_s", m_networkServerNetDirectory.c_str());
+			logErrorf(L"Failed send environment %ls: wcscpy_s. Server will not be used", m_networkServerNetDirectory.c_str());
 			return nullptr;
 		}
 	
 		if (!connection->sendCommand(cmd))
+		{
+			logErrorf(L"Failed sending environment command. Server will not be used");
 			return nullptr;
+		}
 
 		if (!hasSecretGuid)
 		{
 			Guid securityFileGuid;
 			if (!receiveData(sock, &securityFileGuid, sizeof(securityFileGuid)))
+			{
+				logErrorf(L"Failed receiving security file guid. Server will not be used", m_networkServerNetDirectory.c_str());
 				return nullptr;
+			}
+
 			wchar_t securityFile[128];
 			securityFile[0] = L'.';
 			StringFromGUID2(*(GUID*)&securityFileGuid, securityFile + 1, 40);
@@ -1819,11 +1826,13 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 			}
 
 			if (!sendData(sock, &m_secretGuid, sizeof(m_secretGuid)))
+			{
+				logErrorf(L"Failed sending secret Guid. Server will not be used");
 				return nullptr;
-
+			}
 			if (!secretGuidRead)
 			{
-				logErrorf(L"Failed reading secret guid from file %ls", networkFilePath.c_str());
+				logErrorf(L"Failed reading secret guid from file %ls. Server will not be used", networkFilePath.c_str());
 				failedToConnect = true;
 				return nullptr;
 			}
@@ -1870,8 +1879,8 @@ Client::Connection::~Connection()
 	cmd.commandSize = sizeof(cmd);
 	sendCommand(cmd);
 
-	u64 compressionLevelSum;
-	receiveData(m_socket, &compressionLevelSum, sizeof(compressionLevelSum));
+	u64 compressionLevelSum = 0;
+	receiveData(m_socket, &compressionLevelSum, sizeof(compressionLevelSum), false);
 	m_stats.compressionLevelSum += compressionLevelSum;
 
 	destroy();
