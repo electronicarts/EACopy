@@ -30,7 +30,7 @@ struct ServerSettings
 	uint			maxHistory					= DefaultHistorySize;
 	bool			useSecurityFile				= true;
 	bool			useHash						= false;
-	bool			useLinks					= true;
+	u64				useLinksThreshold			= 0;
 	bool			useCompression				= true;
 	bool			useDeltaCompression			= true;
 	bool			useOdx						= false;

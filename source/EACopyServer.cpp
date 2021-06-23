@@ -527,7 +527,7 @@ Server::connectionThread(ConnectionInfo& info)
 							*/
 							{
 								bool skip;
-								if (info.settings.useLinks && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+								if (cmd.info.fileSize >= info.settings.useLinksThreshold && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
 								{
 									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
 								}
@@ -585,7 +585,7 @@ Server::connectionThread(ConnectionInfo& info)
 							// 
 							// Attempt to create link to other file
 							bool skip;
-							if (info.settings.useLinks && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+							if (cmd.info.fileSize >= info.settings.useLinksThreshold && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
 							{
 								writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
 							}
