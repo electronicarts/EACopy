@@ -517,10 +517,21 @@ int main(int argc, char* argv_[])
 		populateStatsBytes(statsVec, L"RecvBytes", stats.recvSize);
 		populateStatsTime(statsVec, L"CompressFile", stats.compressTime, 0);
 		populateStatsValue(statsVec, L"CompressLevel", stats.compressionAverageLevel);
-		populateStatsTime(statsVec, L"DecompreFile", stats.decompressTime, 0);
+		populateStatsTime(statsVec, L"DecompressFile", stats.decompressTime, 0);
 		populateStatsTime(statsVec, L"DeltaCompress", stats.deltaCompressionTime, 0);
 		populateStatsTime(statsVec, L"HashCalc", stats.hashTime, stats.hashCount);
 		populateStatsTime(statsVec, L"PurgeDir", stats.purgeTime, 0);
+		populateStatsTime(statsVec, L"NetSecretGuid", stats.netSecretGuid, 0);
+		populateStatsTime(statsVec, L"NetResponseCopy", stats.netWriteResponseTime[WriteResponse_Copy], stats.netWriteResponseCount[WriteResponse_Copy]);
+		populateStatsTime(statsVec, L"NetResponseCopyDelta", stats.netWriteResponseTime[WriteResponse_CopyDelta], stats.netWriteResponseCount[WriteResponse_CopyDelta]);
+		populateStatsTime(statsVec, L"NetResponseCopySmb", stats.netWriteResponseTime[WriteResponse_CopyUsingSmb], stats.netWriteResponseCount[WriteResponse_CopyUsingSmb]);
+		populateStatsTime(statsVec, L"NetResponseLink", stats.netWriteResponseTime[WriteResponse_Link], stats.netWriteResponseCount[WriteResponse_Link]);
+		populateStatsTime(statsVec, L"NetResponseOdx", stats.netWriteResponseTime[WriteResponse_Odx], stats.netWriteResponseCount[WriteResponse_Odx]);
+		populateStatsTime(statsVec, L"NetResponseSkip", stats.netWriteResponseTime[WriteResponse_Skip], stats.netWriteResponseCount[WriteResponse_Skip]);
+		populateStatsTime(statsVec, L"NetResponseHash", stats.netWriteResponseTime[WriteResponse_Hash], stats.netWriteResponseCount[WriteResponse_Hash]);
+		populateStatsTime(statsVec, L"NetFindFiles", stats.netFindFilesTime, stats.netFindFilesCount);
+		populateStatsTime(statsVec, L"NetCreateDir", stats.netCreateDirTime, stats.netCreateDirCount);
+		populateStatsTime(statsVec, L"NetFileInfo", stats.netFileInfoTime, stats.netFileInfoCount);
 
 		logInfoLinef();
 		logInfoStats(statsVec);

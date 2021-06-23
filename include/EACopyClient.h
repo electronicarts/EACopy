@@ -90,6 +90,16 @@ struct ClientStats
 	u64					deltaCompressionTime		= 0;
 	u64					hashTime					= 0;
 	u64					hashCount					= 0;
+	u64					netSecretGuid				= 0;
+	u64					netWriteResponseTime[WriteResponseCount] = { 0 };
+	u64					netWriteResponseCount[WriteResponseCount] = { 0 };
+	u64					netFindFilesTime			= 0;
+	u64					netFindFilesCount			= 0;
+	u64					netCreateDirTime			= 0;
+	u64					netCreateDirCount			= 0;
+	u64					netFileInfoTime				= 0;
+	u64					netFileInfoCount			= 0;
+
 	IOStats				ioStats;
 
 	bool				destServerUsed				= false;

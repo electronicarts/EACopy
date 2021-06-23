@@ -193,16 +193,19 @@ Client::process(Log& log, ClientStats& outStats)
 			return threadExitCode;
 	}
 
-	u64 startPurgeTime = getTime();
-
 	// If purge feature is enabled.. traverse destination and remove unwanted files/directories
 	if (m_settings.purgeDestination)
+	{
+		TimerScope ps(outStats.purgeTime);
 		if (m_createdDirs.find(destDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 			if (!purgeFilesInDirectory(destDir, 0, m_settings.copySubdirDepth, outStats)) // use 0 for directory attribute because we always want to purge root dir even if it is a symlink (which it probably never is)
 				return -1;
+	}
 
 	// Purge individual directories (can be provided in filelist file)
 	for (auto& purgeDir : m_purgeDirs)
+	{
+		TimerScope ps(outStats.purgeTime);
 		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 		{
 			FileInfo dirInfo;
@@ -210,8 +213,7 @@ Client::process(Log& log, ClientStats& outStats)
 			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth, outStats))
 				return -1;
 		}
-
-	outStats.purgeTime = getTime() - startPurgeTime;
+	}
 
 	sourceConnectionCleanup.execute();
 	destConnectionCleanup.execute();
@@ -248,6 +250,18 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.connectTime += threadStats.connectTime;
 		outStats.hashCount += threadStats.hashCount;
 		outStats.hashTime += threadStats.hashTime;
+		outStats.netSecretGuid += threadStats.netSecretGuid;
+		for (uint i=0;i!=WriteResponseCount; ++i)
+		{
+			outStats.netWriteResponseTime[i] += threadStats.netWriteResponseTime[i];
+			outStats.netWriteResponseCount[i] += threadStats.netWriteResponseCount[i];
+		}
+		outStats.netFindFilesTime += threadStats.netFindFilesTime;
+		outStats.netFindFilesCount += threadStats.netFindFilesCount;
+		outStats.netCreateDirTime += threadStats.netCreateDirTime;
+		outStats.netCreateDirCount += threadStats.netCreateDirCount;
+		outStats.netFileInfoTime += threadStats.netFileInfoTime;
+		outStats.netFileInfoCount += threadStats.netFileInfoCount;
 		outStats.ioStats.createReadTime += threadStats.ioStats.createReadTime;
 		outStats.ioStats.closeReadTime += threadStats.ioStats.closeReadTime;
 		outStats.ioStats.closeReadCount += threadStats.ioStats.closeReadCount;
@@ -1799,6 +1813,7 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 
 		if (!hasSecretGuid)
 		{
+			TimerScope _(stats.netSecretGuid);
 			Guid securityFileGuid;
 			if (!receiveData(sock, &securityFileGuid, sizeof(securityFileGuid)))
 			{
@@ -1943,8 +1958,14 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		return false;
 
 	WriteResponse writeResponse;
-	if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
-		return false;
+	u64 netWriteResponseTime = 0;
+	{
+		TimerScope _(netWriteResponseTime);
+		if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
+			return false;
+	}
+	++m_stats.netWriteResponseCount[writeResponse];
+	m_stats.netWriteResponseTime[writeResponse] += netWriteResponseTime;
 
 	do
 	{
@@ -1972,8 +1993,15 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 			return false;
 		if (!sendData(m_socket, &hash, sizeof(hash)))
 			return false;
-		if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
-			return false;
+
+		u64 netWriteResponseTime = 0;
+		{
+			TimerScope _(netWriteResponseTime);
+			if (!receiveData(m_socket, &writeResponse, sizeof(writeResponse)))
+				return false;
+		}
+		++m_stats.netWriteResponseCount[writeResponse];
+		m_stats.netWriteResponseTime[writeResponse] += netWriteResponseTime;
 			
 	} while (true);
 
@@ -2192,6 +2220,8 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 bool
 Client::Connection::sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs)
 {
+	++m_stats.netCreateDirCount;
+	TimerScope _(m_stats.netCreateDirTime);
 	const wchar_t* relDir = directory + m_settings.destDirectory.size();
 
 	char buffer[MaxPath*2 + sizeof(CreateDirCommand)+1];
@@ -2280,6 +2310,9 @@ Client::Connection::sendDeleteAllFiles(const wchar_t* dir)
 bool
 Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndFileInfo>& outFiles, CopyContext& copyContext)
 {
+	++m_stats.netFindFilesCount;
+	TimerScope _(m_stats.netFindFilesTime);
+
 	char buffer[MaxPath*2 + sizeof(FindFilesCommand)+1];
 	auto& cmd = *(FindFilesCommand*)buffer;
 	cmd.commandType = CommandType_FindFiles;
@@ -2338,6 +2371,9 @@ Client::Connection::sendFindFiles(const wchar_t* dirAndWildcard, Vector<NameAndF
 bool
 Client::Connection::sendGetFileAttributes(const wchar_t* path, FileInfo& outInfo, uint& outAttributes, uint& outError)
 {
+	++m_stats.netFileInfoCount;
+	TimerScope _(m_stats.netFileInfoTime);
+
 	char buffer[MaxPath*2 + sizeof(GetFileInfoCommand)+1];
 	auto& cmd = *(GetFileInfoCommand*)buffer;
 	cmd.commandType = CommandType_GetFileInfo;
