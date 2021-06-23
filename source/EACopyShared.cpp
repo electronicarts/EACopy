@@ -553,7 +553,7 @@ void logScopeLeave()
 
 const wchar_t* getPadding(const wchar_t* name)
 {
-	return L"              " + wcslen(name);
+	return L"                     " + wcslen(name);
 }
 
 void addCount(wchar_t* buf, uint offset, uint count)
