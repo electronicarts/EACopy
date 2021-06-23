@@ -1780,13 +1780,25 @@ Client::createConnection(const wchar_t* networkPath, uint connectionIndex, Clien
 
 	{
 		// If we need to use security file we only want to do that once (and for the rest of the connections provide it in the environment command)
-		if (useSecurityFile)
-			m_secretGuidCs.enter();
-		ScopeGuard secretGuidCsGuard([&] { if (useSecurityFile) m_secretGuidCs.leave(); });
+		ScopedCriticalSection cs(m_secretGuidCs);
 		Guid zeroGuid = {0};
-		bool hasSecretGuid = (!useSecurityFile) || m_secretGuid != zeroGuid;
+		bool hasSecretGuid = m_secretGuid != zeroGuid;
 		if (hasSecretGuid)
-			secretGuidCsGuard.execute();
+		{
+			cs.leave();
+		}
+		else if (!useSecurityFile)
+		{
+			// If no security is set, let the client create a guid that can be used on server side to identify which connections belonging to which client
+			static_assert(sizeof(GUID) == sizeof(Guid), "GUID and Guid are not matching");
+			if (CoCreateGuid((GUID*)&m_secretGuid) != S_OK)
+			{
+				logErrorf(L"CoCreateGuid - Failed to create filename guid");
+				return nullptr;
+			}
+			hasSecretGuid = true;
+			cs.leave();
+		}
 
 
 		// Send environment command
