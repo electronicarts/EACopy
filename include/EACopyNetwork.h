@@ -111,7 +111,8 @@ enum WriteResponse : u8
 	WriteResponse_Odx,
 	WriteResponse_Skip,
 	WriteResponse_Hash,
-	WriteResponse_BadDestination // Must be last!
+	WriteResponse_BadDestination, // Must be last!
+	WriteResponseCount = WriteResponse_BadDestination
 };
 
 struct ReadFileCommand : Command
