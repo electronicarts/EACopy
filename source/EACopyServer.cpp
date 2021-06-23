@@ -329,12 +329,15 @@ Server::connectionThread(ConnectionInfo& info)
 			q.erase(std::find(q.begin(), q.end(), &info));
 		});
 
+	ActiveSession* activeSession = nullptr;
+
 	Guid zeroGuid = {0};
 	Guid secretGuid = {0};
 	ScopeGuard removeSecretGuid([&]()
 		{
-			ScopedCriticalSection cs(m_validSecretGuidsCs);
-			m_validSecretGuids.erase(secretGuid);
+			ScopedCriticalSection cs(m_activeSessionsCs);
+			if (activeSession && --activeSession->connectionCount == 0)
+				m_activeSessions.erase(secretGuid);
 		});
 
 	// Receive until the peer shuts down the connection
@@ -376,6 +379,7 @@ Server::connectionThread(ConnectionInfo& info)
 			case CommandType_Environment:
 				{
 					auto& cmd = *(const EnvironmentCommand*)recvBuffer;
+					secretGuid = cmd.secretGuid;
 
 					logScopeEnter();
 					logDebugLinef(L"--- Connection %u opened ---", info.socket.index);
@@ -399,9 +403,14 @@ Server::connectionThread(ConnectionInfo& info)
 						{
 							// Connection provided secretGuid, check against table of valid secretGuids
 
-							bool isValid;
-							m_validSecretGuidsCs.scoped([&]() { isValid = m_validSecretGuids.find(cmd.secretGuid) != m_validSecretGuids.end(); });
-							if (!isValid)
+							ScopedCriticalSection _(m_activeSessionsCs);
+							auto findIt = m_activeSessions.find(cmd.secretGuid);
+							if (findIt != m_activeSessions.end())
+							{
+								activeSession = &(findIt->second);
+								++activeSession->connectionCount;
+							}
+							else
 							{
 								logInfoLinef(L"Connection is providing invalid secret guid.. disconnect");
 								return -1;
@@ -445,7 +454,17 @@ Server::connectionThread(ConnectionInfo& info)
 							if (!createFile(securityFilePath.c_str(), fileInfo, &secretGuid, ioStats, true, true))
 								return -1;
 
-							m_validSecretGuidsCs.scoped([&]() { m_validSecretGuids.insert(secretGuid); });
+							{
+								ScopedCriticalSection _(m_activeSessionsCs);
+								auto insres = m_activeSessions.insert({secretGuid, {}});
+								if (!insres.second)
+								{
+									logErrorf(L"Failed to start new session. Session has already been started by other connection. Something is wrong.");
+									return -1;
+								}
+								activeSession = &insres.first->second;
+								++activeSession->connectionCount;
+							}
 
 							if (!sendData(info.socket, &filenameGuid, sizeof(filenameGuid)))
 								return -1;
@@ -460,6 +479,13 @@ Server::connectionThread(ConnectionInfo& info)
 								return -1;
 							}
 						}
+					}
+					else
+					{
+						ScopedCriticalSection _(m_activeSessionsCs);
+						auto insres = m_activeSessions.insert({secretGuid, {}});
+						activeSession = &insres.first->second;
+						++activeSession->connectionCount;
 					}
 
 					isValidEnvironment  = true;
@@ -500,7 +526,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					WriteResponse writeResponse = (isServerPathExternal && cmd.writeType != WriteFileType_Compressed) ? WriteResponse_CopyUsingSmb : WriteResponse_Copy;
 
-					if (!localFile.name.empty())
+					if (!localFile.name.empty() && cmd.info.fileSize >= info.settings.useLinksThreshold)
 					{
 						// File has already been copied, if the old copied file still has the same attributes as when it was copied we create a link to it
 						FileInfo localFileInfo;
@@ -527,7 +553,7 @@ Server::connectionThread(ConnectionInfo& info)
 							*/
 							{
 								bool skip;
-								if (cmd.info.fileSize >= info.settings.useLinksThreshold && createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
+								if (createFileLink(fullPath.c_str(), cmd.info, localFile.name.c_str(), skip, ioStats))
 								{
 									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
 								}
@@ -544,12 +570,20 @@ Server::connectionThread(ConnectionInfo& info)
 					else
 					{
 						// Check if file already exists at destination and has same attributes, in that case, skip copy
-						FileInfo other;
-						uint attributes = getFileInfo(other, fullPath.c_str(), ioStats);
-						if (attributes && equals(cmd.info, other))
+						// If directory was created by session we don't have to check because we know it doesnt exist (if it is because of someone else writing it is not the end of the world.
+						const wchar_t* lastSlash = wcsrchr(fullPath.c_str(), '\\');
+						WString directory(fullPath.c_str(), lastSlash + 1);
+						bool dirCreatedBySession;
+						activeSession->createdDirsCs.scoped([&]() { dirCreatedBySession = activeSession->createdDirs.find(directory) != activeSession->createdDirs.end(); });
+						if (!dirCreatedBySession)
 						{
-							hash = localFile.hash;
-							writeResponse = WriteResponse_Skip;
+							FileInfo other;
+							uint attributes = getFileInfo(other, fullPath.c_str(), ioStats);
+							if (attributes && equals(cmd.info, other))
+							{
+								hash = localFile.hash;
+								writeResponse = WriteResponse_Skip;
+							}
 						}
 					}
 
@@ -832,7 +866,10 @@ Server::connectionThread(ConnectionInfo& info)
 						WString fullPath = serverPath + cmd.path;
 						FilesSet createdDirs;
 						if (ensureDirectory(fullPath.c_str(), ioStats, false, true, &createdDirs))
+						{
 							createDirResponse = CreateDirResponse_SuccessExisted + (u8)min(createdDirs.size(), 200); // is not the end of the world if 201 was created but 200 was reported
+							activeSession->createdDirsCs.scoped([&]() { activeSession->createdDirs.insert(createdDirs.begin(), createdDirs.end()); });
+						}
 					}
 					else
 						createDirResponse = CreateDirResponse_BadDestination;

@@ -11,7 +11,7 @@ namespace eacopy
 
 enum : uint {
 	ServerMajorVersion = 1,
-	ServerMinorVersion = 6,
+	ServerMinorVersion = 7,
 };
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 
@@ -71,10 +71,11 @@ private:
 	FileDatabase	m_database;
 
 	struct			GuidLess { bool operator()(const Guid& a, const Guid& b) const { return memcmp(&a, &b, sizeof(Guid)) < 0; } };
-	using			GuidSet = Set<Guid, GuidLess>;
+	struct			ActiveSession;
+	using			ActiveSessions = std::map<Guid, ActiveSession, GuidLess>;
 
-	GuidSet			m_validSecretGuids;
-	CriticalSection m_validSecretGuidsCs;
+	ActiveSessions	m_activeSessions;
+	CriticalSection m_activeSessionsCs;
 
 	u64				m_startTime;
 	bool			m_isConsole = false;
@@ -112,6 +113,13 @@ struct Server::ConnectionInfo
 	Thread* thread = nullptr;
 	Socket socket;
 	WString remoteIp;
+};
+
+struct Server::ActiveSession
+{
+	uint connectionCount = 0;
+	CriticalSection createdDirsCs;
+	FilesSet createdDirs;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
