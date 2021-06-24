@@ -2461,6 +2461,94 @@ FileDatabase::primeWait(IOStats& ioStats)
 	return true;
 }
 
+constexpr u8 linkDbCookie[] = "eacopydb001";
+
+void
+FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
+{
+	Log dummyLog;
+	LogContext mutedLog(dummyLog);
+	mutedLog.mute();
+
+	FileHandle handle;
+	if (!openFileRead(fullPath, handle, ioStats, true))
+		return;
+	ScopeGuard fileGuard([&]() { closeFile(fullPath, handle, AccessType_Read, ioStats); });
+
+	u64 read = 0;
+	u8 readCookie[sizeof(linkDbCookie)];
+	if (!eacopy::readFile(fullPath, handle, readCookie, sizeof(readCookie), read, ioStats))
+		return;
+
+	if (memcmp(readCookie, linkDbCookie, sizeof(readCookie)) != 0)
+		return;
+
+	while (true)
+	{
+		u64 read = 0;
+
+		u16 fullNameLen;
+		if (!eacopy::readFile(fullPath, handle, &fullNameLen, sizeof(fullNameLen), read, ioStats) || read != sizeof(fullNameLen))
+			return;
+		u8 nameBuffer[MaxPath];
+		if (!eacopy::readFile(fullPath, handle, nameBuffer, fullNameLen, read, ioStats) || read != fullNameLen)
+			return;
+		nameBuffer[fullNameLen] = 0;
+		nameBuffer[fullNameLen+1] = 0;
+		WString fullFileName = (wchar_t*)nameBuffer;
+
+		const wchar_t* fileName = fullFileName.c_str();
+		if (auto lastSlashIndex = fullFileName.find_last_of(L'\\'))
+			 fileName += lastSlashIndex + 1;
+
+		FileKey key { fileName };
+
+		if (!eacopy::readFile(fullPath, handle, &key.fileSize, sizeof(key.fileSize), read, ioStats) || read != sizeof(key.fileSize))
+			return;
+		if (!eacopy::readFile(fullPath, handle, &key.lastWriteTime, sizeof(key.lastWriteTime), read, ioStats) || read != sizeof(key.lastWriteTime))
+			return;
+
+		Hash hash;
+		if (!eacopy::readFile(fullPath, handle, &hash, sizeof(hash), read, ioStats) || read != sizeof(hash))
+			return;
+
+		addToLocalFilesHistory(key, hash, fullFileName);
+	}
+}
+
+void
+FileDatabase::writeFile(const wchar_t* fullPath, IOStats& ioStats)
+{
+	FileHandle handle;
+	if (!openFileWrite(fullPath, handle, ioStats, true))
+		return;
+	ScopeGuard fileGuard([&]() { closeFile(fullPath, handle, AccessType_Write, ioStats); });
+
+	if (!eacopy::writeFile(fullPath, handle, linkDbCookie, sizeof(linkDbCookie), ioStats))
+		return;
+
+	// Write in history order, oldest should be first so it gets picked up in the same way
+	for (auto& key : m_localFilesHistory)
+	{
+		auto findIt = m_localFiles.find(key);
+		WString& fullFileName = findIt->second.name;
+		Hash hash = findIt->second.hash;
+
+		u16 nameLen = fullFileName.size() * 2; // wchar
+		if (!eacopy::writeFile(fullPath, handle, &nameLen, sizeof(nameLen), ioStats))
+			return;
+		if (!eacopy::writeFile(fullPath, handle, fullFileName.c_str(), nameLen, ioStats))
+			return;
+		if (!eacopy::writeFile(fullPath, handle, &key.fileSize, sizeof(key.fileSize), ioStats))
+			return;
+		if (!eacopy::writeFile(fullPath, handle, &key.lastWriteTime, sizeof(key.lastWriteTime), ioStats))
+			return;
+		if (!eacopy::writeFile(fullPath, handle, &hash, sizeof(hash), ioStats))
+			return;
+	}
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 HashContext::HashContext(u64& time, u64& count)

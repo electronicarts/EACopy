@@ -27,6 +27,7 @@ enum { MaxPath = 4096 }; // Max path for EACopy
 // Types
 
 using								u8			= unsigned char;
+using								u16			= unsigned short;
 #if defined(_WIN32)
 using								uint		= unsigned long;
 #else
@@ -326,6 +327,9 @@ public:
 	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool flush);
 	bool			primeUpdate(IOStats& ioStats);
 	bool			primeWait(IOStats& ioStats);
+
+	void			readFile(const wchar_t* fullPath, IOStats& ioStats);
+	void			writeFile(const wchar_t* fullPath, IOStats& ioStats);
 
 	CriticalSection	m_primeDirsCs;
 	PrimeDirs		m_primeDirs;
