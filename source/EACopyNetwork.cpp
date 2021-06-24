@@ -221,6 +221,7 @@ bool receiveData(Socket& socket, void* buffer, uint size, bool closeIsError)
 				logErrorf(L"recv failed. Connection closed");
 			else
 				logDebugLinef(L"Connection closed");
+			closeSocket(socket);
 			return false;
 		}
 
