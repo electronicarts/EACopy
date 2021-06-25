@@ -64,6 +64,8 @@ void printHelp()
 	#endif
 	logInfoLinef();
 	logInfoLinef(L"    /LINK [dir]... :: will try to create file links when files are the same. Provide extra dirs to link to");
+	logInfoLinef(L"      /LINKDB file :: will parse file containing link database");
+	logInfoLinef(L"    /LINKMIN:bytes :: Disable links for files smaller than bytes size.");
 	logInfoLinef(L"          /OFFLOAD :: when link fails it will try using odx between link source and dest.");
 	logInfoLinef(L"       /SYSTEMCOPY :: copy files using ::CopyFile instead of an hand-rolled read->write loop.");
 	logInfoLinef();
@@ -227,10 +229,21 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		{
 			activeCommand = L"OF";
 		}
-		else if (startsWithIgnoreCase(arg, L"/LINK"))
+		else if (equalsIgnoreCase(arg, L"/LINK"))
 		{
-			outSettings.useFileLinks = true;
+			if (outSettings.useLinksThreshold == ~u64(0))
+				outSettings.useLinksThreshold = 0;
 			activeCommand = L"LINK";
+		}
+		else if (equalsIgnoreCase(arg, L"/LINKDB"))
+		{
+			if (outSettings.useLinksThreshold == ~u64(0))
+				outSettings.useLinksThreshold = 0;
+			activeCommand = L"LINKDB";
+		}
+		else if (startsWithIgnoreCase(arg, L"/LINKMIN:"))
+		{
+			outSettings.useLinksThreshold = _wtoi(arg + 10);
 		}
 		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
 		{
@@ -332,6 +345,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 			else if (equalsIgnoreCase(activeCommand, L"link"))
 			{
 				outSettings.additionalLinkDirectories.push_back(getCleanedupPath(arg));
+			}
+			else if (equalsIgnoreCase(activeCommand, L"linkdb"))
+			{
+				outSettings.linkDatabaseFile = arg;
 			}
 			else if (equalsIgnoreCase(activeCommand, L"OF"))
 			{
@@ -532,6 +549,8 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"NetFindFiles", stats.netFindFilesTime, stats.netFindFilesCount);
 		populateStatsTime(statsVec, L"NetCreateDir", stats.netCreateDirTime, stats.netCreateDirCount);
 		populateStatsTime(statsVec, L"NetFileInfo", stats.netFileInfoTime, stats.netFileInfoCount);
+		populateStatsTime(statsVec, L"ReadLinkDb", stats.readLinkDbTime, 0);
+		populateStatsTime(statsVec, L"WriteLinkDb", stats.writeLinkDbTime, 0);
 
 		logInfoLinef();
 		logInfoStats(statsVec);

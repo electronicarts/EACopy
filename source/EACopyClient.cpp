@@ -152,6 +152,12 @@ Client::process(Log& log, ClientStats& outStats)
 	// Help out flush out all primed directories
 	m_fileDatabase.primeWait(outStats.ioStats);
 
+	if (!m_settings.linkDatabaseFile.empty())
+	{
+		TimerScope _(outStats.readLinkDbTime);
+		m_fileDatabase.readFile(m_settings.linkDatabaseFile.c_str(), outStats.ioStats);
+	}
+
 	{
 		// Traverse through and collect all files that needs copying (worker threads will handle copying). This code will also generate destination directories needed.
 		if (!m_settings.filesOrWildcardsFiles.empty())
@@ -218,6 +224,11 @@ Client::process(Log& log, ClientStats& outStats)
 	sourceConnectionCleanup.execute();
 	destConnectionCleanup.execute();
 
+	if (!m_settings.linkDatabaseFile.empty())
+	{
+		TimerScope _(outStats.writeLinkDbTime);
+		m_fileDatabase.writeFile(m_settings.linkDatabaseFile.c_str(), outStats.ioStats);
+	}
 
 	// Merge stats from all threads
 	for (auto& threadData : workerThreadDataList)
@@ -231,11 +242,10 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.linkSize += threadStats.linkSize;
 		outStats.serverAttempt |= threadStats.serverAttempt;
 
-		//outStats.copyTime += threadStats.copyTime; // Only use main thread for time
-		//outStats.skipTime += threadStats.skipTime; // Only use main thread for time
-		//outStats.linkTime += threadStats.linkTime; // Only use main thread for time
-		//outStats.createDirTime += threadStats.createDirTime; // Only use main thread for time
-		//outStats.purgeTime += threadStats.purgeTime; // Only use main thread for time
+		outStats.copyTime = max(outStats.copyTime, threadStats.copyTime);
+		outStats.skipTime = max(outStats.skipTime, threadStats.skipTime);
+		outStats.linkTime = max(outStats.linkTime, threadStats.linkTime);
+		outStats.purgeTime = max(outStats.purgeTime, threadStats.purgeTime);
 
 		outStats.createDirCount += threadStats.createDirCount;
 		outStats.compressTime += threadStats.compressTime;
@@ -416,6 +426,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		return false;
 	}
 
+	bool useLinks = entry.srcInfo.fileSize >= m_settings.useLinksThreshold;
+
 	// Get full destination path
 	WString fullDst = m_settings.destDirectory + entry.dst;
 
@@ -423,7 +435,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 	int retryCountLeft = m_settings.retryCount;
 	while (true)
 	{
-		if (m_settings.useFileLinks)
+		if (useLinks)
 		{
 			u64 startTime = getTime();
 
@@ -432,8 +444,16 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			FileDatabase::FileRec localFile = m_fileDatabase.getRecord(key);
 			if (!localFile.name.empty())
 			{
-				bool skip;
-				if (createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats))
+				FileInfo localFileInfo;
+				uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), stats.ioStats);
+				bool linkIsValid = attributes && equals(entry.srcInfo, localFileInfo);
+				bool skip = false;
+
+				// Link happens to be the same as destination and up-to-date, skip it
+				if (linkIsValid && localFile.name == fullDst)
+					skip = true;
+
+				if (skip || (linkIsValid && createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats)))
 				{
 					if (skip)
 					{
@@ -451,6 +471,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						++stats.linkCount;
 						stats.linkSize += entry.srcInfo.fileSize;
 					}
+
+					m_fileDatabase.addToLocalFilesHistory(key, localFile.hash, fullDst);
 					return true;
 				}
 				else if (m_settings.useOdx) // Try to use ODX
@@ -463,6 +485,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						stats.copyTime += getTime() - startTime;
 						++stats.copyCount;
 						stats.copySize += written;
+
+						m_fileDatabase.addToLocalFilesHistory(key, localFile.hash, fullDst);
 						return true;
 					}
 				}
@@ -536,6 +560,16 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		}
 		else
 		{
+			auto addToDatabase = [&]()
+			{
+				if (useLinks)
+				{
+					WString fileName = fullDst.substr(fullDst.find_last_of(L'\\') + 1);
+					FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
+					m_fileDatabase.addToLocalFilesHistory(key, Hash(), fullDst);
+				}
+			};
+
 			u64 startTime = getTime();
 
 			bool useSystemCopy = m_settings.useSystemCopy || (m_settings.useOdx && !isLocalPath(m_settings.destDirectory.c_str()) && !isLocalPath(m_settings.sourceDirectory.c_str()));
@@ -554,6 +588,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					stats.copyTime += getTime() - startTime;
 					++stats.copyCount;
 					stats.copySize += written;
+
+					addToDatabase();
 					return true;
 				}
 
@@ -582,6 +618,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					++stats.skipCount;
 					stats.skipSize += destInfo.fileSize;
 
+					addToDatabase();
 					return true;
 				}
 
@@ -601,6 +638,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					++stats.copyCount;
 					stats.copySize += written;
 
+					addToDatabase();
 					return true;
 				}
 			}

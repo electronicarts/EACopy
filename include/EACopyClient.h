@@ -10,7 +10,7 @@ namespace eacopy
 
 enum : uint {
 	ClientMajorVersion = 1,
-	ClientMinorVersion = 7
+	ClientMinorVersion = 8
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -53,10 +53,11 @@ struct ClientSettings
 	UseBufferedIO		useBufferedIO				= UseBufferedIO_Auto;
 	bool				replaceSymLinksAtDestination= true; // When writing to destination and a directory is a symlink we remove symlink and create real directory
 	bool				useOptimizedWildCardFileSearch = true;
-	bool				useFileLinks				= false;
+	u64					useLinksThreshold			= ~u64(0);
 	bool				useOdx						= false;
 	bool				useSystemCopy				= false;
 	StringList			additionalLinkDirectories;
+	WString				linkDatabaseFile;
 };
 
 
@@ -99,6 +100,9 @@ struct ClientStats
 	u64					netCreateDirCount			= 0;
 	u64					netFileInfoTime				= 0;
 	u64					netFileInfoCount			= 0;
+
+	u64					readLinkDbTime				= 0;
+	u64					writeLinkDbTime				= 0;
 
 	IOStats				ioStats;
 
