@@ -48,7 +48,7 @@ void printHelp()
 	logInfoLinef(L"         /UNSECURE :: Will not check if client has access to network path using smb.");
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
 	logInfoLinef(L"          /NOLINKS :: Disables hard links.");
-	logInfoLinef(L"   /MINLINKS:bytes :: Disable links for files smaller than size bytes.");
+	logInfoLinef(L"    /LINKMIN:bytes :: Disable links for files smaller than bytes size.");
 	logInfoLinef(L"    /LINK [dir]... :: Will prepopulate file database with files that can be linked to");
 	logInfoLinef(L"          /OFFLOAD :: Let server do local copying as fallback when link fails.");
 	logInfoLinef();
@@ -100,7 +100,7 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		{
 			outSettings.useLinksThreshold = ~u64(0);
 		}
-		else if (startsWithIgnoreCase(arg, L"/MINLINKS:"))
+		else if (startsWithIgnoreCase(arg, L"/LINKMIN:"))
 		{
 			outSettings.useLinksThreshold = _wtoi(arg + 10);
 		}
