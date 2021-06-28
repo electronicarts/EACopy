@@ -557,12 +557,17 @@ Server::connectionThread(ConnectionInfo& info)
 								{
 									writeResponse = skip ? WriteResponse_Skip : WriteResponse_Link;
 								}
-								else if (info.settings.useOdx)
+								else
 								{
-									bool existed = false;
-									u64 bytesCopied;
-									if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
-										writeResponse = WriteResponse_Odx;
+									logContext.resetLastError(); // We want to handle failing links as non-error and fallback to normal copying
+
+									if (info.settings.useOdx)
+									{
+										bool existed = false;
+										u64 bytesCopied;
+										if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
+											writeResponse = WriteResponse_Odx;
+									}
 								}
 							}
 						}
