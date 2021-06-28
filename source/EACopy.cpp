@@ -330,9 +330,12 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 				if (wchar_t* colon = wcschr(arg, L':'))
 				{
 					*colon = 0;
+					outSettings.serverAddress = arg;
+					*colon = L':';
 					outSettings.serverPort = wtoi(colon + 1);
 				}
-				outSettings.serverAddress = arg;
+				else
+					outSettings.serverAddress = arg;
 			}
 			else if (equalsIgnoreCase(activeCommand, L"XF"))
 			{
@@ -549,8 +552,9 @@ int main(int argc, char* argv_[])
 		populateStatsTime(statsVec, L"NetFindFiles", stats.netFindFilesTime, stats.netFindFilesCount);
 		populateStatsTime(statsVec, L"NetCreateDir", stats.netCreateDirTime, stats.netCreateDirCount);
 		populateStatsTime(statsVec, L"NetFileInfo", stats.netFileInfoTime, stats.netFileInfoCount);
-		populateStatsTime(statsVec, L"ReadLinkDb", stats.readLinkDbTime, 0);
-		populateStatsTime(statsVec, L"WriteLinkDb", stats.writeLinkDbTime, 0);
+		populateStatsTime(statsVec, L"ReadLinkDb", stats.readLinkDbTime, stats.readLinkDbEntries);
+		populateStatsTime(statsVec, L"WriteLinkDb", stats.writeLinkDbTime, stats.writeLinkDbEntries);
+		populateStatsTime(statsVec, L"RETRY", stats.retryTime, stats.retryCount);
 
 		logInfoLinef();
 		logInfoStats(statsVec);
