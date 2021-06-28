@@ -2301,9 +2301,9 @@ FileKey::operator<(const FileKey& o) const
 FileDatabase::FileRec
 FileDatabase::getRecord(const FileKey& key)
 {
-	ScopedCriticalSection cs(m_localFilesCs);
-	auto findIt = m_localFiles.find(key);
-	if (findIt != m_localFiles.end())
+	ScopedCriticalSection cs(m_filesCs);
+	auto findIt = m_files.find(key);
+	if (findIt != m_files.end())
 		return findIt->second;
 	return FileRec();
 }
@@ -2311,8 +2311,8 @@ FileDatabase::getRecord(const FileKey& key)
 FileDatabase::FileRec
 FileDatabase::getRecord(const Hash& hash)
 {
-	auto findIt = m_localFileHashes.find(hash);
-	if (findIt != m_localFileHashes.end())
+	auto findIt = m_fileHashes.find(hash);
+	if (findIt != m_fileHashes.end())
 		return *findIt->second;
 	return {};
 }
@@ -2320,17 +2320,17 @@ FileDatabase::getRecord(const Hash& hash)
 uint
 FileDatabase::getHistorySize()
 {
-	ScopedCriticalSection cs(m_localFilesCs);
-	return (uint)m_localFiles.size();
+	ScopedCriticalSection cs(m_filesCs);
+	return (uint)m_files.size();
 }
 
 bool
 FileDatabase::findFileForDeltaCopy(WString& outFile, const FileKey& key)
 {
-	ScopedCriticalSection cs(m_localFilesCs);
+	ScopedCriticalSection cs(m_filesCs);
 	FileKey searchKey { key.name, 0, 0 };
-	auto searchIt = m_localFiles.lower_bound(searchKey);
-	while (searchIt != m_localFiles.end())
+	auto searchIt = m_files.lower_bound(searchKey);
+	while (searchIt != m_files.end())
 	{
 		if (searchIt->first.name != key.name)
 			return false;
@@ -2343,35 +2343,35 @@ FileDatabase::findFileForDeltaCopy(WString& outFile, const FileKey& key)
 void
 FileDatabase::addToLocalFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName)
 {
-	ScopedCriticalSection cs(m_localFilesCs);
-	auto insres = m_localFiles.insert({key, FileRec()});
+	ScopedCriticalSection cs(m_filesCs);
+	auto insres = m_files.insert({key, FileRec()});
 	if (!insres.second)
-		m_localFilesHistory.erase(insres.first->second.historyIt);
-	m_localFilesHistory.push_back(key);
+		m_filesHistory.erase(insres.first->second.historyIt);
+	m_filesHistory.push_back(key);
 	FileRec& rec = insres.first->second;
 	rec.name = fullFileName;
 	rec.hash = hash;
-	rec.historyIt = --m_localFilesHistory.end();
+	rec.historyIt = --m_filesHistory.end();
 	if (isValid(hash))
-		m_localFileHashes[hash] = &rec;
+		m_fileHashes[hash] = &rec;
 }
 
 uint
 FileDatabase::garbageCollect(uint maxHistory)
 {
-	ScopedCriticalSection cs(m_localFilesCs);
-	if (m_localFilesHistory.size() < maxHistory)
+	ScopedCriticalSection cs(m_filesCs);
+	if (m_filesHistory.size() < maxHistory)
 		return 0;
-	uint removeCount = (uint)m_localFilesHistory.size() - maxHistory;
+	uint removeCount = (uint)m_filesHistory.size() - maxHistory;
 	uint it = removeCount;
 	while (it--)
 	{
-		auto findIt = m_localFiles.find(m_localFilesHistory.front());
-		auto hashFindIt = m_localFileHashes.find(findIt->second.hash);
+		auto findIt = m_files.find(m_filesHistory.front());
+		auto hashFindIt = m_fileHashes.find(findIt->second.hash);
 		if (hashFindIt->second == &findIt->second)
-			m_localFileHashes.erase(hashFindIt);
-		m_localFiles.erase(findIt);
-		m_localFilesHistory.pop_front();
+			m_fileHashes.erase(hashFindIt);
+		m_files.erase(findIt);
+		m_filesHistory.pop_front();
 	}
 	return removeCount;
 }
@@ -2534,9 +2534,9 @@ FileDatabase::writeFile(const wchar_t* fullPath, IOStats& ioStats)
 		return;
 
 	// Write in history order, oldest should be first so it gets picked up in the same way
-	for (auto& key : m_localFilesHistory)
+	for (auto& key : m_filesHistory)
 	{
-		auto findIt = m_localFiles.find(key);
+		auto findIt = m_files.find(key);
 		WString& fullFileName = findIt->second.name;
 		Hash hash = findIt->second.hash;
 

@@ -335,10 +335,10 @@ public:
 	PrimeDirs		m_primeDirs;
 	uint			m_primeActive = 0;
 
-	FilesMap		m_localFiles;
-	FilesHashMap	m_localFileHashes;
-	FilesHistory	m_localFilesHistory;
-	CriticalSection	m_localFilesCs;
+	FilesMap		m_files;
+	FilesHashMap	m_fileHashes;
+	FilesHistory	m_filesHistory;
+	CriticalSection	m_filesCs;
 };
 
 
