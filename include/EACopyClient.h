@@ -10,7 +10,7 @@ namespace eacopy
 
 enum : uint {
 	ClientMajorVersion = 1,
-	ClientMinorVersion = 8
+	ClientMinorVersion = 9
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -78,6 +78,7 @@ struct ClientStats
 	u64					createDirCount				= 0;
 	u64					failCount					= 0;
 	u64					retryCount					= 0;
+	u64					retryTime					= 0;
 	u64					connectTime					= 0;
 	u64					sendTime					= 0;
 	u64					sendSize					= 0;
@@ -102,7 +103,9 @@ struct ClientStats
 	u64					netFileInfoCount			= 0;
 
 	u64					readLinkDbTime				= 0;
+	u64					readLinkDbEntries			= 0;
 	u64					writeLinkDbTime				= 0;
+	u64					writeLinkDbEntries			= 0;
 
 	IOStats				ioStats;
 

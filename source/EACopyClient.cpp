@@ -156,6 +156,7 @@ Client::process(Log& log, ClientStats& outStats)
 	{
 		TimerScope _(outStats.readLinkDbTime);
 		m_fileDatabase.readFile(m_settings.linkDatabaseFile.c_str(), outStats.ioStats);
+		outStats.readLinkDbEntries = m_fileDatabase.getHistorySize();
 	}
 
 	{
@@ -228,6 +229,7 @@ Client::process(Log& log, ClientStats& outStats)
 	{
 		TimerScope _(outStats.writeLinkDbTime);
 		m_fileDatabase.writeFile(m_settings.linkDatabaseFile.c_str(), outStats.ioStats);
+		outStats.writeLinkDbEntries = m_fileDatabase.getHistorySize();
 	}
 
 	// Merge stats from all threads
@@ -257,6 +259,7 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.compressionLevelSum += threadStats.compressionLevelSum;
 		outStats.failCount += threadStats.failCount;
 		outStats.retryCount += threadStats.retryCount;
+		outStats.retryTime += threadStats.retryTime;
 		outStats.connectTime += threadStats.connectTime;
 		outStats.hashCount += threadStats.hashCount;
 		outStats.hashTime += threadStats.hashTime;
@@ -430,65 +433,99 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 
 	// Get full destination path
 	WString fullDst = m_settings.destDirectory + entry.dst;
-
+	 
 	// Try to copy file
 	int retryCountLeft = m_settings.retryCount;
 	while (true)
 	{
+
+		u64 startTime = getTime();
+
+		auto reportSkip = [&]()
+		{
+			if (m_settings.logProgress)
+				logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
+			stats.skipTime += getTime() - startTime;
+			++stats.skipCount;
+			stats.skipSize += entry.srcInfo.fileSize;
+		};
+
 		if (useLinks)
 		{
-			u64 startTime = getTime();
-
 			WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
 			FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
-			FileDatabase::FileRec localFile = m_fileDatabase.getRecord(key);
-			if (!localFile.name.empty())
+			FileDatabase::FileRec dbFile = m_fileDatabase.getRecord(key);
+			if (!dbFile.name.empty())
 			{
-				FileInfo localFileInfo;
-				uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), stats.ioStats);
-				bool linkIsValid = attributes && equals(entry.srcInfo, localFileInfo);
-				bool skip = false;
+				FileInfo dbFileInfo;
+				uint attributes = getFileInfo(dbFileInfo, dbFile.name.c_str(), stats.ioStats);
+				bool isValidSource = attributes && equals(entry.srcInfo, dbFileInfo);
 
-				// Link happens to be the same as destination and up-to-date, skip it
-				if (linkIsValid && localFile.name == fullDst)
-					skip = true;
-
-				if (skip || (linkIsValid && createFileLink(fullDst.c_str(), entry.srcInfo, localFile.name.c_str(), skip, stats.ioStats)))
+				if (isValidSource)
 				{
-					if (skip)
+					// Link happens to be the same as destination and up-to-date, skip it
+					if (dbFile.name == fullDst)
 					{
-						if (m_settings.logProgress)
-							logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-						stats.skipTime += getTime() - startTime;
-						++stats.skipCount;
-						stats.skipSize += entry.srcInfo.fileSize;
+						reportSkip();
+						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst); // Touch db
+						return true;
+					}
+
+					bool skip = false;
+					bool deleteAndRetry = false; // I don't like this default but there is currently a race condition on our build farm where two machines copy same file to same destination and deleting the file cause some problems
+					if (createFileLink(fullDst.c_str(), entry.srcInfo, dbFile.name.c_str(), skip, stats.ioStats, deleteAndRetry))
+					{
+						if (skip)
+						{
+							reportSkip();
+						}
+						else
+						{
+							if (m_settings.logProgress)
+								logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
+							stats.linkTime += getTime() - startTime;
+							++stats.linkCount;
+							stats.linkSize += entry.srcInfo.fileSize;
+						}
+
+						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst);
+						return true;
 					}
 					else
 					{
-						if (m_settings.logProgress)
-							logInfoLinef(L"Link File   %ls", getRelativeSourceFile(entry.src));
-						stats.linkTime += getTime() - startTime;
-						++stats.linkCount;
-						stats.linkSize += entry.srcInfo.fileSize;
+						logContext.resetLastError(); // We want to handle failing links as non-error and fallback to normal copying
+						useLinks = false; // and do not try linking again if copy also fails.. just let copy retry
 					}
+				}				
+			}
+		}
 
-					m_fileDatabase.addToLocalFilesHistory(key, localFile.hash, fullDst);
-					return true;
-				}
-				else if (m_settings.useOdx) // Try to use ODX
+		if (m_settings.useOdx) // Try to use ODX (use system copy call using previous destination as source expecting the system to optimize the copy)
+		{
+			WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
+			FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize };
+			FileDatabase::FileRec dbFile = m_fileDatabase.getRecord(key);
+			if (!dbFile.name.empty())
+			{
+				FileInfo dbFileInfo;
+				uint attributes = getFileInfo(dbFileInfo, dbFile.name.c_str(), stats.ioStats);
+				bool isValidSource = attributes && equals(entry.srcInfo, dbFileInfo); // Check so file is still valid
+				if (isValidSource)
 				{
 					bool useSystemCopy = true; // Must use system copy for odx to potentially work
 					bool existed = false;
 					u64 written;
-					if (copyFile(localFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+					if (copyFile(dbFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 					{
 						stats.copyTime += getTime() - startTime;
 						++stats.copyCount;
 						stats.copySize += written;
 
-						m_fileDatabase.addToLocalFilesHistory(key, localFile.hash, fullDst);
+						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst);
 						return true;
 					}
+					else
+						logContext.resetLastError(); // We want to handle failing odx copy as non-error and fallback to normal copying
 				}
 			}
 		}
@@ -496,7 +533,6 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		// Use connection to server if available
 		if (isValid(destConnection))
 		{
-			u64 startTime = getTime();
 			u64 size;
 			u64 written;
 			bool linked;
@@ -514,18 +550,13 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				}
 				else
 				{
-					if (m_settings.logProgress)
-						logInfoLinef(L"Skip File   %ls", getRelativeSourceFile(entry.src));
-					stats.skipTime += getTime() - startTime;
-					++stats.skipCount;
-					stats.skipSize += size;
+					reportSkip();
 				}
 				return true;
 			}
 		}
 		else if (isValid(sourceConnection))
 		{
-			u64 startTime = getTime();
 			u64 size;
 			u64 read;
 			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
@@ -569,8 +600,6 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					m_fileDatabase.addToLocalFilesHistory(key, Hash(), fullDst);
 				}
 			};
-
-			u64 startTime = getTime();
 
 			bool useSystemCopy = m_settings.useSystemCopy || (m_settings.useOdx && !isLocalPath(m_settings.destDirectory.c_str()) && !isLocalPath(m_settings.sourceDirectory.c_str()));
 			bool tryCopyFirst = m_tryCopyFirst;
@@ -657,6 +686,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		Sleep(m_settings.retryWaitTimeMs);
 
 		++stats.retryCount;
+		stats.retryTime += getTime() - startTime;
 	}
 
 	return true;
@@ -787,9 +817,9 @@ Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConne
 
 					// Reset last error and try again!
 					logContext.resetLastError();
+					TimerScope _(stats.retryTime);
 					logInfoLinef(L"Warning - Failed to create directory %ls, retrying in %i seconds", destFullPath2.c_str(), m_settings.retryWaitTimeMs/1000);
 					Sleep(m_settings.retryWaitTimeMs);
-
 					++stats.retryCount;
 				}
 				++stats.createDirCount;
@@ -947,6 +977,7 @@ Client::handlePath(LogContext& logContext, Connection* sourceConnection, Connect
 
 			// Reset last error and try again!
 			logContext.resetLastError();
+			TimerScope _(stats.retryTime);
 			logInfoLinef(L"Warning - %ls, retrying in %i seconds", errorDesc, m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 
@@ -1068,6 +1099,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 
 			// Reset last error and try again!
 			logContext.resetLastError();
+			TimerScope _(stats.retryTime);
 			logInfoLinef(L"Warning - FindFirstFile %ls failed, retrying in %i seconds", searchStr.c_str(), m_settings.retryWaitTimeMs/1000);
 			Sleep(m_settings.retryWaitTimeMs);
 			++stats.retryCount;
