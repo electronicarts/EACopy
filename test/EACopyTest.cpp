@@ -1063,7 +1063,7 @@ EACOPY_TEST(CopyUsingLink)
 	EACOPY_ASSERT(client.process(clientLog) == 0);
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 
-	clientSettings.useFileLinks = true;
+	clientSettings.useLinksThreshold = 0;
 	clientSettings.additionalLinkDirectories.push_back(testDestDir);
 
 	testDestDir = originalTestDir + L"2\\";
@@ -1096,7 +1096,7 @@ EACOPY_TEST(LinkFileWithVeryLongPath)
 	{
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.copySubdirDepth = 1000;
-		clientSettings.useFileLinks = true;
+		clientSettings.useLinksThreshold = 0;
 		clientSettings.additionalLinkDirectories.push_back(testDestDir + L"1\\" + longPath);
 		testDestDir += L"2\\";
 		clientSettings.destDirectory = testDestDir;
