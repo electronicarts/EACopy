@@ -1571,7 +1571,7 @@ bool createFile(const wchar_t* fullPath, const FileInfo& info, const void* data,
 	return closeFile(fullPath, file, AccessType_Write, ioStats);
 }
 
-bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats)
+bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats, bool deleteAndRetry)
 {
 	outSkip = false;
 	#if defined(_WIN32)
@@ -1602,6 +1602,12 @@ bool createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t
 		{
 			outSkip = true;
 			return true;
+		}
+
+		if (!deleteAndRetry)
+		{
+			logDebugLinef(L"Failed creating hardlink from %ls to %ls: %ls", fullPath, sourcePath, getErrorText(error).c_str());
+			return false;
 		}
 
 		// Delete file and try again

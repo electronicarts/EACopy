@@ -269,7 +269,7 @@ bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTim
 bool					setFilePosition(const wchar_t* fullPath, FileHandle& file, u64 position, IOStats& ioStats);
 bool					closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessType, IOStats& ioStats);
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, IOStats& ioStats, bool useBufferedIO, bool hidden = false);
-bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats);
+bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats, bool deleteAndRetry = true);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile = true);
