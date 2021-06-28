@@ -2341,7 +2341,7 @@ FileDatabase::findFileForDeltaCopy(WString& outFile, const FileKey& key)
 }
 
 void
-FileDatabase::addToLocalFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName)
+FileDatabase::addToFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName)
 {
 	ScopedCriticalSection cs(m_filesCs);
 	auto insres = m_files.insert({key, FileRec()});
@@ -2438,7 +2438,7 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 		else
 		{
 			Hash hash; // TODO: Should use hashes also calculate hash for files?
-			addToLocalFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, hash, directory + fileName);
+			addToFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, hash, directory + fileName);
 		}
 	} 
 	while(findNextFile(fh, fd, ioStats)); 
@@ -2518,7 +2518,7 @@ FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
 		if (!eacopy::readFile(fullPath, handle, &hash, sizeof(hash), read, ioStats) || read != sizeof(hash))
 			return;
 
-		addToLocalFilesHistory(key, hash, fullFileName);
+		addToFilesHistory(key, hash, fullFileName);
 	}
 }
 

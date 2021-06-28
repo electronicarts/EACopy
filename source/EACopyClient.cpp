@@ -467,7 +467,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					if (dbFile.name == fullDst)
 					{
 						reportSkip();
-						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst); // Touch db
+						m_fileDatabase.addToFilesHistory(key, dbFile.hash, fullDst); // Touch db
 						return true;
 					}
 
@@ -488,7 +488,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 							stats.linkSize += entry.srcInfo.fileSize;
 						}
 
-						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst);
+						m_fileDatabase.addToFilesHistory(key, dbFile.hash, fullDst);
 						return true;
 					}
 					else
@@ -521,7 +521,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						++stats.copyCount;
 						stats.copySize += written;
 
-						m_fileDatabase.addToLocalFilesHistory(key, dbFile.hash, fullDst);
+						m_fileDatabase.addToFilesHistory(key, dbFile.hash, fullDst);
 						return true;
 					}
 					else
@@ -597,7 +597,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					WString fileName = fullDst.substr(fullDst.find_last_of(L'\\') + 1);
 					FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
-					m_fileDatabase.addToLocalFilesHistory(key, Hash(), fullDst);
+					m_fileDatabase.addToFilesHistory(key, Hash(), fullDst);
 				}
 			};
 

@@ -652,7 +652,7 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						u64& bytes = writeResponse == WriteResponse_Odx ? m_bytesCopied : (writeResponse != WriteResponse_Skip ? m_bytesLinked : m_bytesSkipped);
 						InterlockedAdd64((LONG64*)&bytes, cmd.info.fileSize);
-						m_database.addToLocalFilesHistory(key, hash, fullPath);
+						m_database.addToFilesHistory(key, hash, fullPath);
 						break;
 					}
 
@@ -687,7 +687,7 @@ Server::connectionThread(ConnectionInfo& info)
 
 					if (success)
 					{
-						m_database.addToLocalFilesHistory(key, hash, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
+						m_database.addToFilesHistory(key, hash, fullPath); // Add newly written file to local file lookup.. if it existed before, make sure to move it to latest history to prevent it from being thrown out
 						InterlockedAdd64((LONG64*)&m_bytesCopied, cmd.info.fileSize);
 						InterlockedAdd64((LONG64*)&m_bytesReceived, totalReceivedSize);
 					}

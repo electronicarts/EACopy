@@ -321,7 +321,7 @@ public:
 	uint			getHistorySize();
 	bool			findFileForDeltaCopy(WString& outFile, const FileKey& key);
 
-	void			addToLocalFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName);
+	void			addToFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName);
 	uint			garbageCollect(uint maxHistory);
 
 	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool flush);
