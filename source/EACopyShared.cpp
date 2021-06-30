@@ -2467,7 +2467,7 @@ FileDatabase::primeWait(IOStats& ioStats)
 	return true;
 }
 
-constexpr u8 linkDbCookie[] = "eacopydb001";
+constexpr u8 linkDbCookie[] = "eacopydb002";
 
 void
 FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
@@ -2484,10 +2484,18 @@ FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
 	u64 read = 0;
 	u8 readCookie[sizeof(linkDbCookie)];
 	if (!eacopy::readFile(fullPath, handle, readCookie, sizeof(readCookie), read, ioStats))
+	{
+		logInfof(L"Failed to read file database cookie from %ls", fullPath);
 		return;
-
+	}
 	if (memcmp(readCookie, linkDbCookie, sizeof(readCookie)) != 0)
+	{
+		logInfof(L"File database cookie mismatch %ls", fullPath);
 		return;
+	}
+
+	ScopeGuard databaseFailGuard([&]() { logInfof(L"Failed to read complete file database (mismatch %ls", fullPath); });
+
 
 	while (true)
 	{
@@ -2496,9 +2504,20 @@ FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
 		u16 fullNameLen;
 		if (!eacopy::readFile(fullPath, handle, &fullNameLen, sizeof(fullNameLen), read, ioStats) || read != sizeof(fullNameLen))
 			return;
+
+		if (fullNameLen == 0) // Terminator
+		{
+			databaseFailGuard.cancel();
+			return;
+		}
+
+		if (fullNameLen+1 >= MaxPath)
+			return;
+
 		u8 nameBuffer[MaxPath];
 		if (!eacopy::readFile(fullPath, handle, nameBuffer, fullNameLen, read, ioStats) || read != fullNameLen)
 			return;
+
 		nameBuffer[fullNameLen] = 0;
 		nameBuffer[fullNameLen+1] = 0;
 		WString fullFileName = (wchar_t*)nameBuffer;
@@ -2553,6 +2572,10 @@ FileDatabase::writeFile(const wchar_t* fullPath, IOStats& ioStats)
 			return;
 	}
 
+	// Terminator
+	u16 nameLen = 0;
+	if (!eacopy::writeFile(fullPath, handle, &nameLen, sizeof(nameLen), ioStats))
+		return;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
