@@ -484,6 +484,21 @@ EACOPY_TEST(OverwriteFirstCopySecondFile)
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo2.txt"));
 }
 
+EACOPY_TEST(SkipChangedFile)
+{
+	createTestFile(L"Foo.txt", 100);
+	createTestFile(L"Foo.txt", 101, false);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.excludeChangedFiles = true;
+	Client client(clientSettings);
+	ClientStats stats;
+	EACOPY_ASSERT(client.process(clientLog, stats) == 0);
+	EACOPY_ASSERT(stats.skipCount == 1);
+	EACOPY_ASSERT(stats.skipSize = 100);
+	EACOPY_ASSERT(!isSourceEqualDest(L"Foo.txt"));
+}
+
 EACOPY_TEST(CopyEmptyDir)
 {
 	ensureDirectory((testSourceDir + L"\\Directory").c_str());

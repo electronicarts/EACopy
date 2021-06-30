@@ -10,7 +10,7 @@ namespace eacopy
 
 enum : uint {
 	ClientMajorVersion = 1,
-	ClientMinorVersion = 9
+	ClientMinorVersion = 10
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -41,6 +41,7 @@ struct ClientSettings
 	bool				flattenDestination			= false;
 	int					copySubdirDepth				= 0;
 	bool				copyEmptySubdirectories		= false;
+	bool				excludeChangedFiles			= false;
 	bool				purgeDestination			= false;
 	UseServer			useServer					= UseServer_Automatic;
 	WString				serverAddress;

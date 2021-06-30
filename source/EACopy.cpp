@@ -43,6 +43,7 @@ void printHelp()
 	logInfoLinef(L"                      options to add additional params. /PURGE only supported");
 	logInfoLinef(L"/IX file [file]... :: same as /I but excluding files/directories instead.");
 	logInfoLinef();
+	logInfoLinef(L"               /XC :: eXclude Changed files.");
 	logInfoLinef(L"/XD dir [dir]...   :: eXclude Directories matching given names/paths/wildcards.");
 	logInfoLinef(L"/XF file [file]... :: eXclude Files matching given names/paths/wildcards.");
 	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards. Only used for FileLists.");
@@ -220,6 +221,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (startsWithIgnoreCase(arg, L"/XF"))
 		{
 			activeCommand = L"XF";
+		}
+		else if (equalsIgnoreCase(arg, L"/XC"))
+		{
+			outSettings.excludeChangedFiles = true;
 		}
 		else if (startsWithIgnoreCase(arg, L"/XD"))
 		{
@@ -449,9 +454,13 @@ int main(int argc, char* argv_[])
 		return res;
 	}
 
+	u64 parseSettingsTime = 0;
 	Settings settings;
-	if (!readSettings(settings, argc, argv))
-		return -1;
+	{
+		TimerScope _(parseSettingsTime);
+		if (!readSettings(settings, argc, argv))
+			return -1;
+	}
 
 	//for (int i=0; i!=argc; ++i)
 	//	logDebugLinef(L"CMD: %ls", argv[i]);
@@ -529,6 +538,7 @@ int main(int argc, char* argv_[])
 		stats.ioStats.writeTime += stats.ioStats.closeWriteTime + stats.ioStats.createWriteTime;
 
 		Vector<WString> statsVec;
+		populateStatsTime(statsVec, L"ParseSettings", parseSettingsTime, 0);
 		populateStatsTime(statsVec, L"ConnectTime", stats.connectTime, 0);
 		populateIOStats(statsVec, stats.ioStats);
 		populateStatsTime(statsVec, L"SendFile", stats.sendTime, 0);

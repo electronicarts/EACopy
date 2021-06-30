@@ -515,7 +515,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					bool useSystemCopy = true; // Must use system copy for odx to potentially work
 					bool existed = false;
 					u64 written;
-					if (copyFile(dbFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+					bool failIfExists = m_settings.excludeChangedFiles;
+					if (copyFile(dbFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 					{
 						stats.copyTime += getTime() - startTime;
 						++stats.copyCount;
@@ -610,7 +611,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			// Try to copy file first without checking if it is there (we optimize for copying new files)
 			if (tryCopyFirst)
 			{
-				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, true, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+				bool failIfExists = true;
+				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -622,9 +624,20 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					return true;
 				}
 
-				// Stop trying to copy first since we found something in target directory and there most likely are more (it is ok this is not thread safe.. it is just an optimization that can take effect later)
-				// A failed copy is way more expensive that a failed "getFileInfo" so this change is to stop trying to copy first
-				m_tryCopyFirst = false;
+				if (m_settings.excludeChangedFiles)
+				{
+					if (existed) // If failure was because file existed, then we're good and can skip
+					{
+						reportSkip();
+						return true;
+					}
+				}
+				else
+				{
+					// Stop trying to copy first since we found something in target directory and there most likely are more (it is ok this is not thread safe.. it is just an optimization that can take effect later)
+					// A failed copy is way more expensive that a failed "getFileInfo" so this change is to stop trying to copy first
+					m_tryCopyFirst = false;
+				}
 			}
 
 			// Handle scenario of failing to copy because target existed or we never tried copy it
@@ -2021,6 +2034,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	auto& cmd = *(WriteFileCommand*)buffer;
 	cmd.commandType = CommandType_WriteFile;
 	cmd.writeType = writeType;
+	//cmd.excludeRules = ; // TODO: IMPLEMENT THIS m_settings.excludeChangedFiles
 	cmd.commandSize = sizeof(cmd) + uint(wcslen(dst)*2);
 	if (!stringCopy(cmd.path, MaxPath, dst))
 	{
@@ -2188,11 +2202,19 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	WString fullDest = m_settings.destDirectory + dst;
 
 	if (uint fileAttributes = getFileInfo(cmd.info, fullDest.c_str(), m_stats.ioStats))
+	{
 		if (fileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
 			logErrorf(L"Trying to copy to file %ls which is a directory", fullDest.c_str());
 			return ReadFileResult_Error;
 		}
+
+		if (m_settings.excludeChangedFiles)
+		{
+			outSize = cmd.info.fileSize;
+			return ReadFileResult_Success;
+		}
+	}
 
 	if (srcInfo.fileSize != 0 && equals(srcInfo, cmd.info))
 	{
