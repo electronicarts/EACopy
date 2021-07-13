@@ -203,7 +203,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/SERVERPORT:"))
 		{
-			outSettings.serverPort = wtoi(arg + 6);
+			outSettings.serverPort = wtoi(arg + 12);
 		}
 		else if (startsWithIgnoreCase(arg, L"/C"))
 		{
@@ -248,7 +248,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/LINKMIN:"))
 		{
-			outSettings.useLinksThreshold = _wtoi(arg + 10);
+			outSettings.useLinksThreshold = _wtoi(arg + 9);
 		}
 		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
 		{

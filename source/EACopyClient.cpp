@@ -216,7 +216,18 @@ Client::process(Log& log, ClientStats& outStats)
 		if (m_createdDirs.find(purgeDir) == m_createdDirs.end()) // We don't need to purge directories we know we created
 		{
 			FileInfo dirInfo;
-			uint dirAttributes = getFileInfo(dirInfo, purgeDir.c_str(), outStats.ioStats);
+			uint dirAttributes;
+			if (isValid(m_destConnection))
+			{
+				uint error = 0;
+				if (!m_destConnection->sendGetFileAttributes(purgeDir.c_str(), dirInfo, dirAttributes, error))
+					return -1;
+				if (error)
+					return -1;
+			}
+			else
+				dirAttributes = getFileInfo(dirInfo, purgeDir.c_str(), outStats.ioStats);
+
 			if (!purgeFilesInDirectory(purgeDir.c_str(), dirAttributes, m_settings.copySubdirDepth, outStats))
 				return -1;
 		}
