@@ -50,6 +50,35 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 		return;
 	}
 
+	char localipBuffer[256];
+	char* localip = nullptr;
+	
+	if (!settings.listenIp.empty())
+	{
+		sprintf_s(localipBuffer, sizeof(localipBuffer), "%ls", settings.listenIp.c_str());
+		localip = localipBuffer;
+	}
+	else
+	{
+		char ac[512];
+		res = gethostname(ac, sizeof(ac));
+		if (res != SOCKET_ERROR)
+		{
+			hostent* phe = gethostbyname(ac);
+			if (phe != 0 && phe->h_addr_list[1]) // More than one ip addresses
+			{
+				logInfoLinef(L"More than one ip address found. Will listen on first ip in list (use /IP:<ipaddress> to use other)");
+				for (int i = 0; phe->h_addr_list[i] != 0; ++i)
+				{
+					in_addr addr;
+					memcpy(&addr, phe->h_addr_list[i], sizeof(in_addr));
+					char* ip = inet_ntoa(addr);
+					logInfoLinef(L"  %i: %hs", i, ip);
+				}
+			}
+		}
+	}
+
 	ScopeGuard cleanup([]() { WSACleanup(); });
 
 	struct addrinfo hints;
@@ -60,16 +89,18 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 	hints.ai_flags = AI_PASSIVE;
 
 	// Resolve the server address and port
+	WString networkServerName;
 	struct addrinfo* result = NULL;
 	char portBuf[256];
 	_itoa_s(settings.listenPort, portBuf, sizeof(portBuf), 10);
-	res = getaddrinfo(NULL, portBuf, &hints, &result);
+	res = getaddrinfo(localip, portBuf, &hints, &result);
 	if (res != 0)
 	{
 		logErrorf(L"getaddrinfo failed with error: %d", res);
 		reportStatus(SERVICE_START_PENDING, -1, 3000);
 		return;
 	}
+
 
 	ScopeGuard addrGuard([result]() { freeaddrinfo(result); });
 

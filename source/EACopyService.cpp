@@ -44,6 +44,7 @@ void printHelp()
 	logInfoLinef(L"             Usage :: EACopyService [options]");
 	logInfoLinef();
 	logInfoLinef(L"              /P:n :: Port that server will listen on (defaults to %i).", DefaultPort);
+	logInfoLinef(L"             /IP:n :: Local ip that server will listen on (defaults to first found).");
 	logInfoLinef(L"             /HASH :: Will use hash of files to try to reduce copying.");
 	logInfoLinef(L"         /UNSECURE :: Will not check if client has access to network path using smb.");
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
@@ -83,6 +84,10 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		if (startsWithIgnoreCase(arg, L"/P:"))
 		{
 			outSettings.listenPort = _wtoi(arg + 3);
+		}
+		else if (startsWithIgnoreCase(arg, L"/IP:"))
+		{
+			outSettings.listenIp = arg + 4;
 		}
 		else if (equalsIgnoreCase(arg, L"/HASH"))
 		{

@@ -26,6 +26,7 @@ struct ServerSettings
 {
 	using			StringList = List<WString>;
 
+	WString			listenIp;
 	uint			listenPort					= DefaultPort;
 	uint			maxHistory					= DefaultHistorySize;
 	bool			useSecurityFile				= true;
