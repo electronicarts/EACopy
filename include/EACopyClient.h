@@ -55,6 +55,7 @@ struct ClientSettings
 	bool				replaceSymLinksAtDestination= true; // When writing to destination and a directory is a symlink we remove symlink and create real directory
 	bool				useOptimizedWildCardFileSearch = true;
 	u64					useLinksThreshold			= ~u64(0);
+	bool				useLinksRelativePath		= true;
 	bool				useOdx						= false;
 	bool				useSystemCopy				= false;
 	StringList			additionalLinkDirectories;
@@ -168,6 +169,7 @@ private:
 	bool				purgeFilesInDirectory(const WString& destPath, uint destPathAttributes, int depthLeft, ClientStats& stats);
 	bool				ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
+	const wchar_t*		getFileKeyPath(const WString& relativePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
 	bool				isIgnoredDirectory(const wchar_t* directory);
 	bool				isValid(Connection* connection);

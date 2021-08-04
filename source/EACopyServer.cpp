@@ -38,7 +38,7 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 		return;
 
 	for (auto& primeDir : settings.additionalLinkDirectories)
-		primeDirectory(primeDir.c_str());
+		primeDirectory(primeDir.c_str(), settings.useLinksRelativePath);
 
 	// Initialize Winsock
 	WSADATA wsaData;
@@ -245,7 +245,7 @@ Server::stop()
 }
 
 bool
-Server::primeDirectory(const wchar_t* directory)
+Server::primeDirectory(const wchar_t* directory, bool useLinksRelativePath)
 {
 	WString serverDir;
 	bool isExternalDir;
@@ -256,7 +256,7 @@ Server::primeDirectory(const wchar_t* directory)
 	if (*serverDir.rbegin() != '\\')
 		serverDir += '\\';
 	IOStats ioStats;
-	return m_database.primeDirectory(serverDir, ioStats, true);
+	return m_database.primeDirectory(serverDir, ioStats, useLinksRelativePath, true);
 }
 
 #define EACOPY_COMMAND(x) L"CMD" L#x,
@@ -544,8 +544,9 @@ Server::connectionThread(ConnectionInfo& info)
 					//logDebugLinef("%ls", fullPath.c_str());
 
 					const wchar_t* fileName = cmd.path;
-					if (const wchar_t* lastSlash = wcsrchr(fileName, '\\'))
-						fileName = lastSlash + 1;
+					if (!info.settings.useLinksRelativePath)
+						if (const wchar_t* lastSlash = wcsrchr(fileName, '\\'))
+							fileName = lastSlash + 1;
 
 					Hash hash;
 
@@ -800,6 +801,11 @@ Server::connectionThread(ConnectionInfo& info)
 						break;
 					}
 
+					const wchar_t* fileName = cmd.path;
+					if (!info.settings.useLinksRelativePath)
+						if (const wchar_t* lastSlash = wcsrchr(fileName, '\\'))
+							fileName = lastSlash + 1;
+
 					ReadResponse readResponse = (isServerPathExternal && cmd.compressionLevel == 0) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
 					if (equals(fi, cmd.info))
 					{
@@ -807,11 +813,11 @@ Server::connectionThread(ConnectionInfo& info)
 					}
 					else if (info.settings.useHash && fi.fileSize == cmd.info.fileSize)  // Check if client's file content actually matches server's.. might only differ in last write time if size is the same
 					{
-						FileKey serverKey{ cmd.path, fi.lastWriteTime, fi.fileSize };
+						FileKey serverKey{ fileName, fi.lastWriteTime, fi.fileSize };
 						Hash serverHash = m_database.getRecord(serverKey).hash;
 						if (isValid(serverHash))
 						{
-							FileKey clientKey{ cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
+							FileKey clientKey{ fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 							Hash hash = m_database.getRecord(clientKey).hash;
 							if (!isValid(hash))
 							{
@@ -831,7 +837,7 @@ Server::connectionThread(ConnectionInfo& info)
 					FileDatabase::FileRec referenceFile;
 					if (cmd.compressionLevel != 0 && info.settings.useDeltaCompression)
 					{
-						FileKey key{ cmd.path, cmd.info.lastWriteTime, cmd.info.fileSize };
+						FileKey key{ fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
 						referenceFile = m_database.getRecord(key);
 						if (!referenceFile.name.empty())
 							readResponse = ReadResponse_CopyDelta;

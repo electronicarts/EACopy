@@ -50,6 +50,7 @@ void printHelp()
 	logInfoLinef(L"        /HISTORY:n :: Max number of files tracked in history (defaults to %i).", DefaultHistorySize);
 	logInfoLinef(L"          /NOLINKS :: Disables hard links.");
 	logInfoLinef(L"    /LINKMIN:bytes :: Disable links for files smaller than bytes size.");
+	logInfoLinef(L"       /LINKBYNAME :: Will link based on name only and skip relative path.");
 	logInfoLinef(L"    /LINK [dir]... :: Will prepopulate file database with files that can be linked to");
 	logInfoLinef(L"          /OFFLOAD :: Let server do local copying as fallback when link fails.");
 	logInfoLinef();
@@ -112,6 +113,10 @@ bool readSettings(ServerSettings& outSettings, WString& outLogFileName, uint arg
 		else if (startsWithIgnoreCase(arg, L"/LINK"))
 		{
 			activeCommand = L"LINK";
+		}
+		else if (equalsIgnoreCase(arg, L"/LINKBYNAME"))
+		{
+			outSettings.useLinksRelativePath = false;
 		}
 		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
 		{

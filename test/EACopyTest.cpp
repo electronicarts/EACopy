@@ -84,9 +84,9 @@ public:
 		}
 	}
 
-	bool primeDirectory(const wchar_t* directory)
+	bool primeDirectory(const wchar_t* directory, bool useLinksRelativePath)
 	{
-		return m_server.primeDirectory(directory);
+		return m_server.primeDirectory(directory, useLinksRelativePath);
 	}
 
 private:
@@ -1112,7 +1112,7 @@ EACOPY_TEST(LinkFileWithVeryLongPath)
 		ClientSettings clientSettings(getDefaultClientSettings());
 		clientSettings.copySubdirDepth = 1000;
 		clientSettings.useLinksThreshold = 0;
-		clientSettings.additionalLinkDirectories.push_back(testDestDir + L"1\\" + longPath);
+		clientSettings.additionalLinkDirectories.push_back(testDestDir + L"1\\");
 		testDestDir += L"2\\";
 		clientSettings.destDirectory = testDestDir;
 		Client client(clientSettings);
@@ -1681,6 +1681,37 @@ EACOPY_TEST(ServerLinkModified)
 	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
 	EACOPY_ASSERT(clientStats.copyCount == 2);
 }
+
+EACOPY_TEST(ServerCopyLinkMatchingByName)
+{
+	createTestFile(L"A\\Foo.txt", 10);
+	createTestFile(L"B\\Foo.txt", 10);
+
+	FileInfo fi;
+	getFileInfo(fi, (testSourceDir + L"A\\Foo.txt").c_str());
+
+	// Make A and B have same last written date
+	auto fileName = (testSourceDir + L"B\\Foo.txt");
+	FileHandle fileHandle;
+	EACOPY_ASSERT(openFileWrite(fileName.c_str(), fileHandle, ioStats, true, nullptr, false, false));
+	EACOPY_ASSERT(setFileLastWriteTime(fileName.c_str(), fileHandle, fi.lastWriteTime, ioStats));
+	EACOPY_ASSERT(closeFile(fileName.c_str(), fileHandle, AccessType_Write, ioStats));
+
+	ServerSettings serverSettings(getDefaultServerSettings());
+	serverSettings.useLinksRelativePath = false;
+	TestServer server(serverSettings, serverLog);
+	server.waitReady();
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.useServer = UseServer_Required;
+	clientSettings.copySubdirDepth = 1;
+	Client client(clientSettings);
+
+	ClientStats clientStats;
+	clientSettings.destDirectory = testDestDir + L"1\\";
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1 && clientStats.linkCount == 1);
+}
 #endif
 
 EACOPY_TEST(CopyFileWithDoubleSlashPath)
@@ -1803,7 +1834,7 @@ EACOPY_TEST(ServerCopyDeltaSmallFileDestIsLocal)
 	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);
 	server.waitReady();
-	EACOPY_ASSERT(server.primeDirectory(wcschr(testSourceDir.c_str() + 2, '\\') + 1));
+	EACOPY_ASSERT(server.primeDirectory(wcschr(testSourceDir.c_str() + 2, '\\') + 1, serverSettings.useLinksRelativePath));
 
 	ClientSettings clientSettings(getDefaultClientSettings());
 	clientSettings.useServer = UseServer_Required;

@@ -262,7 +262,7 @@ bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorO
 bool					deleteAllFiles(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
 bool					openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true, bool sharedRead = true);
-bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFilee, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false);
+bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFilee, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false, bool createAlways = true);
 bool					writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped = nullptr);
 bool					readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats);
 bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime, IOStats& ioStats);
@@ -314,7 +314,8 @@ public:
 	struct			FileRec { WString name; Hash hash;  FilesHistory::iterator historyIt; };
 	using			FilesMap = Map<FileKey, FileRec>;
 	using			FilesHashMap = Map<Hash, FileRec*>;
-	using			PrimeDirs = List<WString>;
+	struct			PrimeDirRec { WString directory; uint rootLen; };
+	using			PrimeDirs = List<PrimeDirRec>;
 
 	FileRec			getRecord(const FileKey& key);
 	FileRec			getRecord(const Hash& hash);
@@ -324,7 +325,7 @@ public:
 	void			addToFilesHistory(const FileKey& key, const Hash& hash, const WString& fullFileName);
 	uint			garbageCollect(uint maxHistory);
 
-	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool flush);
+	bool			primeDirectory(const WString& directory, IOStats& ioStats, bool useRelativePath, bool flush);
 	bool			primeUpdate(IOStats& ioStats);
 	bool			primeWait(IOStats& ioStats);
 

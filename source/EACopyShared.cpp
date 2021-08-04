@@ -1367,7 +1367,7 @@ bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats
 	#endif
 }
 
-bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden)
+bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden, bool createAlways)
 {
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
@@ -1383,7 +1383,8 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 	TimerScope _(ioStats.createWriteTime);
 	WString temp;
 	fullPath = convertToShortPath(fullPath, temp);
-	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, flagsAndAttributes, NULL);
+	DWORD creationDisposition = createAlways ? CREATE_ALWAYS : OPEN_EXISTING;
+	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, creationDisposition, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
 	logErrorf(L"Trying to create file %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());
@@ -2377,10 +2378,10 @@ FileDatabase::garbageCollect(uint maxHistory)
 }
 
 bool
-FileDatabase::primeDirectory(const WString& directory, IOStats& ioStats, bool flush)
+FileDatabase::primeDirectory(const WString& directory, IOStats& ioStats, bool useRelativePath, bool flush)
 {
 	ScopedCriticalSection cs(m_primeDirsCs);
-	m_primeDirs.push_back(directory);
+	m_primeDirs.push_back({directory, useRelativePath ? uint(directory.size()) : 0u});
 	if (!flush)
 		return true;
 	while (primeUpdate(ioStats))
@@ -2391,19 +2392,19 @@ FileDatabase::primeDirectory(const WString& directory, IOStats& ioStats, bool fl
 bool
 FileDatabase::primeUpdate(IOStats& ioStats)
 {
-	WString directory;
+	PrimeDirRec rec;
 	m_primeDirsCs.scoped([&]()
 		{
 			if (!m_primeDirs.empty())
 			{
-				directory = std::move(m_primeDirs.front());
+				rec = std::move(m_primeDirs.front());
 				m_primeDirs.pop_front();
 				++m_primeActive;
 			}
 		});
 
 	// If no new directory queued
-	if (directory.empty())
+	if (rec.directory.empty())
 		return false;
 
 	ScopeGuard activeGuard([this]()
@@ -2412,7 +2413,7 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 		});
 
     FindFileData fd; 
-    WString searchStr = directory + L"*.*";
+    WString searchStr = rec.directory + L"*.*";
 	FindFileHandle fh = findFirstFile(searchStr.c_str(), fd, ioStats);
     if(fh == InvalidFileHandle)
 	{
@@ -2433,12 +2434,15 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 			if (isDotOrDotDot(fileName))
 				continue;
 			ScopedCriticalSection cs(m_primeDirsCs);
-			m_primeDirs.push_back(directory + fileName + L'\\');
+			m_primeDirs.push_back({rec.directory + fileName + L'\\', rec.rootLen});
 		}
 		else
 		{
 			Hash hash; // TODO: Should use hashes also calculate hash for files?
-			addToFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, hash, directory + fileName);
+			WString fullPath = rec.directory + fileName;
+			if (rec.rootLen)
+				fileName = fullPath.c_str() + rec.rootLen;
+			addToFilesHistory({ fileName, fileInfo.lastWriteTime, fileInfo.fileSize }, hash, fullPath);
 		}
 	} 
 	while(findNextFile(fh, fd, ioStats)); 

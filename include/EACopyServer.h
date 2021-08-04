@@ -32,6 +32,7 @@ struct ServerSettings
 	bool			useSecurityFile				= true;
 	bool			useHash						= false;
 	u64				useLinksThreshold			= 0;
+	bool			useLinksRelativePath		= true;
 	bool			useCompression				= true;
 	bool			useDeltaCompression			= true;
 	bool			useOdx						= false;
@@ -60,7 +61,7 @@ public:
 	void			stop();
 
 					// Will parse provided directory and add all found files to history
-	bool			primeDirectory(const wchar_t* directory);
+	bool			primeDirectory(const wchar_t* directory, bool useLinksRelativePath);
 
 private:
 	struct			ConnectionInfo;

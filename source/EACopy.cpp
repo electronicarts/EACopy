@@ -67,6 +67,7 @@ void printHelp()
 	logInfoLinef(L"    /LINK [dir]... :: will try to create file links when files are the same. Provide extra dirs to link to");
 	logInfoLinef(L"      /LINKDB file :: will parse file containing link database");
 	logInfoLinef(L"    /LINKMIN:bytes :: Disable links for files smaller than bytes size.");
+	logInfoLinef(L"       /LINKBYNAME :: Will link based on name only and skip relative path.");
 	logInfoLinef(L"          /OFFLOAD :: when link fails it will try using odx between link source and dest.");
 	logInfoLinef(L"       /SYSTEMCOPY :: copy files using ::CopyFile instead of an hand-rolled read->write loop.");
 	logInfoLinef();
@@ -249,6 +250,10 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (startsWithIgnoreCase(arg, L"/LINKMIN:"))
 		{
 			outSettings.useLinksThreshold = _wtoi(arg + 9);
+		}
+		else if (equalsIgnoreCase(arg, L"/LINKBYNAME"))
+		{
+			outSettings.useLinksRelativePath = false;
 		}
 		else if (equalsIgnoreCase(arg, L"/OFFLOAD"))
 		{

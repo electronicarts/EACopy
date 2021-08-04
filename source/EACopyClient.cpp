@@ -111,7 +111,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 	// Add all link directories to primeQueue
 	for (auto& primeDir : m_settings.additionalLinkDirectories)
-		m_fileDatabase.primeDirectory(primeDir, outStats.ioStats, false);
+		m_fileDatabase.primeDirectory(primeDir, outStats.ioStats, m_settings.useLinksRelativePath, false);
 
 	// Spawn worker threads that will copy the files
 	struct WorkerThreadData { ClientStats stats; Client* client; uint connectionIndex; };
@@ -463,8 +463,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 
 		if (useLinks)
 		{
-			WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
-			FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
+			FileKey key{ getFileKeyPath(entry.dst), entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
 			FileDatabase::FileRec dbFile = m_fileDatabase.getRecord(key);
 			if (!dbFile.name.empty())
 			{
@@ -513,8 +512,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 
 		if (m_settings.useOdx) // Try to use ODX (use system copy call using previous destination as source expecting the system to optimize the copy)
 		{
-			WString fileName = entry.src.substr(entry.src.find_last_of(L'\\') + 1);
-			FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize };
+			FileKey key{ getFileKeyPath(entry.dst), entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize };
 			FileDatabase::FileRec dbFile = m_fileDatabase.getRecord(key);
 			if (!dbFile.name.empty())
 			{
@@ -607,8 +605,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			{
 				if (useLinks)
 				{
-					WString fileName = fullDst.substr(fullDst.find_last_of(L'\\') + 1);
-					FileKey key{ fileName, entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
+					FileKey key{ getFileKeyPath(entry.dst), entry.srcInfo.lastWriteTime, entry.srcInfo.fileSize }; // Robocopy style key for uniqueness of file
 					m_fileDatabase.addToFilesHistory(key, Hash(), fullDst);
 				}
 			};
@@ -1675,6 +1672,18 @@ Client::getRelativeSourceFile(const WString& sourcePath) const
 		logStr += baseDir.size();
 	return logStr;
 }
+
+const wchar_t*
+Client::getFileKeyPath(const WString& relativePath) const
+{
+	if (m_settings.useLinksRelativePath)
+		return relativePath.c_str();
+	auto lastSlash = relativePath.find_last_of(L'\\');
+	if (lastSlash == WString::npos)
+		return relativePath.c_str();
+	return relativePath.c_str() + lastSlash + 1;
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
