@@ -383,7 +383,7 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 					logErrorf(L"Can't combine file(s) with /IX");
 					return false;
 				}
-				outSettings.filesExcludeFiles.push_back(arg + 3);
+				outSettings.filesExcludeFiles.push_back(arg);
 			}
 			else
 			{
