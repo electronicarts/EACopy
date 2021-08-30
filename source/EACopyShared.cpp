@@ -617,6 +617,7 @@ void populateIOStats(Vector<WString>& stats, const IOStats& ioStats)
 	populateStatsTime(stats, L"LinkFile", ioStats.createLinkTime, ioStats.createLinkCount);
 	populateStatsTime(stats, L"DeleteFile", ioStats.deleteFileTime, ioStats.deleteFileCount);
 	populateStatsTime(stats, L"CopyFile", ioStats.copyFileTime, ioStats.copyFileCount);
+	populateStatsTime(stats, L"MoveFile", ioStats.moveFileTime, ioStats.moveFileCount);
 	populateStatsTime(stats, L"CreateDir", ioStats.createDirTime, ioStats.createDirCount);
 	populateStatsTime(stats, L"RemoveDir", ioStats.removeDirTime, ioStats.removeDirCount);
 	populateStatsTime(stats, L"FileInfo", ioStats.fileInfoTime, ioStats.fileInfoCount);
@@ -1987,6 +1988,8 @@ bool deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFi
 
 bool moveFile(const wchar_t* source, const wchar_t* dest, IOStats& ioStats)
 {
+	++ioStats.moveFileCount;
+	TimerScope _(ioStats.moveFileTime);
 	if (MoveFileExW(source, dest, MOVEFILE_REPLACE_EXISTING))
 		return true;
 	logErrorf(L"Failed to move file from %ls to %ls. Reason: %ls", source, dest, getLastErrorText().c_str());

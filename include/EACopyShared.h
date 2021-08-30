@@ -225,6 +225,7 @@ struct IOStats
 
 	u64					createLinkTime = 0;
 	u64					deleteFileTime = 0;
+	u64					moveFileTime = 0;
 	u64					removeDirTime = 0;
 	u64					setLastWriteTime = 0;
 	u64					findFileTime = 0;
@@ -233,6 +234,7 @@ struct IOStats
 	u64					copyFileTime = 0;
 	uint				createLinkCount = 0;
 	uint				deleteFileCount = 0;
+	uint				moveFileCount = 0;
 	uint				removeDirCount = 0;
 	uint				setLastWriteTimeCount = 0;
 	uint				findFileCount = 0;

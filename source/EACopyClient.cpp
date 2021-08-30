@@ -302,6 +302,8 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.ioStats.removeDirCount += threadStats.ioStats.removeDirCount;
 		outStats.ioStats.deleteFileTime += threadStats.ioStats.deleteFileTime;
 		outStats.ioStats.deleteFileCount += threadStats.ioStats.deleteFileCount;
+		outStats.ioStats.moveFileTime += threadStats.ioStats.moveFileTime;
+		outStats.ioStats.moveFileCount += threadStats.ioStats.moveFileCount;
 		outStats.ioStats.createLinkTime += threadStats.ioStats.createLinkTime;
 		outStats.ioStats.createLinkCount += threadStats.ioStats.createLinkCount;
 		outStats.ioStats.setLastWriteTime += threadStats.ioStats.setLastWriteTime;
