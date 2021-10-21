@@ -1374,11 +1374,13 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
 
-	uint flagsAndAttributes = FILE_ATTRIBUTE_NORMAL | nobufferingFlag | writeThroughFlag | FILE_FLAG_SEQUENTIAL_SCAN;
+	uint flagsAndAttributes = nobufferingFlag | writeThroughFlag | FILE_FLAG_SEQUENTIAL_SCAN;
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
 	if (hidden)
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
+	if (flagsAndAttributes = 0)
+		flagsAndAttributes = FILE_ATTRIBUTE_NORMAL;
 
 	++ioStats.createWriteCount;
 	TimerScope _(ioStats.createWriteTime);
@@ -1694,9 +1696,11 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 		osWrite.OffsetHigh = 0xFFFFFFFF;
 		osWrite.hEvent = CreateEvent(NULL, FALSE, TRUE, NULL);
 
+		uint flagsAndAttributes = FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag | writeThroughFlag;
+
 		++ioStats.createWriteCount;
 		u64 startCreateWriteTime = getTime();
-		HANDLE destFile = CreateFileW(dest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | overlappedFlag | nobufferingFlag | writeThroughFlag, &osWrite);
+		HANDLE destFile = CreateFileW(dest, FILE_WRITE_DATA|FILE_WRITE_ATTRIBUTES, 0, NULL, failIfExists ? CREATE_NEW : CREATE_ALWAYS, flagsAndAttributes, &osWrite);
 		ioStats.createWriteTime += getTime() - startCreateWriteTime;
 
 		if (destFile == InvalidFileHandle)
