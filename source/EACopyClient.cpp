@@ -508,7 +508,12 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						logContext.resetLastError(); // We want to handle failing links as non-error and fallback to normal copying
 						useLinks = false; // and do not try linking again if copy also fails.. just let copy retry
 					}
-				}				
+				}
+				else
+				{
+					// Remove from fileDatabase.. since file at location has either changed or does not exist anymore and we don't want to look here again
+					m_fileDatabase.removeFileHistory(key);
+				}
 			}
 		}
 
@@ -638,6 +643,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					if (existed) // If failure was because file existed, then we're good and can skip
 					{
+						addToDatabase();
 						reportSkip();
 						return true;
 					}

@@ -2364,6 +2364,19 @@ FileDatabase::addToFilesHistory(const FileKey& key, const Hash& hash, const WStr
 		m_fileHashes[hash] = &rec;
 }
 
+void
+FileDatabase::removeFileHistory(const FileKey& key)
+{
+	ScopedCriticalSection cs(m_filesCs);
+	auto findIt = m_files.find(key);
+	if (findIt == m_files.end())
+		return;
+	FileRec& rec = findIt->second;
+	m_filesHistory.erase(rec.historyIt);
+	m_fileHashes.erase(rec.hash);
+	m_files.erase(findIt);
+}
+
 uint
 FileDatabase::garbageCollect(uint maxHistory)
 {
@@ -2478,7 +2491,7 @@ FileDatabase::primeWait(IOStats& ioStats)
 	return true;
 }
 
-constexpr u8 linkDbCookie[] = "eacopydb002";
+constexpr u8 linkDbCookie[] = "eacopydb003";
 
 void
 FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
@@ -2525,6 +2538,10 @@ FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
 		if (fullNameLen+1 >= MaxPath)
 			return;
 
+		u16 keyLen;
+		if (!eacopy::readFile(fullPath, handle, &keyLen, sizeof(keyLen), read, ioStats) || read != sizeof(keyLen))
+			return;
+
 		u8 nameBuffer[MaxPath];
 		if (!eacopy::readFile(fullPath, handle, nameBuffer, fullNameLen, read, ioStats) || read != fullNameLen)
 			return;
@@ -2533,9 +2550,7 @@ FileDatabase::readFile(const wchar_t* fullPath, IOStats& ioStats)
 		nameBuffer[fullNameLen+1] = 0;
 		WString fullFileName = (wchar_t*)nameBuffer;
 
-		const wchar_t* fileName = fullFileName.c_str();
-		if (auto lastSlashIndex = fullFileName.find_last_of(L'\\'))
-			 fileName += lastSlashIndex + 1;
+		const wchar_t* fileName = fullFileName.c_str() + fullFileName.size() - keyLen;
 
 		FileKey key { fileName };
 
@@ -2572,6 +2587,9 @@ FileDatabase::writeFile(const wchar_t* fullPath, IOStats& ioStats)
 
 		u16 nameLen = fullFileName.size() * 2; // wchar
 		if (!eacopy::writeFile(fullPath, handle, &nameLen, sizeof(nameLen), ioStats))
+			return;
+		u16 keyLen = key.name.size();
+		if (!eacopy::writeFile(fullPath, handle, &keyLen, sizeof(keyLen), ioStats))
 			return;
 		if (!eacopy::writeFile(fullPath, handle, fullFileName.c_str(), nameLen, ioStats))
 			return;
