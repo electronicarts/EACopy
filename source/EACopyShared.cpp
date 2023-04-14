@@ -470,7 +470,7 @@ void logErrorf(const wchar_t* fmt, ...)
 {
     va_list arg; 
     va_start(arg, fmt);
-	wchar_t buffer[4096];
+	wchar_t buffer[LogBufferSize];
 	stringCopy(buffer, eacopy_sizeof_array(buffer), L"!!ERROR - ");
 	auto len = wcslen(buffer);
 	int written = vswprintf_s(buffer + len, eacopy_sizeof_array(buffer) - len, fmt, arg);
@@ -489,7 +489,7 @@ void logInfof(const wchar_t* fmt, ...)
 {
     va_list arg; 
     va_start(arg, fmt);
-	wchar_t buffer[4096];
+	wchar_t buffer[LogBufferSize];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
 	logInternal(buffer, false, false, false);
 	va_end(arg);
@@ -499,7 +499,7 @@ void logInfoLinef(const wchar_t* fmt, ...)
 {
     va_list arg; 
     va_start(arg, fmt);
-	wchar_t buffer[4096];
+	wchar_t buffer[LogBufferSize];
 	int count = vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
 	if (count)
 		logInternal(buffer, false, true, false);
@@ -519,7 +519,7 @@ void logDebugf(const wchar_t* fmt, ...)
 
     va_list arg; 
     va_start(arg, fmt);
-	wchar_t buffer[4096];
+	wchar_t buffer[LogBufferSize];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
 	logInternal(buffer, false, false, false);
 	va_end(arg);
@@ -533,7 +533,7 @@ void logDebugLinef(const wchar_t* fmt, ...)
 
     va_list arg; 
     va_start(arg, fmt);
-	wchar_t buffer[4096];
+	wchar_t buffer[LogBufferSize];
 	vswprintf_s(buffer, eacopy_sizeof_array(buffer), fmt, arg);
 	logInternal(buffer, false, true, false);
 	va_end(arg);
