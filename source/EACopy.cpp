@@ -137,7 +137,11 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		}
 		else if (startsWithIgnoreCase(arg, L"/LEV:"))
 		{
+			// robocopy's /LEV integer index starting from 1.  EACopy internally is zero based indexed.  
+			// So we are going to subtract 1 from the input.
 			outSettings.copySubdirDepth = wtoi(arg + 5);
+			if (outSettings.copySubdirDepth > 0)
+				--outSettings.copySubdirDepth;
 		}
 		else if (equalsIgnoreCase(arg, L"/J"))
 		{
