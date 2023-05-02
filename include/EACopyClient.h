@@ -10,7 +10,7 @@ namespace eacopy
 
 enum : uint {
 	ClientMajorVersion = 1,
-	ClientMinorVersion = 14
+	ClientMinorVersion = 15
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -103,6 +103,7 @@ struct ClientStats
 	u64					netCreateDirCount			= 0;
 	u64					netFileInfoTime				= 0;
 	u64					netFileInfoCount			= 0;
+	u64					processedByServerCount		= 0;
 
 	u64					readLinkDbTime				= 0;
 	u64					readLinkDbEntries			= 0;
@@ -224,10 +225,10 @@ public:
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
-	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext);
+	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer);
 
 	enum				ReadFileResult { ReadFileResult_Error, ReadFileResult_Success, ReadFileResult_ServerBusy };
-	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext);
+	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer);
 
 
 	bool				sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs);

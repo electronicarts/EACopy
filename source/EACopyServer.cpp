@@ -198,8 +198,11 @@ Server::start(const ServerSettings& settings, Log& log, bool isConsole, ReportSe
 
 			// When there are no connections active we take the opportunity to shrink history if overflowed
 			if (connections.empty())
+			{
 				if (uint removeCount = m_database.garbageCollect(settings.maxHistory))
 					logDebugLinef(L"History overflow. Removed %u entries", removeCount);
+				logFlush();
+			}
 			continue;
 		}
 
@@ -309,6 +312,10 @@ Server::connectionThread(ConnectionInfo& info)
 			//populateIOStats(statsVec, ioStats);
 			logDebugStats(statsVec);
 			logDebugLinef(L"");
+
+			// This connection session is finished, flush the log.to avoid file buffer build up getting too large.
+			logFlush();
+
 			logScopeLeave();
 	});
 
@@ -422,7 +429,7 @@ Server::connectionThread(ConnectionInfo& info)
 					logScopeLeave();
 
 					clientConnectionIndex = min(cmd.connectionIndex, MaxPriorityQueueCount - 1);
-					
+
 					m_queuesCs.scoped([&]() { m_queues[clientConnectionIndex].push_back(&info); });
 
 					if (!getLocalFromNet(serverPath, isServerPathExternal, cmd.netDirectory))
@@ -807,6 +814,20 @@ Server::connectionThread(ConnectionInfo& info)
 							fileName = lastSlash + 1;
 
 					ReadResponse readResponse = (isServerPathExternal && cmd.compressionLevel == 0) ? ReadResponse_CopyUsingSmb : ReadResponse_Copy;
+					// Check if the version that the client has exist and in that case send as delta
+					#if defined(EACOPY_ALLOW_DELTA_COPY)
+					FileDatabase::FileRec referenceFile;
+					if (cmd.compressionLevel != 0 && info.settings.useDeltaCompression)
+					{
+						FileKey key{ fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
+						referenceFile = m_database.getRecord(key);
+						if (!referenceFile.name.empty())
+						{
+							readResponse = ReadResponse_CopyDelta;
+						}
+					}
+					#endif
+
 					if (equals(fi, cmd.info))
 					{
 						readResponse = ReadResponse_Skip;
@@ -815,6 +836,16 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						FileKey serverKey{ fileName, fi.lastWriteTime, fi.fileSize };
 						Hash serverHash = m_database.getRecord(serverKey).hash;
+						if (!isValid(serverHash))
+						{
+							// If setting already tell us to use hash and the file entry is missing from database, calculate the hash and add this to database
+							CopyContext	copyContext;
+							IOStats ioStats;
+							u64 hashtime;
+							u64 hashcount;
+							HashContext hashContext(hashtime, hashcount);
+							getFileHash(serverHash, fullPath.c_str(), copyContext, ioStats, hashContext, hashtime);
+						}
 						if (isValid(serverHash))
 						{
 							FileKey clientKey{ fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
@@ -827,22 +858,12 @@ Server::connectionThread(ConnectionInfo& info)
 								if (!receiveData(info.socket, &hash, sizeof(hash)))
 									return -1;
 							}
-							if (hash == serverHash) // They are actually the same file.. just different time
+							if (isValid(hash) && hash == serverHash) // They are actually the same file.. just different time
+							{
 								readResponse = ReadResponse_Skip;
+							}
 						}
 					}
-
-					// Check if the version that the client has exist and in that case send as delta
-					#if defined(EACOPY_ALLOW_DELTA_COPY)
-					FileDatabase::FileRec referenceFile;
-					if (cmd.compressionLevel != 0 && info.settings.useDeltaCompression)
-					{
-						FileKey key{ fileName, cmd.info.lastWriteTime, cmd.info.fileSize };
-						referenceFile = m_database.getRecord(key);
-						if (!referenceFile.name.empty())
-							readResponse = ReadResponse_CopyDelta;
-					}
-					#endif
 
 					if (!sendData(info.socket, &readResponse, sizeof(readResponse)))
 						return -1;
@@ -859,7 +880,6 @@ Server::connectionThread(ConnectionInfo& info)
 					{
 						if (!sendData(info.socket, &fi.fileSize, sizeof(fi.fileSize)))
 							return -1;
-
 
 						WriteFileType writeType = WriteFileType_Send;
 
@@ -894,7 +914,6 @@ Server::connectionThread(ConnectionInfo& info)
 						return -1;
 						#endif
 					}
-
 				}
 				break;
 			

@@ -385,7 +385,7 @@ uint Log::logQueueThread()
 
 	IOStats ioStats;
 	if (!m_logFileName.empty())
-		openFileWrite(m_logFileName.c_str(), m_logFile, ioStats, true);
+		openFileWrite(m_logFileName.c_str(), m_logFile, ioStats, true, (OVERLAPPED *)nullptr, false, true, true);
 
 	while (m_logThreadActive)
 		if (!processLogQueue(isDebuggerPresent))
@@ -446,14 +446,16 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 		ScopedCriticalSection cs(log.m_logQueueCs);
 		if (log.m_logQueue)
 		{
-			log.m_logQueue->push_back({buffer, linefeed, isError});
+			if (buffer != nullptr)
+				log.m_logQueue->push_back({buffer, linefeed, isError});
 			log.m_logQueueFlush |= flush;
 		}
 	}
 	else
 	{
 		ScopedCriticalSection cs(g_logCs);
-		fputws(buffer, stdout);
+		if (buffer != nullptr)
+			fputws(buffer, stdout);
 		if (linefeed)
 			fputws(L"\n", stdout);
 
@@ -461,7 +463,8 @@ void logInternal(const wchar_t* buffer, bool flush, bool linefeed, bool isError)
 			fflush(stdout);
 		#if defined(EACOPY_USE_OUTPUTDEBUGSTRING)
 		if (EACOPY_IS_DEBUGGER_PRESENT)
-			OutputDebugStringW(buffer);
+			if (buffer != nullptr)
+				OutputDebugStringW(buffer);
 		#endif
 	}
 }
@@ -483,6 +486,11 @@ void logErrorf(const wchar_t* fmt, ...)
 void logInfo(const wchar_t* str)
 {
 	logInternal(str, false, false, false);
+}
+
+void logFlush()
+{
+	logInternal(nullptr, true, false, false);
 }
 
 void logInfof(const wchar_t* fmt, ...)
@@ -1202,9 +1210,9 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 	WString dir(directory);
 	if (dir[dir.length()-1] != L'\\')
 		dir += L'\\';
-    WString searchStr = dir + L"*.*";
-    FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd, ioStats); 
-    if(findHandle == InvalidFileHandle)
+	WString searchStr = dir + L"*.*";
+	FindFileHandle findHandle = findFirstFile(searchStr.c_str(), fd, ioStats); 
+	if(findHandle == InvalidFileHandle)
 	{
 		uint error = GetLastError();
 		if (ERROR_PATH_NOT_FOUND == error)
@@ -1219,12 +1227,12 @@ bool deleteAllFiles(const wchar_t* directory, bool& outPathFound, IOStats& ioSta
 
 	ScopeGuard closeFindGuard([&]() { findClose(findHandle, ioStats); });
 
-    do
+	do
 	{ 
 		FileInfo fileInfo;
 		uint fileAttr = getFileInfo(fileInfo, fd);
 		const wchar_t* fileName = getFileName(fd);
-        if(!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
+		if(!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
 		{
 			WString fullName(dir + fileName);
 			if (fileAttr & FILE_ATTRIBUTE_READONLY)
@@ -1368,18 +1376,18 @@ bool openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats
 	#endif
 }
 
-bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden, bool createAlways)
+bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped, bool hidden, bool createAlways, bool sharedRead)
 {
 	#if defined(_WIN32)
 	uint nobufferingFlag = useBufferedIO ? 0 : FILE_FLAG_NO_BUFFERING;
 	uint writeThroughFlag = CopyFileWriteThrough ? FILE_FLAG_WRITE_THROUGH : 0;
-
+	DWORD shareMode = sharedRead ? FILE_SHARE_READ : 0;
 	uint flagsAndAttributes = nobufferingFlag | writeThroughFlag | FILE_FLAG_SEQUENTIAL_SCAN;
 	if (overlapped)
 		flagsAndAttributes |= FILE_FLAG_OVERLAPPED;
 	if (hidden)
 		flagsAndAttributes |= FILE_ATTRIBUTE_HIDDEN;
-	if (flagsAndAttributes = 0)
+	if (flagsAndAttributes == 0)
 		flagsAndAttributes = FILE_ATTRIBUTE_NORMAL;
 
 	++ioStats.createWriteCount;
@@ -1387,7 +1395,7 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 	WString temp;
 	fullPath = convertToShortPath(fullPath, temp);
 	DWORD creationDisposition = createAlways ? CREATE_ALWAYS : OPEN_EXISTING;
-	outFile = CreateFileW(fullPath, GENERIC_WRITE, 0, NULL, creationDisposition, flagsAndAttributes, NULL);
+	outFile = CreateFileW(fullPath, GENERIC_WRITE, shareMode, NULL, creationDisposition, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
 	logErrorf(L"Trying to create file %ls: %ls", fullPath, getErrorText(fullPath, GetLastError()).c_str());

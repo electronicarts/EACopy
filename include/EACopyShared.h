@@ -265,7 +265,7 @@ bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorO
 bool					deleteAllFiles(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
 bool					openFileRead(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool isSequentialScan = true, bool sharedRead = true);
-bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFilee, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false, bool createAlways = true);
+bool					openFileWrite(const wchar_t* fullPath, FileHandle& outFilee, IOStats& ioStats, bool useBufferedIO, _OVERLAPPED* overlapped = nullptr, bool hidden = false, bool createAlways = true, bool sharedRead = false);
 bool					writeFile(const wchar_t* fullPath, FileHandle& file, const void* data, u64 dataSize, IOStats& ioStats, _OVERLAPPED* overlapped = nullptr);
 bool					readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toRead, u64& read, IOStats& ioStats);
 bool					setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime, IOStats& ioStats);
@@ -381,6 +381,7 @@ public:
 // Logging
 
 void					logErrorf(const wchar_t* fmt, ...);
+void					logFlush();
 void					logInfo(const wchar_t* str);
 void					logInfof(const wchar_t* fmt, ...);
 void					logInfoLinef(const wchar_t* fmt, ...);

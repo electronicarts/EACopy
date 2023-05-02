@@ -254,6 +254,7 @@ Client::process(Log& log, ClientStats& outStats)
 		outStats.linkCount += threadStats.linkCount;
 		outStats.linkSize += threadStats.linkSize;
 		outStats.serverAttempt |= threadStats.serverAttempt;
+		outStats.processedByServerCount += threadStats.processedByServerCount;
 
 		outStats.copyTime = max(outStats.copyTime, threadStats.copyTime);
 		outStats.skipTime = max(outStats.skipTime, threadStats.skipTime);
@@ -553,9 +554,10 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			u64 size;
 			u64 written;
 			bool linked;
+			bool processedByServer;
 
 			// Send file to server (might be skipped if server already has it).. returns false if it fails
-			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, written, linked, copyContext))
+			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, written, linked, copyContext, processedByServer))
 			{
 				if (written)
 				{
@@ -569,6 +571,10 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 				{
 					reportSkip();
 				}
+				if (processedByServer)
+				{
+					++stats.processedByServerCount;
+				}
 				return true;
 			}
 		}
@@ -576,7 +582,8 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 		{
 			u64 size;
 			u64 read;
-			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext))
+			bool processedByServer;
+			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext, processedByServer))
 			{
 			case Connection::ReadFileResult_Success:
 				if (read)
@@ -594,6 +601,10 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					stats.skipTime += getTime() - startTime;
 					++stats.skipCount;
 					stats.skipSize += size;
+				}
+				if (processedByServer)
+				{
+					++stats.processedByServerCount;
 				}
 				return true;
 
@@ -1293,9 +1304,10 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			FileInfo srcInfo;
 			uint srcAttributes;
 			uint error;
+			bool processedByServer;
 			if (!m_sourceConnection->sendGetFileAttributes(fileName.c_str(), srcInfo, srcAttributes, error))
 				continue;
-			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), srcInfo, fileSize, read, m_copyContext))
+			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), srcInfo, fileSize, read, m_copyContext, processedByServer))
 				continue;
 			fullPath = destPath + fileName;
 		}
@@ -2050,11 +2062,12 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 }
 
 bool
-Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext)
+Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer)
 {
 	outSize = 0;
 	outWritten = 0;
 	outLinked = false;
+	processedByServer = false;
 
 	WriteFileType writeType = m_settings.compressionLevel != 0 ? WriteFileType_Compressed : WriteFileType_Send;
 
@@ -2094,18 +2107,23 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 	do
 	{
 		if (writeResponse == WriteResponse_Skip)
+		{
+			processedByServer = true;
 			return true;
+		}
 
 		if (writeResponse == WriteResponse_Link)
 		{
 			outWritten = cmd.info.fileSize;
 			outLinked = true;
+			processedByServer = true;
 			return true;
 		}
 
 		if (writeResponse == WriteResponse_Odx)
 		{
 			outWritten = cmd.info.fileSize;
+			processedByServer = true;
 			return true;
 		}
 
@@ -2126,7 +2144,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		}
 		++m_stats.netWriteResponseCount[writeResponse];
 		m_stats.netWriteResponseTime[writeResponse] += netWriteResponseTime;
-			
+
 	} while (true);
 
 	if (writeResponse == WriteResponse_Copy)
@@ -2152,6 +2170,8 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		}
 
 		outWritten = cmd.info.fileSize;
+		processedByServer = true;
+
 		return true;
 	}
 	
@@ -2208,10 +2228,11 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 }
 
 Client::Connection::ReadFileResult
-Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext)
+Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer)
 {
 	outSize = 0;
 	outRead = 0;
+	processedByServer = false;
 
 	// Make src a local path to server
 	src += m_settings.sourceDirectory.size();
@@ -2272,8 +2293,18 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	if (readResponse == ReadResponse_Hash)
 	{
 		Hash hash;
-		if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
-			return ReadFileResult_Error;
+		// Test file exists before actually calculating hash or we will crash the program and leave the server hanging waiting for the hash input.
+		// If file doesn't exist, we will just return empty hash info and the server will test for invalid hash.
+		FILE *file;
+		if (_wfopen_s(&file, fullDest.c_str(), L"r") == 0)
+		{
+			if (file != nullptr)
+			{
+				fclose(file);
+				if (!getFileHash(hash, fullDest.c_str(), copyContext, m_stats.ioStats, m_hashContext, m_stats.hashTime))
+					return ReadFileResult_Error;
+			}
+		}
 		if (!sendData(m_socket, &hash, sizeof(hash)))
 			return ReadFileResult_Error;
 		if (!receiveData(m_socket, &readResponse, sizeof(readResponse)))
@@ -2284,6 +2315,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	if (readResponse == ReadResponse_Skip)
 	{
 		outSize = cmd.info.fileSize;
+		processedByServer = true;
 		return ReadFileResult_Success;
 	}
 
@@ -2314,6 +2346,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 
 		outRead = newFileSize;
 		outSize = newFileSize;
+		processedByServer = success;
 		return success ? ReadFileResult_Success : ReadFileResult_Error;
 	}
 	else if (readResponse == ReadResponse_CopyUsingSmb)
@@ -2326,6 +2359,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 			return ReadFileResult_Error;
 		outRead = written;
 		outSize = written;
+		processedByServer = true;
 		return ReadFileResult_Success;
 	}
 	else // ReadResponse_CopyDelta
@@ -2340,6 +2374,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 			return ReadFileResult_Error;
 		outSize = newFileSize;
 		outRead = newFileSize;
+		processedByServer = true;
 		m_stats.recvTime += recvStats.recvTime;
 		m_stats.recvSize += recvStats.recvSize;
 		m_stats.decompressTime += recvStats.decompressTime;

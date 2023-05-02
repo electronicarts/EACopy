@@ -581,7 +581,10 @@ int main(int argc, char* argv_[])
 
 
 		if (stats.destServerUsed || stats.sourceServerUsed)
+		{
 			logInfoLinef(L"   Server found (%ls)", stats.info.c_str());
+			logInfoLinef(L"   Number of files (copied/linked/skipped) processed by server: %lu", stats.processedByServerCount);
+		}
 		else if (stats.serverAttempt && !stats.destServerUsed)
 			logInfoLinef(L"   Server not found (Spent ~%ls trying to connect. Use /NOSERVER to disable attempt)", toHourMinSec(stats.connectTime/max(1, (int)settings.threadCount)).c_str());
 		else
