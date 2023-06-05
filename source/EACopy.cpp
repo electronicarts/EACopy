@@ -500,7 +500,16 @@ int main(int argc, char* argv_[])
 		logInfoLinef();
 		logInfoLinef(L"  Source : %ls", settings.sourceDirectory.c_str());
 		logInfoLinef(L"    Dest : %ls", settings.destDirectory.c_str());
-		logInfoLinef(L" Options :%ls", options.c_str()); // First space added in generated string
+		if (options.length() > (LogBufferSize - 20))
+		{
+			WString optionsSubStr = options.substr(0, (LogBufferSize - 20));
+			optionsSubStr.append(L" ... ");
+			logInfoLinef(L" Options :%ls", optionsSubStr.c_str());
+		}
+		else
+		{
+			logInfoLinef(L" Options :%ls", options.c_str()); // First space added in generated string
+		}
 		logInfoLinef();
 		logInfoLinef(L"-------------------------------------------------------------------------------");
 		logInfoLinef();
