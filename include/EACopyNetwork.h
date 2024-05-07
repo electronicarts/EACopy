@@ -95,6 +95,7 @@ enum WriteFileType : u8
 	WriteFileType_Compressed
 };
 
+// TODO: write file attributes?
 struct WriteFileCommand : Command
 {
 	WriteFileType writeType;
@@ -133,6 +134,7 @@ enum ReadResponse : u8
 	ReadResponse_BadSource, // Must be last!
 };
 
+// TODO: write directory attributes?
 struct CreateDirCommand : Command
 {
 	wchar_t path[1];

@@ -480,7 +480,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 toCopy = min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 		}
@@ -544,7 +544,7 @@ bool receiveFile(bool& outSuccess, Socket& socket, const wchar_t* fullPath, size
 		if (recvPos > commandSize)
 		{
 			u64 toCopy = min(u64(recvPos - commandSize), u64(fileSize));
-			outSuccess = outSuccess & writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
+			outSuccess = outSuccess && writeFile(fullPath, file, recvBuffer + commandSize, toCopy, ioStats, &osWrite);
 			read = toCopy;
 			commandSize += (uint)toCopy;
 		}

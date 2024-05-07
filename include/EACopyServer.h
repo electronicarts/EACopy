@@ -79,7 +79,7 @@ private:
 	ActiveSessions	m_activeSessions;
 	CriticalSection m_activeSessionsCs;
 
-	u64				m_startTime;
+	u64				m_startTime = 0;
 	bool			m_isConsole = false;
 	bool			m_loopServer = true;
 	SOCKET			m_listenSocket = INVALID_SOCKET;

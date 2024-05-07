@@ -210,12 +210,13 @@ struct TestBase
 		return settings;
 	}
 
-	void createTestFile(const wchar_t* name, u64 size, bool source = true)
+	void createTestFile(const wchar_t* name, u64 size, bool source = true, uint attributes = 0)
 	{
 		const WString& dir = source ? testSourceDir : testDestDir;
-		createTestFile(dir.c_str(), name, size);
+		createTestFileInDir(dir.c_str(), name, size, attributes);
 	}
-	void createTestFile(const wchar_t* dir_, const wchar_t* name, u64 size, bool source = true)
+
+	void createTestFileInDir(const wchar_t* dir_, const wchar_t* name, u64 size, uint attributes = 0)
 	{
 		u64 startSetupTime = getTime();
 
@@ -235,12 +236,18 @@ struct TestBase
 
 		u64 dataSize = min(size, 1024*1024*256ull);
 		char* data = new char[size];
-		for (u64 i=0; i!=dataSize; ++i)
+		for (u64 i = 0; i != dataSize; ++i) {
 			data[i] = 'a' + i % 26;
+		}
 
 		FileInfo fileInfo;
 		fileInfo.fileSize = size;
 		EACOPY_ASSERT(createFile(fullFileName, fileInfo, data, ioStats, true));
+		if (attributes != 0) {
+		#if defined(_WIN32)
+			SetFileAttributesW(fullFileName, attributes);
+		#endif
+		}
 
 		delete[] data;
 
@@ -278,7 +285,7 @@ struct TestBase
 
 	bool ensureDirectory(const wchar_t* directory)
 	{
-		return eacopy::ensureDirectory(directory, ioStats);
+		return eacopy::ensureDirectory(directory, 0, ioStats);
 	}
 
 	bool isEqual(const wchar_t* fileA, const wchar_t* fileB)
@@ -543,6 +550,52 @@ EACOPY_TEST(CopyFileToReadOnlyDest)
 	EACOPY_ASSERT(isSourceEqualDest(L"Foo.txt"));
 	EACOPY_ASSERT(isSourceEqualDest(L"Bar1.txt"));
 	EACOPY_ASSERT(isSourceEqualDest(L"Bar2.txt"));
+}
+
+EACOPY_TEST(CopyHiddenFile)
+{
+	createTestFile(L"Hidden.txt", 10, true, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE);
+	
+	ClientSettings clientSettings(getDefaultClientSettings());
+
+	Client client(clientSettings);
+	ClientStats clientStats;
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(isSourceEqualDest(L"Hidden.txt"));
+}
+
+EACOPY_TEST(SkipCopyHiddenFile)
+{
+	createTestFile(L"Hidden.txt", 10, true, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.excludeAttributes = FILE_ATTRIBUTE_HIDDEN;
+
+	Client client(clientSettings);
+	ClientStats clientStats;
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 0);
+	EACOPY_ASSERT(getTestFileExists(L"Hidden.txt") == false);
+}
+
+EACOPY_TEST(OnlyCopyHiddenFile)
+{
+	createTestFile(L"Hidden.txt", 10, true, FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_ARCHIVE);
+	createTestFile(L"Visible.txt", 10, true);
+
+	ClientSettings clientSettings(getDefaultClientSettings());
+	clientSettings.includeAttributes = FILE_ATTRIBUTE_HIDDEN;
+
+	Client client(clientSettings);
+	ClientStats clientStats;
+
+	EACOPY_ASSERT(client.process(clientLog, clientStats) == 0);
+	EACOPY_ASSERT(clientStats.copyCount == 1);
+	EACOPY_ASSERT(getTestFileExists(L"Hidden.txt") == true);
+	EACOPY_ASSERT(getTestFileExists(L"Visible.txt") == false);
 }
 
 #if defined(_WIN32)
@@ -2165,7 +2218,7 @@ EACOPY_TEST(FromServerCopyFileExternalPath)
 	WString externalDest = g_testExternalDestDir + L'\\';
 	ensureDirectory(externalDest.c_str());
 	const wchar_t* file = L"Foo.txt";
-	createTestFile(externalDest.c_str(), file, 10);
+	createTestFileInDir(externalDest.c_str(), file, 10);
 
 	ServerSettings serverSettings(getDefaultServerSettings());
 	TestServer server(serverSettings, serverLog);

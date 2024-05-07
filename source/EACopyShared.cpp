@@ -1088,7 +1088,7 @@ bool replaceIfSymLink(const wchar_t* directory, uint attributes, IOStats& ioStat
 	return false;
 }
 
-bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink, bool expectCreationAndParentExists, FilesSet* outCreatedDirs)
+bool ensureDirectory(const wchar_t* directory, uint attributes, IOStats& ioStats, bool replaceIfSymlink, bool expectCreationAndParentExists, FilesSet* outCreatedDirs)
 {
 	// This is an optimization to reduce kernel calls
 	if (expectCreationAndParentExists)
@@ -1098,6 +1098,9 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 			TimerScope _(ioStats.createDirTime);
 			if (CreateDirectoryW(directory, NULL) != 0)
 			{
+				if (attributes != 0 && attributes & FILE_ATTRIBUTE_DIRECTORY)
+					if (!SetFileAttributesW(directory, attributes))
+						return false;
 				if (outCreatedDirs)
 					outCreatedDirs->insert(directory);
 				return true;
@@ -1173,7 +1176,7 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 	if (lastBackslash)
 	{
 		WString shorterDirectory(directory, 0, lastBackslash - directory);
-		if (!ensureDirectory(shorterDirectory.c_str(), ioStats, false, false, outCreatedDirs))
+		if (!ensureDirectory(shorterDirectory.c_str(), attributes, ioStats, false, false, outCreatedDirs))
 			return false;
 	}
 
@@ -1184,6 +1187,10 @@ bool ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfS
 		const wchar_t* validDirectory = convertToShortPath(directory, tempBuffer);
 		if (CreateDirectoryW(validDirectory, NULL) != 0)
 		{
+			if (attributes != 0 && attributes & FILE_ATTRIBUTE_DIRECTORY)
+				if (!SetFileAttributesW(validDirectory, attributes))
+					return false;
+
 			if (outCreatedDirs)
 				outCreatedDirs->insert(directory);
 			return true;
@@ -1498,6 +1505,19 @@ bool readFile(const wchar_t* fullPath, FileHandle& file, void* destData, u64 toR
 	#endif
 }
 
+bool setFileAttributes(const wchar_t* fullPath, FileHandle& file, uint attributes)
+{
+	if (file == InvalidFileHandle)
+		return false;
+	#if defined(_WIN32)
+	SetFileAttributesW(fullPath, attributes);
+	return true;
+	#else
+	EACOPY_NOT_IMPLEMENTED
+	return false;
+	#endif
+}
+
 bool setFileLastWriteTime(const wchar_t* fullPath, FileHandle& file, FileTime lastWriteTime, IOStats& ioStats)
 {
 	if (file == InvalidFileHandle)
@@ -1673,10 +1693,10 @@ bool copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bo
 		logErrorf(L"Failed to copy source file %ls: File is a directory", source);
 		return false;
 	}
-	return copyFile(source, sourceInfo, dest, useSystemCopy, failIfExists, outExisted, outBytesCopied, copyContext, ioStats, useBufferedIO);
+	return copyFile(source, sourceInfo, sourceAttributes, dest, useSystemCopy, failIfExists, outExisted, outBytesCopied, copyContext, ioStats, useBufferedIO);
 }
 
-bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO)
+bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, uint sourceAttributes, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO)
 {
 	outExisted = false;
 	outBytesCopied = 0;
@@ -1764,7 +1784,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 					logErrorf(L"WaitForSingleObject failed on write");
 					return false;
 				}
-
+				
 				uint written = 0;
 				uint toWrite = nobufferingFlag ? (((sizeFilled + 4095) / 4096) * 4096) : sizeFilled;
 				if (!WriteFile(destFile, bufferFilled, toWrite, &written, &osWrite))
@@ -1829,8 +1849,13 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* 
 			}
 		}
 
-		if (!setFileLastWriteTime(dest, destFile, sourceInfo.lastWriteTime, ioStats))
+		if (sourceAttributes != 0 && !setFileAttributes(dest, destFile, sourceAttributes)) {
 			return false;
+		}
+
+		if (!setFileLastWriteTime(dest, destFile, sourceInfo.lastWriteTime, ioStats)) {
+			return false;
+		}
 
 		if (nobufferingFlag)
 		{
@@ -2454,8 +2479,7 @@ FileDatabase::primeUpdate(IOStats& ioStats)
 	{
 		FileInfo fileInfo;
 		uint attr = getFileInfo(fileInfo, fd);
-		if ((attr & FILE_ATTRIBUTE_HIDDEN))
-			continue;
+
 		const wchar_t* fileName = getFileName(fd);
 		if ((attr & FILE_ATTRIBUTE_DIRECTORY) != 0)
 		{

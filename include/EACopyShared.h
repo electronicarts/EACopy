@@ -198,6 +198,7 @@ struct FileInfo
 	FileTime			creationTime = { 0, 0 };
 	FileTime			lastWriteTime = { 0, 0 };
 	u64					fileSize = 0;
+	// TODO: add attributes here? It will require fixes in server, but can copy things like hidden attr.
 };
 
 struct CopyContext
@@ -260,7 +261,7 @@ bool					getUseBufferedIO(UseBufferedIO use, u64 fileSize);
 uint					getFileInfo(FileInfo& outInfo, const wchar_t* fullFileName, IOStats& ioStats);
 bool					getFileHash(Hash& outHash, const wchar_t* fullFileName, CopyContext& copyContext, IOStats& ioStats, HashContext& hashContext, u64& hashTime);
 bool					equals(const FileInfo& a, const FileInfo& b);
-bool					ensureDirectory(const wchar_t* directory, IOStats& ioStats, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
+bool					ensureDirectory(const wchar_t* directory, uint attributes, IOStats& ioStats, bool replaceIfSymlink = false, bool expectCreationAndParentExists = true, FilesSet* outCreatedDirs = nullptr);
 bool					deleteDirectory(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					deleteAllFiles(const wchar_t* directory, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					isAbsolutePath(const wchar_t* path);
@@ -274,7 +275,7 @@ bool					closeFile(const wchar_t* fullPath, FileHandle& file, AccessType accessT
 bool					createFile(const wchar_t* fullPath, const FileInfo& info, const void* data, IOStats& ioStats, bool useBufferedIO, bool hidden = false);
 bool					createFileLink(const wchar_t* fullPath, const FileInfo& info, const wchar_t* sourcePath, bool& outSkip, IOStats& ioStats, bool deleteAndRetry = true);
 bool					copyFile(const wchar_t* source, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, IOStats& ioStats, UseBufferedIO useBufferedIO);
-bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
+bool					copyFile(const wchar_t* source, const FileInfo& sourceInfo, uint sourceAttributes, const wchar_t* dest, bool useSystemCopy, bool failIfExists, bool& outExisted, u64& outBytesCopied, CopyContext& copyContext, IOStats& ioStats, UseBufferedIO useBufferedIO);
 bool					deleteFile(const wchar_t* fullPath, IOStats& ioStats, bool errorOnMissingFile = true);
 bool					moveFile(const wchar_t* source, const wchar_t* dest, IOStats& ioStats);
 bool					setFileWritable(const wchar_t* fullPath, bool writable);
@@ -317,7 +318,7 @@ public:
 	struct			FileRec { WString name; Hash hash;  FilesHistory::iterator historyIt; };
 	using			FilesMap = Map<FileKey, FileRec>;
 	using			FilesHashMap = Map<Hash, FileRec*>;
-	struct			PrimeDirRec { WString directory; uint rootLen; };
+	struct			PrimeDirRec { WString directory; uint rootLen = 0; };
 	using			PrimeDirs = List<PrimeDirRec>;
 
 	FileRec			getRecord(const FileKey& key);

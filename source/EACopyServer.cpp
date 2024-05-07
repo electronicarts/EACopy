@@ -483,7 +483,7 @@ Server::connectionThread(ConnectionInfo& info)
 							FileInfo fileInfo;
 							fileInfo.fileSize = sizeof(secretGuid);
 							WString securityFilePath = serverPath + filename;
-							if (!ensureDirectory(serverPath.c_str(), ioStats))
+							if (!ensureDirectory(serverPath.c_str(), 0, ioStats))
 							{
 								logErrorf(L"Failed to create directory '%ls' needed to create secret guid file for client. Server does not have access?", serverPath.c_str());
 								return -1;
@@ -604,7 +604,7 @@ Server::connectionThread(ConnectionInfo& info)
 									{
 										bool existed = false;
 										u64 bytesCopied;
-										if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
+										if (copyFile(localFile.name.c_str(), localFileInfo, attributes, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
 											writeResponse = WriteResponse_Odx;
 									}
 								}
@@ -673,7 +673,7 @@ Server::connectionThread(ConnectionInfo& info)
 								u64 bytesCopied;
 								FileInfo localFileInfo;
 								if (uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), ioStats))
-									if (copyFile(localFile.name.c_str(), localFileInfo, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
+									if (copyFile(localFile.name.c_str(), localFileInfo, attributes, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
 										writeResponse = WriteResponse_Odx;
 							}
 						}
@@ -926,7 +926,7 @@ Server::connectionThread(ConnectionInfo& info)
 						auto& cmd = *(const CreateDirCommand*)recvBuffer;
 						WString fullPath = serverPath + cmd.path;
 						FilesSet createdDirs;
-						if (ensureDirectory(fullPath.c_str(), ioStats, false, true, &createdDirs))
+						if (ensureDirectory(fullPath.c_str(), 0, ioStats, false, true, &createdDirs))
 						{
 							createDirResponse = CreateDirResponse_SuccessExisted + (u8)min(createdDirs.size(), 200); // is not the end of the world if 201 was created but 200 was reported
 							activeSession->createdDirsCs.scoped([&]() { activeSession->createdDirs.insert(createdDirs.begin(), createdDirs.end()); });
@@ -994,8 +994,6 @@ Server::connectionThread(ConnectionInfo& info)
 					{ 
 						FileInfo fileInfo;
 						uint attributes = getFileInfo(fileInfo, fd);
-						if ((attributes & FILE_ATTRIBUTE_HIDDEN))
-							continue;
 
 						const wchar_t* fileName = getFileName(fd);
 						if ((attributes & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fileName))

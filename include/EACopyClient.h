@@ -10,7 +10,7 @@ namespace eacopy
 
 enum : uint {
 	ClientMajorVersion = 1,
-	ClientMinorVersion = 16
+	ClientMinorVersion = 17
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -32,6 +32,8 @@ struct ClientSettings
 	StringList			filesExcludeFiles;
 	StringList			excludeWildcards;
 	StringList			excludeWildcardDirectories;
+	uint				excludeAttributes			= 0;
+	uint				includeAttributes			= 0;
 	StringList			optionalWildcards; // Will not causes error if source file fulfill optionalWildcards
 	uint				threadCount					= 0;
 	uint				retryWaitTimeMs				= 30 * 1000;
@@ -139,14 +141,14 @@ public:
 private:
 
 	// Types
-	struct				CopyEntry { WString src; WString dst; FileInfo srcInfo; };
-	struct				DirEntry { 	WString sourceDir; WString destDir; WString wildcard; int depthLeft; };
+	struct				CopyEntry { WString src; WString dst; FileInfo srcInfo; uint attributes = 0u; };
+	struct				DirEntry { 	WString sourceDir; WString destDir; WString wildcard; int depthLeft = 0; };
 	using				HandleFileOrWildcardFunc = Function<bool(char*)>;
 	using				CopyEntries = List<CopyEntry>;
 	using				DirEntries = List<DirEntry>;
 	using				CachedFindFileEntries = std::map<WString, Set<WString, NoCaseWStringLess>, NoCaseWStringLess>;
 	class				Connection;
-	struct				NameAndFileInfo { WString name; FileInfo info; uint attributes; };
+	struct				NameAndFileInfo { WString name; FileInfo info; uint attributes = 0u; };
 
 	// Methods
 	void				resetWorkState(Log& log);
@@ -157,8 +159,8 @@ private:
 	int					workerThread(uint connectionIndex, ClientStats& stats);
 	bool				traverseFilesInDirectory(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, NetworkCopyContext& copyContext, const WString& sourcePath, const WString& destPath, const WString& wildcard, int depthLeft, ClientStats& stats);
 	bool				findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& logContext, Connection* connection, NetworkCopyContext& copyContext, const WString& path, ClientStats& stats);
-	bool				addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, ClientStats& stats);
-	bool				handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, ClientStats& stats);
+	bool				addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, uint attributes, ClientStats& stats);
+	bool				handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, uint attributes, ClientStats& stats);
 	bool				handleDirectory(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* directory, const wchar_t* wildcard, int depthLeft, ClientStats& stats);
 	bool				handleMissingFile(const wchar_t* fileName);
 	bool				handlePath(LogContext& logContext, Connection* sourceConnection, Connection* destConnection, ClientStats& stats, const WString& sourcePath, const WString& destPath, const wchar_t* fileName);
@@ -168,12 +170,13 @@ private:
 	bool				gatherFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& sourcePath, const WString& fileName, const WString& destPath);
 	bool				processQueuedWildcardFileEntries(LogContext& logContext, ClientStats& stats, CachedFindFileEntries& findFileCache, const WString& rootSourcePath, const WString& rootDestPath);
 	bool				purgeFilesInDirectory(const WString& destPath, uint destPathAttributes, int depthLeft, ClientStats& stats);
-	bool				ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats);
+	bool				ensureDirectory(Connection* destConnection, const WString& directory, uint attributes, IOStats& ioStats);
 	const wchar_t*		getRelativeSourceFile(const WString& sourcePath) const;
 	const wchar_t*		getFileKeyPath(const WString& relativePath) const;
 	Connection*			createConnection(const wchar_t* networkPath, uint connectionIndex, ClientStats& stats, bool& failedToConnect, bool doProtocolCheck);
 	bool				isIgnoredDirectory(const wchar_t* directory);
 	bool				isValid(Connection* connection);
+	bool				isFileWithAttributeAllowed(uint fileAttributes);
 
 
 	// Settings
@@ -225,10 +228,10 @@ public:
 						~Connection();
 	bool				sendCommand(const Command& cmd);
 	bool				sendTextCommand(const wchar_t* text);
-	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer);
+	bool				sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, uint srcAttributes, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer);
 
 	enum				ReadFileResult { ReadFileResult_Error, ReadFileResult_Success, ReadFileResult_ServerBusy };
-	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer);
+	ReadFileResult		sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, uint srcAttributes, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer);
 
 
 	bool				sendCreateDirectoryCommand(const wchar_t* directory, FilesSet& outCreatedDirs);

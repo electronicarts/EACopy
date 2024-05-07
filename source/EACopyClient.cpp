@@ -114,7 +114,7 @@ Client::process(Log& log, ClientStats& outStats)
 		m_fileDatabase.primeDirectory(primeDir, outStats.ioStats, m_settings.useLinksRelativePath, false);
 
 	// Spawn worker threads that will copy the files
-	struct WorkerThreadData { ClientStats stats; Client* client; uint connectionIndex; };
+	struct WorkerThreadData { ClientStats stats; Client* client = nullptr; uint connectionIndex = 0; };
 	Vector<WorkerThreadData> workerThreadDataList(m_settings.threadCount);
 
 	Vector<Thread> workerThreadList(m_settings.threadCount);
@@ -533,7 +533,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 					bool existed = false;
 					u64 written;
 					bool failIfExists = m_settings.excludeChangedFiles;
-					if (copyFile(dbFile.name.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+					if (copyFile(dbFile.name.c_str(), entry.srcInfo, attributes, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 					{
 						stats.copyTime += getTime() - startTime;
 						++stats.copyCount;
@@ -557,7 +557,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			bool processedByServer;
 
 			// Send file to server (might be skipped if server already has it).. returns false if it fails
-			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, written, linked, copyContext, processedByServer))
+			if (destConnection->sendWriteFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, entry.attributes, size, written, linked, copyContext, processedByServer))
 			{
 				if (written)
 				{
@@ -583,7 +583,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			u64 size;
 			u64 read;
 			bool processedByServer;
-			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, size, read, copyContext, processedByServer))
+			switch (sourceConnection->sendReadFileCommand(entry.src.c_str(), entry.dst.c_str(), entry.srcInfo, entry.attributes, size, read, copyContext, processedByServer))
 			{
 			case Connection::ReadFileResult_Success:
 				if (read)
@@ -638,7 +638,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 			if (tryCopyFirst)
 			{
 				bool failIfExists = true;
-				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, entry.attributes, fullDst.c_str(), useSystemCopy, failIfExists, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -698,7 +698,7 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 						logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", fullDst.c_str());
 				}
 				
-				if (copyFile(entry.src.c_str(), entry.srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
+				if (copyFile(entry.src.c_str(), entry.srcInfo, entry.attributes, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, stats.ioStats, m_settings.useBufferedIO))
 				{
 					if (m_settings.logProgress)
 						logInfoLinef(L"New File    %ls", getRelativeSourceFile(entry.src));
@@ -827,7 +827,7 @@ Client::workerThread(uint connectionIndex, ClientStats& stats)
 }
 
 bool
-Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, ClientStats& stats)
+Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConnection, const WString& destFullPath, uint attributes, ClientStats& stats)
 {
 	WString destFile = destFullPath.c_str() + m_settings.destDirectory.size();
 
@@ -849,7 +849,7 @@ Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConne
 				int retryCount = m_settings.retryCount;
 				while (true)
 				{
-					if (ensureDirectory(destConnection, destFullPath2.c_str(), stats.ioStats))
+					if (ensureDirectory(destConnection, destFullPath2.c_str(), attributes, stats.ioStats))
 						break;
 
 					if (retryCount-- == 0)
@@ -879,7 +879,7 @@ Client::addDirectoryToHandledFiles(LogContext& logContext, Connection* destConne
 }
 
 bool
-Client::handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, ClientStats& stats)
+Client::handleFile(LogContext& logContext, Connection* destConnection, const WString& sourcePath, const WString& destPath, const wchar_t* fileName, const FileInfo& fileInfo, uint attributes, ClientStats& stats)
 {
 	const wchar_t* destFileName = fileName;
 
@@ -907,7 +907,10 @@ Client::handleFile(LogContext& logContext, Connection* destConnection, const WSt
 			return true;
 	}
 
-	if (!addDirectoryToHandledFiles(logContext, destConnection, destFullPath, stats))
+	FileInfo srcDirInfo;
+	uint srcDirAttributes = getFileInfo(srcDirInfo, sourcePath.c_str(), stats.ioStats);
+
+	if (!addDirectoryToHandledFiles(logContext, destConnection, destFullPath, srcDirAttributes, stats))
 		return false;
 	WString srcFile = sourcePath + fileName;
 
@@ -918,6 +921,7 @@ Client::handleFile(LogContext& logContext, Connection* destConnection, const WSt
 	entry.src = srcFile;
 	entry.dst = destFile;
 	entry.srcInfo = fileInfo;
+	entry.attributes = attributes;
 	return true;
 }
 
@@ -933,8 +937,13 @@ Client::handleDirectory(LogContext& logContext, Connection* destConnection, cons
 		newDestDirectory = newDestDirectory + directory + L'\\';
 	
 	if (m_settings.copyEmptySubdirectories)
-		if (!addDirectoryToHandledFiles(logContext, destConnection, newDestDirectory, stats))
+	{
+		FileInfo srcDirInfo;
+		uint srcDirAttributes = getFileInfo(srcDirInfo, newSourceDirectory.c_str(), stats.ioStats);
+
+		if (!addDirectoryToHandledFiles(logContext, destConnection, newDestDirectory, srcDirAttributes, stats))
 			return false;
+	}
 
 	ScopedCriticalSection cs(m_dirEntriesCs);
 	m_dirEntries.push_back(DirEntry());
@@ -1051,12 +1060,12 @@ Client::handlePath(LogContext& logContext, Connection* sourceConnection, Connect
 
 			WString newSourcePath(sourcePath.c_str(), lastSlash + 1);
 			fileName = lastSlash + 1;
-			if (!handleFile(logContext, destConnection, newSourcePath, destPath, fileName, fileInfo, stats))
+			if (!handleFile(logContext, destConnection, newSourcePath, destPath, fileName, fileInfo, attributes, stats))
 				return false;
 		}
 		else
 		{
-			if (!handleFile(logContext, destConnection, sourcePath, destPath, fileName, fileInfo, stats))
+			if (!handleFile(logContext, destConnection, sourcePath, destPath, fileName, fileInfo, attributes, stats))
 				return false;
 		}
 	}
@@ -1082,7 +1091,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 		{
 			if(!(file.attributes & FILE_ATTRIBUTE_DIRECTORY))
 			{
-				if (!handleFile(logContext, destConnection, sourcePath, destPath, file.name.c_str(), file.info, stats))
+				if (!handleFile(logContext, destConnection, sourcePath, destPath, file.name.c_str(), file.info, file.attributes, stats))
 					return false;
 			}
 		}
@@ -1154,14 +1163,15 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 			{
 				FileInfo fileInfo;
 				uint fileAttr = getFileInfo(fileInfo, fd);
-				if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
-					continue;
 
 				if (!(fileAttr & FILE_ATTRIBUTE_DIRECTORY))
 				{
+					if (!isFileWithAttributeAllowed(fileAttr))
+						continue;
+
 					wchar_t* fileName = getFileName(fd);
 					if (PathMatchSpecW(fileName, wildcard.c_str()))
-						if (!handleFile(logContext, destConnection, sourcePath, destPath, getFileName(fd), fileInfo, stats))
+						if (!handleFile(logContext, destConnection, sourcePath, destPath, getFileName(fd), fileInfo, fileAttr, stats))
 							return false;
 				}
 				else //if (wildcardIncludesAll)
@@ -1239,10 +1249,11 @@ Client::findFilesInDirectory(Vector<NameAndFileInfo>& outEntries, LogContext& lo
 		{
 			FileInfo fileInfo;
 			uint attr = getFileInfo(fileInfo, fd);
-			if ((attr & FILE_ATTRIBUTE_HIDDEN))
+			bool isDir = (attr & FILE_ATTRIBUTE_DIRECTORY);
+			if (!isDir && !isFileWithAttributeAllowed(attr))
 				continue;
 			const wchar_t* fileName = getFileName(fd);
-			if ((attr & FILE_ATTRIBUTE_DIRECTORY) && isDotOrDotDot(fileName))
+			if (isDir && isDotOrDotDot(fileName))
 				continue;
 			outEntries.push_back({fileName, fileInfo, attr});
 		}
@@ -1296,8 +1307,11 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 		// If there is a source connection we can read the file to local drive first and then read that file using normal commands
 		if (tryUseSourceConnection && isValid(m_sourceConnection))
 		{
+			FileInfo srcDirInfo;
+			uint srcDirAttributes = getFileInfo(srcDirInfo, sourcePath.c_str(), stats.ioStats);
+
 			// TODO: Should this use a temporary file? This file will now be leaked at destination!
-			ensureDirectory(m_destConnection, destPath, stats.ioStats);
+			ensureDirectory(m_destConnection, destPath, srcDirAttributes, stats.ioStats);
 			u64 fileSize;
 			u64 read;
 
@@ -1307,7 +1321,7 @@ Client::handleFilesOrWildcardsFromFile(LogContext& logContext, ClientStats& stat
 			bool processedByServer;
 			if (!m_sourceConnection->sendGetFileAttributes(fileName.c_str(), srcInfo, srcAttributes, error))
 				continue;
-			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), srcInfo, fileSize, read, m_copyContext, processedByServer))
+			if (!m_sourceConnection->sendReadFileCommand(originalFullPath.c_str(), fileName.c_str(), srcInfo, srcAttributes, fileSize, read, m_copyContext, processedByServer))
 				continue;
 			fullPath = destPath + fileName;
 		}
@@ -1595,13 +1609,15 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 	{
 		FileInfo fileInfo;
 		uint fileAttr = getFileInfo(fileInfo, fd);
-		if ((fileAttr & FILE_ATTRIBUTE_HIDDEN))
+		bool isDir = (fileAttr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+		if (!isDir && !isFileWithAttributeAllowed(fileAttr))
 			continue;
+
 		const wchar_t* fileName = getFileName(fd);
 		// Check if file was copied here
 		WString filePath = relPath + fileName;
 
-		bool isDir = (fileAttr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 		if (isDir)
 		{
 			if (isDotOrDotDot(fileName))
@@ -1631,6 +1647,11 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 			}
 			else
 			{
+				if (fileAttr & FILE_ATTRIBUTE_READONLY)
+				{
+					if (!setFileWritable(fullPath.c_str(), true))
+						logErrorf(L"Could not purge read-only file in destination (%ls).  EACopy could not forcefully unset the file's read-only attribute in destination.", fullPath.c_str());
+				}
 				if (!deleteFile(fullPath.c_str(), stats.ioStats, errorOnMissingFile))
 					res = false;
 			}
@@ -1654,7 +1675,7 @@ Client::purgeFilesInDirectory(const WString& path, uint destPathAttributes, int 
 }
 
 bool
-Client::ensureDirectory(Connection* destConnection, const WString& directory, IOStats& ioStats)
+Client::ensureDirectory(Connection* destConnection, const WString& directory, uint attributes, IOStats& ioStats)
 {
 	if (directory[directory.size() - 1] != L'\\')
 	{
@@ -1673,7 +1694,7 @@ Client::ensureDirectory(Connection* destConnection, const WString& directory, IO
 	else
 	{
 		// Create directory through windows api
-		if (!eacopy::ensureDirectory(directory.c_str(), ioStats, true, m_settings.replaceSymLinksAtDestination, &createdDirs))
+		if (!eacopy::ensureDirectory(directory.c_str(), attributes, ioStats, true, m_settings.replaceSymLinksAtDestination, &createdDirs))
 			return false;
 	}
 
@@ -2010,6 +2031,13 @@ Client::isValid(Connection* connection)
 	return connection && isValidSocket(connection->m_socket);
 }
 
+bool
+Client::isFileWithAttributeAllowed(uint fileAttr)
+{
+	return (m_settings.excludeAttributes == 0 || !(fileAttr & m_settings.excludeAttributes)) &&
+		(m_settings.includeAttributes == 0 || fileAttr & m_settings.includeAttributes);
+}
+
 Client::Connection::Connection(const ClientSettings& settings, ClientStats& stats, Socket s, CompressionStats& compressionStats)
 :	m_settings(settings)
 ,	m_stats(stats)
@@ -2062,7 +2090,7 @@ Client::Connection::sendTextCommand(const wchar_t* text)
 }
 
 bool
-Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer)
+Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, uint srcAttributes, u64& outSize, u64& outWritten, bool& outLinked, NetworkCopyContext& copyContext, bool &processedByServer)
 {
 	outSize = 0;
 	outWritten = 0;
@@ -2181,7 +2209,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 		bool existed;
 		u64 written;
 		WString fullDst = m_settings.destDirectory + dst;
-		bool success = copyFile(src, srcInfo, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO);
+		bool success = copyFile(src, srcInfo, srcAttributes, fullDst.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO);
 		u8 copyResult = success ? 1 : 0;
 		if (!sendData(m_socket, &copyResult, sizeof(copyResult)))
 			return false;
@@ -2228,7 +2256,7 @@ Client::Connection::sendWriteFileCommand(const wchar_t* src, const wchar_t* dst,
 }
 
 Client::Connection::ReadFileResult
-Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer)
+Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, const FileInfo& srcInfo, uint srcAttributes, u64& outSize, u64& outRead, NetworkCopyContext& copyContext, bool& processedByServer)
 {
 	outSize = 0;
 	outRead = 0;
@@ -2241,7 +2269,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 	auto& cmd = *(ReadFileCommand*)buffer;
 	cmd.commandType = CommandType_ReadFile;
 	cmd.compressionLevel = m_settings.compressionLevel;
-	cmd.commandSize = sizeof(cmd) + uint(wcslen(src)*2);
+	cmd.commandSize = sizeof(cmd) + uint(wcslen(src) * 2);
 	if (!stringCopy(cmd.path, MaxPath, src))
 	{
 		logErrorf(L"Failed to read file %ls: wcscpy_s in sendReadFileCommand failed", src);
@@ -2355,7 +2383,7 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		u64 written;
 		WString fullSrc = m_settings.sourceDirectory + src;
 		bool useSystemCopy = m_settings.useSystemCopy;
-		if (!copyFile(fullSrc.c_str(), srcInfo, fullDest.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO))
+		if (!copyFile(fullSrc.c_str(), srcInfo, srcAttributes, fullDest.c_str(), useSystemCopy, false, existed, written, copyContext, m_stats.ioStats, m_settings.useBufferedIO))
 			return ReadFileResult_Error;
 		outRead = written;
 		outSize = written;

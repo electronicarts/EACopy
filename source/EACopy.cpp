@@ -2,6 +2,8 @@
 
 #include "EACopyClient.h"
 
+#include <windows.h>
+
 namespace eacopy
 {
 
@@ -47,6 +49,9 @@ void printHelp()
 	logInfoLinef(L"/XD dir [dir]...   :: eXclude Directories matching given names/paths/wildcards.");
 	logInfoLinef(L"/XF file [file]... :: eXclude Files matching given names/paths/wildcards.");
 	logInfoLinef(L"/OF file [file]... :: Optional Files matching given names/paths/wildcards. Only used for FileLists.");
+	logInfoLinef();
+	logInfoLinef(L"   /IA:[RASHCNETO] :: Include only files with any of the given Attributes set.");
+	logInfoLinef(L"   /XA:[RASHCNETO] :: eXclude files with any of the given Attributes set.");
 	logInfoLinef();
 	logInfoLinef(L"           /MT[:n] :: do multi-threaded copies with n threads (default 8).");
 	logInfoLinef(L"                      n must be at least 1 and not greater than 128.");
@@ -95,6 +100,28 @@ struct Settings : ClientSettings
 	bool printJobHeader = true;
 	bool printJobSummary = true;
 };
+
+uint parseAttributesRASHCNETO(wchar_t* arg)
+{
+	uint result = 0;
+	while (*arg)
+	{
+		switch (*arg) {
+			case 'R': result |= FILE_ATTRIBUTE_READONLY; break;
+			case 'A': result |= FILE_ATTRIBUTE_ARCHIVE; break;
+			case 'S': result |= FILE_ATTRIBUTE_SYSTEM; break;
+			case 'H': result |= FILE_ATTRIBUTE_HIDDEN; break;
+			case 'C': result |= FILE_ATTRIBUTE_COMPRESSED; break;
+			case 'N': result |= FILE_ATTRIBUTE_NOT_CONTENT_INDEXED; break;
+			case 'E': result |= FILE_ATTRIBUTE_ENCRYPTED; break;
+			case 'T': result |= FILE_ATTRIBUTE_TEMPORARY; break;
+			case 'O': result |= FILE_ATTRIBUTE_OFFLINE; break;
+			default: break;
+		}
+		++arg;
+	}
+	return result;
+}
 
 bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 {
@@ -226,6 +253,24 @@ bool readSettings(Settings& outSettings, int argc, wchar_t* argv[])
 		else if (startsWithIgnoreCase(arg, L"/XF"))
 		{
 			activeCommand = L"XF";
+		}
+		else if (startsWithIgnoreCase(arg, L"/XA:"))
+		{
+			arg += 4;
+			if (!*arg) {
+				logErrorf(L"Missing arguments for /XA:, valid options are RASHCNETO");
+				return false;
+			}
+			outSettings.excludeAttributes = parseAttributesRASHCNETO(arg);
+		}
+		else if (startsWithIgnoreCase(arg, L"/IA:"))
+		{
+			arg += 4;
+			if (!*arg) {
+				logErrorf(L"Missing arguments for /IA:, valid options are RASHCNETO");
+				return false;
+			}
+			outSettings.includeAttributes = parseAttributesRASHCNETO(arg);
 		}
 		else if (equalsIgnoreCase(arg, L"/XC"))
 		{
