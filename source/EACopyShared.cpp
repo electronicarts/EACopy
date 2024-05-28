@@ -1747,7 +1747,7 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, uint sourceAttr
 		bool result = true;
 		
 		ScopeGuard destGuard([&]() { CloseHandle(osWrite.hEvent); result &= closeFile(dest, destFile, AccessType_Write, ioStats); });
-
+		
 		OVERLAPPED osRead  = {0,0,0};
 		osRead.Offset = 0;
 		osRead.OffsetHigh = 0;
@@ -1792,6 +1792,9 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, uint sourceAttr
 					if (GetLastError() != ERROR_IO_PENDING)
 					{
 						logErrorf(L"Fail writing file %ls: %ls", dest, getLastErrorText().c_str());
+						// in the event the write fails, we need to delete the dest file for the next retry
+						destGuard.execute();
+						DeleteFileW(dest);
 						return false;
 					}
 				}

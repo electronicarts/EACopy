@@ -11,7 +11,7 @@ namespace eacopy
 
 enum : uint {
 	ServerMajorVersion = 1,
-	ServerMinorVersion = 9,
+	ServerMinorVersion = 10,
 };
 
 enum : uint { DefaultHistorySize = 500000 }; // Number of files 

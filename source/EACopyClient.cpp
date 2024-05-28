@@ -179,8 +179,7 @@ Client::process(Log& log, ClientStats& outStats)
 
 
 	// Process dirs and files (worker threads are doing the same right now)
-	if (!processQueues(logContext, m_sourceConnection, m_destConnection, m_copyContext, outStats, true))
-		return -1;
+	processQueues(logContext, m_sourceConnection, m_destConnection, m_copyContext, outStats, true);
 	
 
 	// Wait for all worker threads to finish
@@ -452,7 +451,6 @@ Client::processFile(LogContext& logContext, Connection* sourceConnection, Connec
 	int retryCountLeft = m_settings.retryCount;
 	while (true)
 	{
-
 		u64 startTime = getTime();
 
 		auto reportSkip = [&]()

@@ -575,12 +575,6 @@ int main(int argc, char* argv_[])
 		logInfoLinef();
 	}
 
-	if (res == -1)
-	{
-		log.deinit();
-		return -1;
-	}
-
 	u64 endTime = getTime();
 
 	if (settings.printJobSummary)
@@ -658,7 +652,7 @@ int main(int argc, char* argv_[])
 		}
 	});
 
-	return 0;
+	return stats.failCount == 0 && res == 0 ? 0 : -1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
