@@ -1188,7 +1188,7 @@ Client::traverseFilesInDirectory(LogContext& logContext, Connection* sourceConne
 			uint findNextError = GetLastError();
 			if (findNextError != ERROR_NO_MORE_FILES)
 			{
-				logErrorf(L"FindNextFileW failed for %ls: %ls", searchStr, getErrorText(findNextError).c_str());
+				logErrorf(L"FindNextFileW failed for %ls: %ls", searchStr.c_str(), getErrorText(findNextError).c_str());
 				return false;
 			}
 		}
