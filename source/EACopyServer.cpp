@@ -602,6 +602,12 @@ Server::connectionThread(ConnectionInfo& info)
 
 									if (info.settings.useOdx)
 									{
+										// if destination file is read-only then we will clear that flag so the copy can succeed
+										if (attributes & FILE_ATTRIBUTE_READONLY)
+										{
+											if (!setFileWritable(localFile.name.c_str(), true))
+												logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", localFile.name.c_str());
+										}
 										bool existed = false;
 										u64 bytesCopied;
 										if (copyFile(localFile.name.c_str(), localFileInfo, attributes, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
@@ -673,8 +679,16 @@ Server::connectionThread(ConnectionInfo& info)
 								u64 bytesCopied;
 								FileInfo localFileInfo;
 								if (uint attributes = getFileInfo(localFileInfo, localFile.name.c_str(), ioStats))
+								{
+									// if destination file is read-only then we will clear that flag so the copy can succeed
+									if (attributes & FILE_ATTRIBUTE_READONLY)
+									{
+										if (!setFileWritable(localFile.name.c_str(), true))
+											logErrorf(L"Could not copy over read-only destination file (%ls).  EACopy could not forcefully unset the destination file's read-only attribute.", localFile.name.c_str());
+									}
 									if (copyFile(localFile.name.c_str(), localFileInfo, attributes, fullPath.c_str(), true, false, existed, bytesCopied, copyContext, ioStats, info.settings.useBufferedIO))
 										writeResponse = WriteResponse_Odx;
+								}
 							}
 						}
 					}

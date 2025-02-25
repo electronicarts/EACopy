@@ -2356,7 +2356,6 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		if (!receiveData(m_socket, &newFileSize, sizeof(newFileSize)))
 			return ReadFileResult_Error;
 
-
 		bool success = true;
 		WriteFileType writeType = m_settings.compressionLevel != 0 ? WriteFileType_Compressed : WriteFileType_Send;
 		bool useBufferedIO = getUseBufferedIO(m_settings.useBufferedIO, cmd.info.fileSize);
@@ -2373,6 +2372,15 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		outRead = newFileSize;
 		outSize = newFileSize;
 		processedByServer = success;
+
+#if defined(_WIN32)
+		// Once data has been retrieved from server, reset destination file's attribute to match the source file attribute.
+		if (success && srcAttributes != 0)
+		{
+			SetFileAttributesW(fullDest.c_str(), srcAttributes);
+		}
+#endif
+
 		return success ? ReadFileResult_Success : ReadFileResult_Error;
 	}
 	else if (readResponse == ReadResponse_CopyUsingSmb)
@@ -2404,6 +2412,13 @@ Client::Connection::sendReadFileCommand(const wchar_t* src, const wchar_t* dst, 
 		m_stats.recvTime += recvStats.recvTime;
 		m_stats.recvSize += recvStats.recvSize;
 		m_stats.decompressTime += recvStats.decompressTime;
+#if defined(_WIN32)
+		if (srcAttributes != 0)
+		{
+			// Once file has been updated from receiving the detal, reset destination file's attribute to match the source file attribute.
+			SetFileAttributesW(fullDest.c_str(), srcAttributes);
+		}
+#endif
 		return ReadFileResult_Success;
 		#endif
 	}

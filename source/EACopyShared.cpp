@@ -1402,6 +1402,13 @@ bool openFileWrite(const wchar_t* fullPath, FileHandle& outFile, IOStats& ioStat
 	WString temp;
 	fullPath = convertToShortPath(fullPath, temp);
 	DWORD creationDisposition = createAlways ? CREATE_ALWAYS : OPEN_EXISTING;
+
+	// Make sure destination file is writeable (if exists) before we execute the CreateFileW for write
+	if (!setFileWritable(fullPath, true))
+	{
+		logInfof(L"This destination file has readonly attribute and unable to clear it: %ls\n", fullPath);
+	}
+
 	outFile = CreateFileW(fullPath, GENERIC_WRITE, shareMode, NULL, creationDisposition, flagsAndAttributes, NULL);
 	if (outFile != InvalidFileHandle)
 		return true;
@@ -1709,6 +1716,12 @@ bool copyFile(const wchar_t* source, const FileInfo& sourceInfo, uint sourceAttr
 
 	WString tempBuffer2;
 	dest = convertToShortPath(dest, tempBuffer2);
+
+	// Make sure destination file is writeable (if exists) before we execute the CreateFileW for write
+	if (!setFileWritable(dest, true))
+	{
+		logInfof(L"This destination file has readonly attribute and unable to clear it: %ls\n", dest);
+	}
 
 	if (UseOwnCopyFunction && !useSystemCopy)
 	{
@@ -2041,7 +2054,41 @@ bool setFileWritable(const wchar_t* fullPath, bool writable)
 	#if defined(_WIN32)
 	WString temp;
 	fullPath = convertToShortPath(fullPath, temp);
-	return SetFileAttributesW(fullPath, writable ? FILE_ATTRIBUTE_NORMAL : FILE_ATTRIBUTE_READONLY) != 0;
+
+	DWORD dest_original_attr = GetFileAttributesW(fullPath);
+	if (dest_original_attr != INVALID_FILE_ATTRIBUTES && GetLastError() != ERROR_FILE_NOT_FOUND)
+	{
+		if (writable)
+		{
+			if ((dest_original_attr & FILE_ATTRIBUTE_READONLY) == FILE_ATTRIBUTE_READONLY)
+			{
+				return SetFileAttributesW(fullPath, dest_original_attr & ~FILE_ATTRIBUTE_READONLY);
+			}
+			else
+			{
+				// Already writable.  Don't need to do anything.
+				return true;
+			}
+		}
+		else
+		{
+			if ((dest_original_attr & FILE_ATTRIBUTE_READONLY) != FILE_ATTRIBUTE_READONLY)
+			{
+				return SetFileAttributesW(fullPath, dest_original_attr & FILE_ATTRIBUTE_READONLY);
+			}
+			else
+			{
+				// Already readonly.  Don't need to do anything.
+				return true;
+			}
+		}
+	}
+	else
+	{
+		// File doesn't exist.  Just return true.  We only call this function to test if it is OK to call
+		// CreateFileW next to create a file.
+		return true;
+	}
 	#else
 	String file = toLinuxPath(fullPath);
 	int mode = S_IREAD;
